@@ -21,13 +21,13 @@ from pyopentrustregion.python_interface import (
     SolverSettings,
     SolverState,
 )
-from pyopentrustregion.extensions.quasi_newton.python_interface import (
+from pyopentrustregion.extensions.rotation_qn.python_interface import (
     TransportInterface,
     InitHessInterface,
 )
-from pyopentrustregion.extensions.quasi_newton import (
-    QNSettings,
-    qn_factory,
+from pyopentrustregion.extensions.rotation_qn import (
+    RotationQNSettings,
+    rotation_qn_factory,
 )
 from pyopentrustregion.extensions.common.tests import (
     check_settings_layout,
@@ -42,64 +42,67 @@ from pyopentrustregion.extensions.common.tests import (
 
 # define all tests in alphabetical order
 fortran_tests = {
-    "qn_c_integration_tests": ["qn_settings_init", "qn_settings_layout"],
-    "qn_c_interface_tests": [
-        "assign_qn_c_f",
-        "assign_qn_f_c",
+    "rotation_qn_c_integration_tests": [
+        "rotation_qn_settings_init",
+        "rotation_qn_settings_layout",
+    ],
+    "rotation_qn_c_interface_tests": [
+        "assign_rotation_qn_c_f",
+        "assign_rotation_qn_f_c",
         "init_hess_f_wrapper",
-        "init_qn_settings_c",
-        "qn_factory_c_wrapper",
+        "init_rotation_qn_settings_c",
+        "rotation_qn_factory_c_wrapper",
         "transport_f_wrapper",
     ],
-    "qn_tests": [
-        "add_qn",
+    "rotation_qn_tests": [
+        "add_rotation_qn",
         "hess_x_bfgs",
         "hess_x_sr1",
-        "init_qn",
-        "qn_factory",
-        "qn_sanity_check",
+        "init_rotation_qn",
+        "rotation_qn_factory",
+        "rotation_qn_sanity_check",
         "sr1_skip_add",
-        "update_orbs_qn",
+        "update_orbs_rotation_qn",
     ],
 }
 
 
 @add_tests
-class QNTests(unittest.TestCase):
+class RotationQNTests(unittest.TestCase):
     """
-    this class contains unit tests for quasi-Newton
+    this class contains unit tests for rotation QN
     """
 
-    tests = fortran_tests["qn_tests"]
+    tests = fortran_tests["rotation_qn_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running unit tests for quasi-Newton...")
+        print_separator("Running unit tests for rotation QN...")
         return super().setUpClass()
 
 
 @add_tests
-class QNCInterfaceTests(unittest.TestCase):
+class RotationQNCInterfaceTests(unittest.TestCase):
     """
-    this class contains unit tests for the quasi-Newton C interface
+    this class contains unit tests for the rotation QN C interface
     """
 
-    tests = fortran_tests["qn_c_interface_tests"]
+    tests = fortran_tests["rotation_qn_c_interface_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running unit tests for quasi-Newton C interface...")
+        print_separator("Running unit tests for rotation QN C interface...")
         return super().setUpClass()
 
 
-class QNPyInterfaceTests(unittest.TestCase):
+class RotationQNPyInterfaceTests(unittest.TestCase):
     """
     this class contains unit tests for the Python interface
     """
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running unit tests for quasi-Newton Python interface...")
+        print_separator("Running unit tests for rotation QN Python interface...")
 
         return super().setUpClass()
 
@@ -167,16 +170,16 @@ class QNPyInterfaceTests(unittest.TestCase):
     # replace original library with mock library, also for the release of the
     # extensions the factory returns
     @patch(
-        "pyopentrustregion.python_interface.lib.qn_factory",
-        lib.mock_qn_factory,
+        "pyopentrustregion.python_interface.lib.rotation_qn_factory",
+        lib.mock_rotation_qn_factory,
     )
     @patch(
         "pyopentrustregion.extensions.common.python_interface.release_extension",
         release_mock_extension,
     )
-    def test_qn_factory_py_interface(self):
+    def test_rotation_qn_factory_py_interface(self):
         """
-        this function tests the quasi-Newton factory python interface
+        this function tests the rotation QN factory python interface
         """
         # initialize test flag
         test_passed = True
@@ -185,17 +188,17 @@ class QNPyInterfaceTests(unittest.TestCase):
         # flag whether it received what it expects, which is cleared before and read
         # after every call of it
         messages = []
-        mock_passed = c_bool.in_dll(lib, "test_qn_factory_interface")
+        mock_passed = c_bool.in_dll(lib, "test_rotation_qn_factory_interface")
 
         # initialize settings objects
-        settings = QNSettings()
-        assign_reference_settings(settings, lib.reference_qn_field)
+        settings = RotationQNSettings()
+        assign_reference_settings(settings, lib.reference_rotation_qn_field)
         settings.logger = messages.append
         solver_settings, python_functions = setup_wired_solver_settings()
 
-        # call quasi-Newton factory python interface
+        # call rotation QN factory python interface
         mock_passed.value = False
-        update_orbs_qn, obj_func_qn = qn_factory(
+        update_orbs_rotation_qn, obj_func_rotation_qn = rotation_qn_factory(
             n_param,
             self.mock_update_orbs,
             self.mock_obj_func,
@@ -209,7 +212,8 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check if the mock factory received the correct input
         if not mock_passed.value:
             print(
-                " test_qn_factory_py_interface failed: Mock factory received wrong "
+                " test_rotation_qn_factory_py_interface failed: Mock factory received "
+                "wrong "
                 "input for settings."
             )
             test_passed = False
@@ -217,47 +221,47 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check if logger was called correctly
         if "test" not in messages:
             print(
-                " test_qn_factory_py_interface failed: Called logging "
+                " test_rotation_qn_factory_py_interface failed: Called logging "
                 "function wrong."
             )
             test_passed = False
 
         # check that the settings were passed
-        if not c_bool.in_dll(lib, "qn_settings_passed").value:
-            print(" test_qn_factory_py_interface failed: Settings not passed.")
+        if not c_bool.in_dll(lib, "rotation_qn_settings_passed").value:
+            print(" test_rotation_qn_factory_py_interface failed: Settings not passed.")
             test_passed = False
 
-        # call returned quasi-Newton orbital updating function
+        # call returned rotation QN orbital updating function
         kappa = np.ones(n_param, dtype=np.float64)
         grad = np.empty(n_param, dtype=np.float64)
         h_diag = np.empty(n_param, dtype=np.float64)
         try:
-            func, hess_x_funptr = update_orbs_qn(kappa, grad, h_diag)
+            func, hess_x_funptr = update_orbs_rotation_qn(kappa, grad, h_diag)
         except RuntimeError:
             print(
-                " test_qn_factory_py_interface failed: Returned "
-                "quasi-Newton orbital updating raises error."
+                " test_rotation_qn_factory_py_interface failed: Returned "
+                "rotation QN orbital updating raises error."
             )
             test_passed = False
 
         # check results
         if func != 3.0:
             print(
-                " test_qn_factory_py_interface failed: Returned function "
-                "value of returned quasi-Newton orbital updating function "
+                " test_rotation_qn_factory_py_interface failed: Returned function "
+                "value of returned rotation QN orbital updating function "
                 "wrong."
             )
             test_passed = False
         if not np.allclose(grad, np.full(n_param, 2.0, dtype=np.float64)):
             print(
-                " test_qn_factory_py_interface failed: Returned gradient "
-                "of returned quasi-Newton orbital updating function wrong."
+                " test_rotation_qn_factory_py_interface failed: Returned gradient "
+                "of returned rotation QN orbital updating function wrong."
             )
             test_passed = False
         if not np.allclose(h_diag, np.full(n_param, 3.0, dtype=np.float64)):
             print(
-                " test_qn_factory_py_interface failed: Returned "
-                "quasi-Newton Hessian diagonal of returned quasi-Newton orbital "
+                " test_rotation_qn_factory_py_interface failed: Returned "
+                "quasi-Newton Hessian diagonal of returned rotation QN orbital "
                 "updating function wrong."
             )
             test_passed = False
@@ -270,34 +274,36 @@ class QNPyInterfaceTests(unittest.TestCase):
             hess_x_funptr(x, hess_x)
         except RuntimeError:
             print(
-                " test_qn_factory_py_interface failed: Returned "
+                " test_rotation_qn_factory_py_interface failed: Returned "
                 "quasi-Newton Hessian linear transformation function of returned "
-                "quasi-Newton orbital updating function raises error."
+                "rotation QN orbital updating function raises error."
             )
             test_passed = False
 
         # check results
         if not np.allclose(hess_x, np.full(n_param, 4.0, dtype=np.float64)):
             print(
-                " test_qn_factory_py_interface failed: Returned Hessian "
-                "linear transformation of returned quasi-Newton orbital updating "
+                " test_rotation_qn_factory_py_interface failed: Returned Hessian "
+                "linear transformation of returned rotation QN orbital updating "
                 "function wrong."
             )
             test_passed = False
 
         # call returned objective function
         try:
-            func = obj_func_qn(kappa)
+            func = obj_func_rotation_qn(kappa)
         except RuntimeError:
             print(
-                " test_qn_factory_py_interface failed: Returned objective function "
+                " test_rotation_qn_factory_py_interface failed: Returned objective "
+                "function "
                 "raises error."
             )
             test_passed = False
         else:
             if func != 3.0:
                 print(
-                    " test_qn_factory_py_interface failed: Returned function value of "
+                    " test_rotation_qn_factory_py_interface failed: Returned function "
+                    "value of "
                     "returned objective function wrong."
                 )
                 test_passed = False
@@ -306,17 +312,17 @@ class QNPyInterfaceTests(unittest.TestCase):
         if not check_wired_solver_settings(
             solver_settings,
             python_functions,
-            "test_qn_factory_py_interface",
-            (update_orbs_qn, obj_func_qn),
+            "test_rotation_qn_factory_py_interface",
+            (update_orbs_rotation_qn, obj_func_rotation_qn),
             settings,
         ):
             test_passed = False
 
-        # call qn_factory python interface with the host's functions for the solver
-        # settings the factory wired, which has to raise an error before the Fortran
-        # factory is called
+        # call rotation_qn_factory python interface with the host's functions for the
+        # solver settings the factory wired, which has to raise an error before the
+        # Fortran factory is called
         try:
-            qn_factory(
+            rotation_qn_factory(
                 n_param,
                 self.mock_update_orbs,
                 self.mock_obj_func,
@@ -327,20 +333,21 @@ class QNPyInterfaceTests(unittest.TestCase):
                 settings,
             )
             print(
-                " test_qn_factory_py_interface failed: Host's functions for wired "
+                " test_rotation_qn_factory_py_interface failed: Host's functions for "
+                "wired "
                 "solver settings did not raise an error."
             )
             test_passed = False
         except ValueError:
             pass
 
-        # call qn_factory python interface without settings, which have to be passed as
-        # none so that the library uses its default settings
-        settings_flag = c_bool.in_dll(lib, "qn_settings_passed")
+        # call rotation_qn_factory python interface without settings, which have to be
+        # passed as none so that the library uses its default settings
+        settings_flag = c_bool.in_dll(lib, "rotation_qn_settings_passed")
         settings_flag.value = True
         mock_passed.value = False
         try:
-            qn_factory(
+            rotation_qn_factory(
                 n_param,
                 self.mock_update_orbs,
                 self.mock_obj_func,
@@ -351,13 +358,15 @@ class QNPyInterfaceTests(unittest.TestCase):
             )
         except RuntimeError:
             print(
-                " test_qn_factory_py_interface failed: Call without settings raises "
+                " test_rotation_qn_factory_py_interface failed: Call without settings "
+                "raises "
                 "error."
             )
             test_passed = False
         if settings_flag.value:
             print(
-                " test_qn_factory_py_interface failed: Settings passed although none were "
+                " test_rotation_qn_factory_py_interface failed: Settings passed "
+                "although none were "
                 "given."
             )
             test_passed = False
@@ -365,7 +374,8 @@ class QNPyInterfaceTests(unittest.TestCase):
         # check if the mock factory received the correct input
         if not mock_passed.value:
             print(
-                " test_qn_factory_py_interface failed: Mock factory received wrong "
+                " test_rotation_qn_factory_py_interface failed: Mock factory received "
+                "wrong "
                 "input without settings."
             )
             test_passed = False
@@ -374,7 +384,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         # settings keep alive and which keeps the state alive
         mock_passed.value = False
         if not check_extension_owner(
-            lambda solver_settings, solver_state: qn_factory(
+            lambda solver_settings, solver_state: rotation_qn_factory(
                 n_param,
                 self.mock_update_orbs,
                 self.mock_obj_func,
@@ -384,21 +394,22 @@ class QNPyInterfaceTests(unittest.TestCase):
                 solver_state,
                 settings,
             ),
-            "test_qn_factory_py_interface",
+            "test_rotation_qn_factory_py_interface",
         ):
             test_passed = False
 
         # check if the mock factory received the correct input
         if not mock_passed.value:
             print(
-                " test_qn_factory_py_interface failed: Mock factory received wrong "
+                " test_rotation_qn_factory_py_interface failed: Mock factory received "
+                "wrong "
                 "input for the check of the owner."
             )
             test_passed = False
 
-        # call qn_factory python interface for host callbacks which cannot be called
-        # with the arguments the C interface passes, which have to raise an error
-        # before the Fortran factory is called
+        # call rotation_qn_factory python interface for host callbacks which cannot be
+        # called with the arguments the C interface passes, which have to raise an
+        # error before the Fortran factory is called
         invalid_cases = (
             (
                 "transport with a wrong number of arguments",
@@ -411,7 +422,7 @@ class QNPyInterfaceTests(unittest.TestCase):
         )
         for case, callbacks in invalid_cases:
             try:
-                qn_factory(
+                rotation_qn_factory(
                     n_param,
                     self.mock_update_orbs,
                     self.mock_obj_func,
@@ -421,74 +432,78 @@ class QNPyInterfaceTests(unittest.TestCase):
                     settings,
                 )
                 print(
-                    f" test_qn_factory_py_interface failed: {case} did not raise an "
+                    f" test_rotation_qn_factory_py_interface failed: {case} did not "
+                    f"raise an "
                     "error."
                 )
                 test_passed = False
             except TypeError:
                 pass
 
-        self.assertTrue(test_passed, "test_qn_factory_py_interface failed")
-        print(" test_qn_factory_py_interface PASSED")
+        self.assertTrue(test_passed, "test_rotation_qn_factory_py_interface failed")
+        print(" test_rotation_qn_factory_py_interface PASSED")
 
-    @patch.object(QNSettings, "init_c_struct", lib.mock_init_qn_settings)
-    def test_qn_settings(self):
+    @patch.object(
+        RotationQNSettings, "init_c_struct", lib.mock_init_rotation_qn_settings
+    )
+    def test_rotation_qn_settings(self):
         """
-        this function ensures the QNSettings object is properly initialized and
+        this function ensures the RotationQNSettings object is properly initialized and
         synchronized with the underlying C struct
         """
         self.assertTrue(
             settings_hold_reference(
-                "test_qn_settings", QNSettings(), lib.reference_qn_field
+                "test_rotation_qn_settings",
+                RotationQNSettings(),
+                lib.reference_rotation_qn_field,
             ),
-            "test_qn_settings failed",
+            "test_rotation_qn_settings failed",
         )
-        print(" test_qn_settings PASSED")
+        print(" test_rotation_qn_settings PASSED")
 
 
 @add_tests
-class QNCIntegrationTests(unittest.TestCase):
+class RotationQNCIntegrationTests(unittest.TestCase):
     """
     this class contains integration tests that drive the real library through the
-    quasi-Newton C header
+    rotation QN C header
     """
 
-    tests = fortran_tests["qn_c_integration_tests"]
+    tests = fortran_tests["rotation_qn_c_integration_tests"]
 
     @classmethod
     def setUpClass(cls):
-        print_separator("Running integration tests for quasi-Newton C interface...")
+        print_separator("Running integration tests for rotation QN C interface...")
         return super().setUpClass()
 
 
-class QNPyIntegrationTests(unittest.TestCase):
+class RotationQNPyIntegrationTests(unittest.TestCase):
     """
     this class contains integration tests that drive the real library (not the mock
-    library) through the quasi-Newton Python interface
+    library) through the rotation QN Python interface
     """
 
     @classmethod
     def setUpClass(cls):
-        print_separator(
-            "Running integration tests for quasi-Newton Python interface..."
-        )
+        print_separator("Running integration tests for rotation QN Python interface...")
         return super().setUpClass()
 
-    def test_qn_settings_layout(self):
+    def test_rotation_qn_settings_layout(self):
         """
-        this function checks that the Python quasi-Newton settings structure has the size of
-        the bind(C) settings type and that every field is read back under its own name
-        from settings whose fields Fortran sets one by one to the reference values
+        this function checks that the Python rotation QN settings structure has the
+        size of the bind(C) settings type and that every field is read back under its
+        own name from settings whose fields Fortran sets one by one to the reference
+        values
         """
-        lib.qn_settings_size.restype = c_size_t
+        lib.rotation_qn_settings_size.restype = c_size_t
         self.assertTrue(
             check_settings_layout(
-                "test_qn_settings_layout",
-                QNSettings,
-                lib.get_reference_qn_values,
-                lib.reference_qn_field,
-                lib.qn_settings_size(),
+                "test_rotation_qn_settings_layout",
+                RotationQNSettings,
+                lib.get_reference_rotation_qn_values,
+                lib.reference_rotation_qn_field,
+                lib.rotation_qn_settings_size(),
             ),
-            "test_qn_settings_layout failed",
+            "test_rotation_qn_settings_layout failed",
         )
-        print(" test_qn_settings_layout PASSED")
+        print(" test_rotation_qn_settings_layout PASSED")

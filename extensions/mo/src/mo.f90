@@ -73,12 +73,12 @@ contains
         ! uses, while the projection is left to the caller, since the parameters are
         ! non-redundant, and which reads the state of the solver from the record the
         ! host also passes to the solver; the MO coefficients are rotated in place, so
-        ! they have to outlive the calculation; if the irreps of the MOs are given, only
-        ! the occupied-virtual rotations between orbitals of the same irrep are
+        ! they have to outlive the calculation; if the irreps of the MOs are given,
+        ! only the occupied-virtual rotations between orbitals of the same irrep are
         ! parameters; without a density matrix evaluating function, the orbital
         ! updating function, objective function and Hessian linear transformation of
-        ! the object return an error when called, so that only the ARH factory can
-        ! build on it
+        ! the object return an error when called, so that only the density QN factory
+        ! can build on it
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -124,7 +124,7 @@ contains
         ! orbitals of the same irrep are parameters; without a density matrix
         ! evaluating function, the orbital updating function, objective function and
         ! Hessian linear transformation of the object return an error when called, so
-        ! that only the ARH factory can build on it
+        ! that only the density QN factory can build on it
         !
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)

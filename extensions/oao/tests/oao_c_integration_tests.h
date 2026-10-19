@@ -4,8 +4,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-/* Code the C integration tests of OAO share with those of ARH: the setup of a solve of
- * the toy model of common_c_integration_tests.h through the OAO factory. */
+/* Code the C integration tests of OAO share with those of density QN: the setup of a
+ * solve of the toy model of common_c_integration_tests.h through the OAO factory. */
 
 #ifndef OAO_C_INTEGRATION_TESTS_H
 #define OAO_C_INTEGRATION_TESTS_H

@@ -4,12 +4,13 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module otr_qn_c_interface_mock
+module otr_rotation_qn_c_interface_mock
 
     use opentrustregion, only: stderr
     use c_interface, only: c_ip
-    use otr_qn_c_interface, only: qn_factory_c_wrapper, init_qn_settings_c
-    use otr_qn_test_reference, only: ref_qn_settings
+    use otr_rotation_qn_c_interface, only: rotation_qn_factory_c_wrapper, &
+                                           init_rotation_qn_settings_c
+    use otr_rotation_qn_test_reference, only: ref_rotation_qn_settings
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
                                            c_null_ptr
@@ -18,34 +19,34 @@ module otr_qn_c_interface_mock
 
     ! result of the mock factory, which the Python test clears before and reads after
     ! every call whose arguments it checks
-    logical(c_bool), bind(C) :: test_qn_factory_interface = .false._c_bool
+    logical(c_bool), bind(C) :: test_rotation_qn_factory_interface = .false._c_bool
 
     ! whether the mock factory received settings, which the Python test reads
-    logical(c_bool), bind(C) :: qn_settings_passed = .false._c_bool
+    logical(c_bool), bind(C) :: rotation_qn_settings_passed = .false._c_bool
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(qn_factory_c_wrapper), pointer :: mock_qn_factory_c_wrapper_ptr => &
-        mock_qn_factory_c_wrapper
-    procedure(init_qn_settings_c), pointer :: mock_init_qn_settings_c_ptr => &
-        mock_init_qn_settings_c
+    procedure(rotation_qn_factory_c_wrapper), pointer :: &
+        mock_rotation_qn_factory_c_wrapper_ptr => mock_rotation_qn_factory_c_wrapper
+    procedure(init_rotation_qn_settings_c), pointer :: &
+        mock_init_rotation_qn_settings_c_ptr => mock_init_rotation_qn_settings_c
 
 contains
 
-    function mock_qn_factory_c_wrapper( &
+    function mock_rotation_qn_factory_c_wrapper( &
         n_param_c, update_orbs_c_funptr, obj_func_c_funptr, transport_c_funptr, &
-        init_hess_c_funptr, update_orbs_qn_c_funptr, obj_func_qn_c_funptr, &
-        extension_c, solver_settings_c, solver_state_c, settings_c) result(error_c) &
-        bind(C, name="mock_qn_factory")
+        init_hess_c_funptr, update_orbs_rotation_qn_c_funptr, &
+        obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, solver_state_c, &
+        settings_c) result(error_c) bind(C, name="mock_rotation_qn_factory")
         !
-        ! this subroutine is a mock routine for the quasi-Newton factory C wrapper
+        ! this subroutine is a mock routine for the rotation QN factory C wrapper
         ! subroutine
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
                                   n_param
-        use otr_qn_test_reference, only: check_transport_c_funptr, &
-                                         check_init_hess_c_funptr, operator(/=)
+        use otr_rotation_qn_test_reference, only: check_transport_c_funptr, &
+                                                  check_init_hess_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
             record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
@@ -53,49 +54,54 @@ contains
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
                                              transport_c_funptr, init_hess_c_funptr
-        type(c_funptr), intent(out) :: update_orbs_qn_c_funptr, obj_func_qn_c_funptr
+        type(c_funptr), intent(out) :: update_orbs_rotation_qn_c_funptr, &
+                                       obj_func_rotation_qn_c_funptr
         type(c_ptr), intent(out) :: extension_c
         type(solver_settings_type_c), intent(inout) :: solver_settings_c
         type(c_ptr), intent(in), value :: solver_state_c
-        type(qn_settings_type_c), intent(in), optional :: settings_c
+        type(rotation_qn_settings_type_c), intent(in), optional :: settings_c
         integer(c_ip) :: error_c
 
         procedure(logger_c_type), pointer :: logger_funptr
         character(len=:), allocatable, target :: message
 
         ! assume tests pass
-        test_qn_factory_interface = .true.
+        test_rotation_qn_factory_interface = .true.
 
         ! check if passed number of parameters is correct
         if (n_param_c /= n_param) then
-            write(stderr, *) "test_qn_factory_py_interface failed: Passed number "// &
-                "of parameters wrong."
-            test_qn_factory_interface = .false.
+            write(stderr, *) "test_rotation_qn_factory_py_interface failed: Passed "// &
+                "number of parameters wrong."
+            test_rotation_qn_factory_interface = .false.
         end if
 
         ! test passed orbital update function
         if (.not. check_update_orbs_c_funptr( &
-            update_orbs_c_funptr, "qn_factory_py_interface", " by given orbital "// &
-            "updating function", c_null_ptr)) test_qn_factory_interface = .false.
+            update_orbs_c_funptr, "rotation_qn_factory_py_interface", &
+            " by given orbital updating function", c_null_ptr)) &
+            test_rotation_qn_factory_interface = .false.
 
         ! test passed objective function
-        if (.not. check_obj_func_c_funptr( &
-            obj_func_c_funptr, "qn_factory_py_interface", " by given objective "// &
-            "function", c_null_ptr)) test_qn_factory_interface = .false.
+        if (.not. check_obj_func_c_funptr(obj_func_c_funptr, &
+                                          "rotation_qn_factory_py_interface", &
+                                          " by given objective function", c_null_ptr)) &
+            test_rotation_qn_factory_interface = .false.
 
         ! test passed transport function
         if (.not. check_transport_c_funptr( &
-            transport_c_funptr, "qn_factory_py_interface", " by given transport "// &
-            "function", c_null_ptr)) test_qn_factory_interface = .false.
+            transport_c_funptr, "rotation_qn_factory_py_interface", &
+            " by given transport function", c_null_ptr)) &
+            test_rotation_qn_factory_interface = .false.
 
         ! test passed initial Hessian function
         if (.not. check_init_hess_c_funptr( &
-            init_hess_c_funptr, "qn_factory_py_interface", " by given initial "// &
-            "Hessian function", c_null_ptr)) test_qn_factory_interface = .false.
+            init_hess_c_funptr, "rotation_qn_factory_py_interface", &
+            " by given initial Hessian function", c_null_ptr)) &
+            test_rotation_qn_factory_interface = .false.
 
         ! record whether settings were passed and, if so, call their logging function
         ! and check them against the reference values
-        qn_settings_passed = present(settings_c)
+        rotation_qn_settings_passed = present(settings_c)
         if (present(settings_c)) then
             ! get Fortran pointer to passed logging function and call it
             message = "test"//c_null_char
@@ -103,22 +109,22 @@ contains
             call logger_funptr(message, c_null_ptr)
 
             ! check optional settings against reference values
-            if (settings_c /= ref_qn_settings) then
-                write(stderr, *) "test_qn_factory_py_interface failed: Passed "// &
-                    "settings associated with wrong values."
-                test_qn_factory_interface = .false.
+            if (settings_c /= ref_rotation_qn_settings) then
+                write(stderr, *) "test_rotation_qn_factory_py_interface failed: "// &
+                    "Passed settings associated with wrong values."
+                test_rotation_qn_factory_interface = .false.
             end if
         end if
 
         ! check the passed solver settings and wire them
-        if (.not. check_and_wire_solver_settings_c(solver_settings_c, &
-                                                   "qn_factory_py_interface")) &
-            test_qn_factory_interface = .false.
+        if (.not. check_and_wire_solver_settings_c( &
+            solver_settings_c, "rotation_qn_factory_py_interface")) &
+            test_rotation_qn_factory_interface = .false.
 
         ! set function pointers to the mock functions of the level of the solver and
         ! return an extension, recording the record of the state
-        update_orbs_qn_c_funptr = c_funloc(mock_level_update_orbs)
-        obj_func_qn_c_funptr = c_funloc(mock_level_obj_func)
+        update_orbs_rotation_qn_c_funptr = c_funloc(mock_level_update_orbs)
+        obj_func_rotation_qn_c_funptr = c_funloc(mock_level_obj_func)
         call record_received_callbacks([update_orbs_c_funptr, obj_func_c_funptr, &
                                         transport_c_funptr, init_hess_c_funptr])
         extension_c = mock_extension(solver_state_c)
@@ -126,23 +132,24 @@ contains
         ! set return arguments
         error_c = 0
 
-    end function mock_qn_factory_c_wrapper
+    end function mock_rotation_qn_factory_c_wrapper
 
-    subroutine mock_init_qn_settings_c(settings) bind(C, name="mock_init_qn_settings")
+    subroutine mock_init_rotation_qn_settings_c(settings) &
+        bind(C, name="mock_init_rotation_qn_settings")
         !
-        ! this subroutine is a mock routine for the C quasi-Newton setting
+        ! this subroutine is a mock routine for the C rotation QN setting
         ! initialization subroutine
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
-        use otr_qn_test_reference, only: get_reference_qn_values
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
+        use otr_rotation_qn_test_reference, only: get_reference_rotation_qn_values
 
-        type(qn_settings_type_c), intent(inout) :: settings
+        type(rotation_qn_settings_type_c), intent(inout) :: settings
 
         ! set reference values without logging function and host context
-        call get_reference_qn_values(settings)
+        call get_reference_rotation_qn_values(settings)
         settings%logger = c_null_funptr
         settings%context = c_null_ptr
 
-    end subroutine mock_init_qn_settings_c
+    end subroutine mock_init_rotation_qn_settings_c
 
-end module otr_qn_c_interface_mock
+end module otr_rotation_qn_c_interface_mock

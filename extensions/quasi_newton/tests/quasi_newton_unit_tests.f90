@@ -4,11 +4,11 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module otr_qn_unit_tests
+module otr_rotation_qn_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use test_reference, only: n_param, tol
-    use otr_qn, only: transport_type, init_hess_type, sr1_updating_type
+    use otr_rotation_qn, only: transport_type, init_hess_type, sr1_updating_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -17,13 +17,13 @@ module otr_qn_unit_tests
     procedure(transport_type), pointer :: mock_transport_ptr => mock_transport
     procedure(init_hess_type), pointer :: mock_init_hess_ptr => mock_init_hess
 
-    ! quasi-Newton object which records the point its orbital update adds and returns
+    ! rotation QN object which records the point its orbital update adds and returns
     ! the error code it is set to, for the test of the orbital update
-    type, extends(sr1_updating_type) :: recording_qn_type
+    type, extends(sr1_updating_type) :: recording_rotation_qn_type
         integer(ip) :: n_added = 0, error = 0
         real(rp), allocatable :: added_kappa(:), added_grad(:)
     contains
-        procedure :: add => recording_add_qn
+        procedure :: add => recording_add_rotation_qn
     end type
 
 contains
@@ -61,12 +61,12 @@ contains
 
     end subroutine mock_init_hess
 
-    subroutine recording_add_qn(self, kappa, grad, error)
+    subroutine recording_add_rotation_qn(self, kappa, grad, error)
         !
         ! this subroutine records the step and gradient of the point the recording
-        ! quasi-Newton object is given and returns the error code it is set to
+        ! rotation QN object is given and returns the error code it is set to
         !
-        class(recording_qn_type), intent(inout) :: self
+        class(recording_rotation_qn_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:), grad(:)
         integer(ip), intent(out) :: error
 
@@ -75,7 +75,7 @@ contains
         self%added_grad = grad
         error = self%error
 
-    end subroutine recording_add_qn
+    end subroutine recording_add_rotation_qn
 
     subroutine setup_updating_object(object)
         !
@@ -86,15 +86,15 @@ contains
         ! that they have positive curvature along them, and a random last gradient, so
         ! that every loop over the history calls the host's functions more than once
         !
-        use otr_common, only: error_qn
-        use otr_qn, only: updating_type, default_qn_settings
+        use otr_common, only: error_rotation_qn
+        use otr_rotation_qn, only: updating_type, default_rotation_qn_settings
         use test_reference, only: arm_host_context
 
         class(updating_type), intent(out) :: object
 
-        object%error_origin = error_qn
+        object%error_origin = error_rotation_qn
         object%n_param = n_param
-        object%settings = default_qn_settings
+        object%settings = default_rotation_qn_settings
         call arm_host_context(object%settings)
         object%transport => mock_transport
         object%init_hess => mock_init_hess
@@ -110,9 +110,9 @@ contains
 
     end subroutine setup_updating_object
 
-    logical(c_bool) function test_qn_factory() bind(C)
+    logical(c_bool) function test_rotation_qn_factory() bind(C)
         !
-        ! this function tests the factory, which creates a quasi-Newton object of the
+        ! this function tests the factory, which creates a rotation QN object of the
         ! updating scheme the settings select after their sanity check, initializes it
         ! with the settings and the host's transport and initial Hessian functions and
         ! wires the solver settings with it and the record of the state
@@ -121,22 +121,24 @@ contains
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
-                              update_orbs_callback, obj_func_callback, error_qn
+                              update_orbs_callback, obj_func_callback, error_rotation_qn
         use otr_common_unit_tests, only: wired_level
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
-        use otr_qn, only: qn_factory, qn_settings_type, updating_type, &
-                          sr1_updating_type, bfgs_updating_type, default_qn_settings
-        use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
+        use otr_rotation_qn, only: rotation_qn_factory, rotation_qn_settings_type, &
+                                   updating_type, sr1_updating_type, &
+                                   bfgs_updating_type, default_rotation_qn_settings
+        use otr_rotation_qn_test_reference, only: ref_rotation_qn_settings, operator(/=)
 
         procedure(update_orbs_type), pointer :: update_orbs_funptr, &
-                                                update_orbs_qn_funptr
-        procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_qn_funptr
+                                                update_orbs_rotation_qn_funptr
+        procedure(obj_func_type), pointer :: obj_func_funptr, &
+                                             obj_func_rotation_qn_funptr
         procedure(transport_type), pointer :: transport_funptr
         procedure(init_hess_type), pointer :: init_hess_funptr
         type(extension_solver_settings_type), allocatable, target :: solver_settings, &
                                                                      other_settings
         type(solver_state_type), target :: state, other_state
-        type(qn_settings_type) :: settings, expected_settings
+        type(rotation_qn_settings_type) :: settings, expected_settings
         type(test_context_type), target :: context
         type(extension_level_type), pointer :: level, other_level
         integer(ip) :: i_case, error
@@ -146,7 +148,7 @@ contains
              "for settings selecting BFGS in uppercase", "without settings"]
 
         ! assume tests pass
-        test_qn_factory = .true.
+        test_rotation_qn_factory = .true.
 
         ! set the host's callback functions
         update_orbs_funptr => mock_update_orbs
@@ -164,49 +166,51 @@ contains
             allocate(solver_settings)
             select case (i_case)
             case (1)
-                settings = ref_qn_settings
-                settings%hess_update_scheme = "SR1"
+                settings = ref_rotation_qn_settings
+                settings%qn_method = "SR1"
                 settings%logger => logger
                 settings%context => context
                 expected_settings = settings
-                expected_settings%hess_update_scheme = "sr1"
+                expected_settings%qn_method = "sr1"
             case (2)
-                settings = ref_qn_settings
-                settings%hess_update_scheme = "BFGS"
-                expected_settings = ref_qn_settings
+                settings = ref_rotation_qn_settings
+                settings%qn_method = "BFGS"
+                expected_settings = ref_rotation_qn_settings
             case (3)
-                expected_settings = default_qn_settings
+                expected_settings = default_rotation_qn_settings
             end select
-            sr1_expected = expected_settings%hess_update_scheme == "sr1"
+            sr1_expected = expected_settings%qn_method == "sr1"
             if (i_case == 3) then
-                call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                transport_funptr, init_hess_funptr, &
-                                update_orbs_qn_funptr, obj_func_qn_funptr, &
-                                solver_settings, state, error)
+                call rotation_qn_factory( &
+                    n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+                    init_hess_funptr, update_orbs_rotation_qn_funptr, &
+                    obj_func_rotation_qn_funptr, solver_settings, state, error)
             else
-                call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                transport_funptr, init_hess_funptr, &
-                                update_orbs_qn_funptr, obj_func_qn_funptr, &
-                                solver_settings, state, error, settings)
+                call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                                         transport_funptr, init_hess_funptr, &
+                                         update_orbs_rotation_qn_funptr, &
+                                         obj_func_rotation_qn_funptr, solver_settings, &
+                                         state, error, settings)
             end if
             if (error /= 0) then
-                write(stderr, *) "test_qn_factory failed: Produced error "// &
+                write(stderr, *) "test_rotation_qn_factory failed: Produced error "// &
                     trim(case_names(i_case))//"."
-                test_qn_factory = .false.
+                test_rotation_qn_factory = .false.
                 deallocate(solver_settings)
                 cycle
             end if
-            if (.not. associated(update_orbs_qn_funptr, update_orbs_callback) .or. &
-                .not. associated(obj_func_qn_funptr, obj_func_callback)) then
-                write(stderr, *) "test_qn_factory failed: Role callback functions "// &
-                    "not returned "//trim(case_names(i_case))//"."
-                test_qn_factory = .false.
+            if (.not. associated(update_orbs_rotation_qn_funptr, &
+                                 update_orbs_callback) .or. &
+                .not. associated(obj_func_rotation_qn_funptr, obj_func_callback)) then
+                write(stderr, *) "test_rotation_qn_factory failed: Role callback "// &
+                    "functions not returned "//trim(case_names(i_case))//"."
+                test_rotation_qn_factory = .false.
             end if
             level => wired_level(solver_settings)
             if (.not. associated(level)) then
-                write(stderr, *) "test_qn_factory failed: Solver settings not "// &
-                    "wired with an object "//trim(case_names(i_case))//"."
-                test_qn_factory = .false.
+                write(stderr, *) "test_rotation_qn_factory failed: Solver settings "// &
+                    "not wired with an object "//trim(case_names(i_case))//"."
+                test_rotation_qn_factory = .false.
                 deallocate(solver_settings)
                 cycle
             end if
@@ -216,9 +220,9 @@ contains
                     associated(level%extension, solver_settings%extensions(1)%object)
             end if
             if (.not. owned) then
-                write(stderr, *) "test_qn_factory failed: Object not owned by the "// &
-                    "solver settings "//trim(case_names(i_case))//"."
-                test_qn_factory = .false.
+                write(stderr, *) "test_rotation_qn_factory failed: Object not "// &
+                    "owned by the solver settings "//trim(case_names(i_case))//"."
+                test_rotation_qn_factory = .false.
             end if
             select type (object => level%extension)
             type is (sr1_updating_type)
@@ -229,9 +233,9 @@ contains
                 scheme_right = .false.
             end select
             if (.not. scheme_right) then
-                write(stderr, *) "test_qn_factory failed: Object of the wrong "// &
-                    "updating scheme created "//trim(case_names(i_case))//"."
-                test_qn_factory = .false.
+                write(stderr, *) "test_rotation_qn_factory failed: Object of the "// &
+                    "wrong updating scheme created "//trim(case_names(i_case))//"."
+                test_rotation_qn_factory = .false.
             end if
             select type (object => level%extension)
             class is (updating_type)
@@ -239,25 +243,25 @@ contains
                     object%settings /= expected_settings .or. &
                     .not. same_logger_and_context(object%settings, expected_settings)) &
                     then
-                    write(stderr, *) "test_qn_factory failed: Object not "// &
+                    write(stderr, *) "test_rotation_qn_factory failed: Object not "// &
                         "initialized with the settings "//trim(case_names(i_case))//"."
-                    test_qn_factory = .false.
+                    test_rotation_qn_factory = .false.
                 end if
                 if (.not. associated(object%transport, mock_transport) .or. &
                     .not. associated(object%init_hess, mock_init_hess)) then
-                    write(stderr, *) "test_qn_factory failed: Host's transport or "// &
-                        "initial Hessian function not handed to the object "// &
-                        trim(case_names(i_case))//"."
-                    test_qn_factory = .false.
+                    write(stderr, *) "test_rotation_qn_factory failed: Host's "// &
+                        "transport or initial Hessian function not handed to the "// &
+                        "object "//trim(case_names(i_case))//"."
+                    test_rotation_qn_factory = .false.
                 end if
             end select
             if (.not. associated(level%host%update_orbs, mock_update_orbs) .or. &
                 .not. associated(level%host%obj_func, mock_obj_func) .or. &
                 .not. associated(level%extension%state, state)) then
-                write(stderr, *) "test_qn_factory failed: Solver settings not "// &
-                    "wired with the host's functions and the record of the state "// &
-                    trim(case_names(i_case))//"."
-                test_qn_factory = .false.
+                write(stderr, *) "test_rotation_qn_factory failed: Solver settings "// &
+                    "not wired with the host's functions and the record of the "// &
+                    "state "//trim(case_names(i_case))//"."
+                test_rotation_qn_factory = .false.
             end if
             deallocate(solver_settings)
         end do
@@ -266,26 +270,28 @@ contains
         ! its error without functions and leave the solver settings untouched
         allocate(solver_settings)
         call setup_settings(settings, context)
-        update_orbs_qn_funptr => update_orbs_callback
-        obj_func_qn_funptr => obj_func_callback
-        call qn_factory(0_ip, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-                        init_hess_funptr, update_orbs_qn_funptr, obj_func_qn_funptr, &
-                        solver_settings, state, error, settings)
-        if (error /= error_qn + 1) then
-            write(stderr, *) "test_qn_factory failed: Error not returned for "// &
-                "parameters the sanity check rejects."
-            test_qn_factory = .false.
+        update_orbs_rotation_qn_funptr => update_orbs_callback
+        obj_func_rotation_qn_funptr => obj_func_callback
+        call rotation_qn_factory( &
+            0_ip, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+            init_hess_funptr, update_orbs_rotation_qn_funptr, &
+            obj_func_rotation_qn_funptr, solver_settings, state, error, settings)
+        if (error /= error_rotation_qn + 1) then
+            write(stderr, *) "test_rotation_qn_factory failed: Error not returned "// &
+                "for parameters the sanity check rejects."
+            test_rotation_qn_factory = .false.
         end if
-        if (associated(update_orbs_qn_funptr) .or. associated(obj_func_qn_funptr)) then
-            write(stderr, *) "test_qn_factory failed: Functions returned for "// &
-                "parameters the sanity check rejects."
-            test_qn_factory = .false.
+        if (associated(update_orbs_rotation_qn_funptr) .or. &
+            associated(obj_func_rotation_qn_funptr)) then
+            write(stderr, *) "test_rotation_qn_factory failed: Functions returned "// &
+                "for parameters the sanity check rejects."
+            test_rotation_qn_factory = .false.
         end if
         if (associated(solver_settings%context) .or. &
             allocated(solver_settings%extensions)) then
-            write(stderr, *) "test_qn_factory failed: Solver settings changed for "// &
-                "parameters the sanity check rejects."
-            test_qn_factory = .false.
+            write(stderr, *) "test_rotation_qn_factory failed: Solver settings "// &
+                "changed for parameters the sanity check rejects."
+            test_rotation_qn_factory = .false.
         end if
         deallocate(solver_settings)
 
@@ -295,31 +301,36 @@ contains
         ! functions and leave the settings wired with the first object only
         allocate(solver_settings)
         call setup_settings(settings, context)
-        call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
-                        obj_func_qn_funptr, solver_settings, state, error, settings)
+        call rotation_qn_factory( &
+            n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+            init_hess_funptr, update_orbs_rotation_qn_funptr, &
+            obj_func_rotation_qn_funptr, solver_settings, state, error, settings)
         level => wired_level(solver_settings)
-        call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
-                        obj_func_qn_funptr, solver_settings, state, error, settings)
-        if (error /= error_qn + 1) then
-            write(stderr, *) "test_qn_factory failed: Error not returned for the "// &
-                "host's own functions given with solver settings a factory wired."
-            test_qn_factory = .false.
+        call rotation_qn_factory( &
+            n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+            init_hess_funptr, update_orbs_rotation_qn_funptr, &
+            obj_func_rotation_qn_funptr, solver_settings, state, error, settings)
+        if (error /= error_rotation_qn + 1) then
+            write(stderr, *) "test_rotation_qn_factory failed: Error not returned "// &
+                "for the host's own functions given with solver settings a factory "// &
+                "wired."
+            test_rotation_qn_factory = .false.
         end if
-        if (associated(update_orbs_qn_funptr) .or. associated(obj_func_qn_funptr)) then
-            write(stderr, *) "test_qn_factory failed: Functions returned for the "// &
-                "host's own functions given with solver settings a factory wired."
-            test_qn_factory = .false.
+        if (associated(update_orbs_rotation_qn_funptr) .or. &
+            associated(obj_func_rotation_qn_funptr)) then
+            write(stderr, *) "test_rotation_qn_factory failed: Functions returned "// &
+                "for the host's own functions given with solver settings a factory "// &
+                "wired."
+            test_rotation_qn_factory = .false.
         end if
         owned = .false.
         if (associated(level) .and. allocated(solver_settings%extensions)) &
             owned = size(solver_settings%extensions) == 1 .and. &
                     associated(wired_level(solver_settings), level)
         if (.not. owned) then
-            write(stderr, *) "test_qn_factory failed: Solver settings a factory "// &
-                "wired changed for the host's own functions."
-            test_qn_factory = .false.
+            write(stderr, *) "test_rotation_qn_factory failed: Solver settings a "// &
+                "factory wired changed for the host's own functions."
+            test_rotation_qn_factory = .false.
         end if
         deallocate(solver_settings)
 
@@ -327,50 +338,53 @@ contains
         ! objects reading their own record of the state, so that calculations with
         ! separate settings can be used alternately
         allocate(solver_settings, other_settings)
-        settings = ref_qn_settings
-        call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
-                        obj_func_qn_funptr, solver_settings, state, error, settings)
+        settings = ref_rotation_qn_settings
+        call rotation_qn_factory( &
+            n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+            init_hess_funptr, update_orbs_rotation_qn_funptr, &
+            obj_func_rotation_qn_funptr, solver_settings, state, error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_qn_factory failed: Produced error for the first "// &
-                "of two separate solver settings."
-            test_qn_factory = .false.
+            write(stderr, *) "test_rotation_qn_factory failed: Produced error for "// &
+                "the first of two separate solver settings."
+            test_rotation_qn_factory = .false.
         end if
-        call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                        transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
-                        obj_func_qn_funptr, other_settings, other_state, error, &
-                        settings)
+        call rotation_qn_factory( &
+            n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+            init_hess_funptr, update_orbs_rotation_qn_funptr, &
+            obj_func_rotation_qn_funptr, other_settings, other_state, error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_qn_factory failed: Produced error for the "// &
-                "second of two separate solver settings."
-            test_qn_factory = .false.
+            write(stderr, *) "test_rotation_qn_factory failed: Produced error for "// &
+                "the second of two separate solver settings."
+            test_rotation_qn_factory = .false.
         end if
         level => wired_level(solver_settings)
         other_level => wired_level(other_settings)
         if (.not. (associated(level) .and. associated(other_level))) then
-            write(stderr, *) "test_qn_factory failed: Separate solver settings not "// &
-                "wired."
-            test_qn_factory = .false.
+            write(stderr, *) "test_rotation_qn_factory failed: Separate solver "// &
+                "settings not wired."
+            test_rotation_qn_factory = .false.
         else if (associated(level, other_level) .or. &
                  .not. associated(level%extension%state, state) .or. &
                  .not. associated(other_level%extension%state, other_state)) then
-            write(stderr, *) "test_qn_factory failed: Separate solver settings not "// &
-                "wired with distinct objects reading their own state."
-            test_qn_factory = .false.
+            write(stderr, *) "test_rotation_qn_factory failed: Separate solver "// &
+                "settings not wired with distinct objects reading their own state."
+            test_rotation_qn_factory = .false.
         end if
         deallocate(solver_settings, other_settings)
 
-    end function test_qn_factory
+    end function test_rotation_qn_factory
 
-    logical(c_bool) function test_qn_sanity_check() bind(C)
+    logical(c_bool) function test_rotation_qn_sanity_check() bind(C)
         !
         ! this function tests the subroutine which performs a sanity check for the
-        ! quasi-Newton input parameters
+        ! rotation QN input parameters
         !
         use opentrustregion_unit_tests, only: test_context_type, setup_error_logging
-        use otr_qn, only: qn_settings_type, qn_sanity_check, default_qn_settings
+        use otr_rotation_qn, only: rotation_qn_settings_type, &
+                                   rotation_qn_sanity_check, &
+                                   default_rotation_qn_settings
 
-        type(qn_settings_type) :: settings
+        type(rotation_qn_settings_type) :: settings
         type(test_context_type), target :: log_context
         integer(ip) :: case_n_param, i_case, error
         character(len=35), parameter :: case_names(3) = &
@@ -378,28 +392,29 @@ contains
              "a negative maximum number of points", "an unknown updating scheme"]
 
         ! assume tests pass
-        test_qn_sanity_check = .true.
+        test_rotation_qn_sanity_check = .true.
 
         ! check valid parameters, with no stored points, which keep no history, and the
         ! updating scheme in mixed case, which has to be converted to lowercase
-        settings = default_qn_settings
+        settings = default_rotation_qn_settings
         call setup_error_logging(settings, log_context)
         settings%max_points = 0
-        settings%hess_update_scheme = "BfGs"
-        call qn_sanity_check(settings, 1_ip, error)
+        settings%qn_method = "BfGs"
+        call rotation_qn_sanity_check(settings, 1_ip, error)
         if (error /= 0 .or. log_context%log_message /= "") then
-            write(stderr, *) "test_qn_sanity_check failed: Valid parameters rejected."
-            test_qn_sanity_check = .false.
+            write(stderr, *) "test_rotation_qn_sanity_check failed: Valid "// &
+                "parameters rejected."
+            test_rotation_qn_sanity_check = .false.
         end if
-        if (settings%hess_update_scheme /= "bfgs") then
-            write(stderr, *) "test_qn_sanity_check failed: Updating scheme not "// &
-                "converted to lowercase."
-            test_qn_sanity_check = .false.
+        if (settings%qn_method /= "bfgs") then
+            write(stderr, *) "test_rotation_qn_sanity_check failed: Updating "// &
+                "scheme not converted to lowercase."
+            test_rotation_qn_sanity_check = .false.
         end if
 
         ! check that every invalid parameter is rejected with an error message
         do i_case = 1, size(case_names)
-            settings = default_qn_settings
+            settings = default_rotation_qn_settings
             call setup_error_logging(settings, log_context)
             case_n_param = 1
             select case (i_case)
@@ -408,40 +423,40 @@ contains
             case (2)
                 settings%max_points = -1
             case (3)
-                settings%hess_update_scheme = "dfp"
+                settings%qn_method = "dfp"
             end select
-            call qn_sanity_check(settings, case_n_param, error)
+            call rotation_qn_sanity_check(settings, case_n_param, error)
             if (error /= 1) then
-                write(stderr, *) "test_qn_sanity_check failed: Error not returned "// &
-                    "for "//trim(case_names(i_case))//"."
-                test_qn_sanity_check = .false.
+                write(stderr, *) "test_rotation_qn_sanity_check failed: Error not "// &
+                    "returned for "//trim(case_names(i_case))//"."
+                test_rotation_qn_sanity_check = .false.
             end if
             if (log_context%log_message == "") then
-                write(stderr, *) "test_qn_sanity_check failed: No error message "// &
-                    "printed for "//trim(case_names(i_case))//"."
-                test_qn_sanity_check = .false.
+                write(stderr, *) "test_rotation_qn_sanity_check failed: No error "// &
+                    "message printed for "//trim(case_names(i_case))//"."
+                test_rotation_qn_sanity_check = .false.
             end if
         end do
 
-    end function test_qn_sanity_check
+    end function test_rotation_qn_sanity_check
 
-    logical(c_bool) function test_update_orbs_qn() bind(C)
+    logical(c_bool) function test_update_orbs_rotation_qn() bind(C)
         !
-        ! this function tests the quasi-Newton orbital update, which forwards to the
+        ! this function tests the rotation QN orbital update, which forwards to the
         ! host's orbital update with the host context of the solver level, returns its
         ! results and error, returns the quasi-Newton Hessian linear transformation in
         ! place of the host's and adds the point for a nonzero step and for the
-        ! starting point, whose gradient the first step pair needs, passing on the error
-        ! of the addition
+        ! starting point, whose gradient the first step pair needs, passing on the
+        ! error of the addition
         !
         use opentrustregion, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
-        use otr_common, only: hess_x_callback, error_qn
+        use otr_common, only: hess_x_callback, error_rotation_qn
         use otr_common_mock, only: mock_update_orbs
-        use otr_qn, only: default_qn_settings
+        use otr_rotation_qn, only: default_rotation_qn_settings
         use test_reference, only: tol, arm_host_context, host_context_reached
 
-        type(recording_qn_type), target :: object
+        type(recording_rotation_qn_type), target :: object
         type(test_context_type), target :: contexts(2)
         class(*), pointer :: context
         real(rp) :: kappa(n_param), func, grad(n_param), h_diag(n_param)
@@ -454,13 +469,13 @@ contains
         integer(ip), parameter :: case_errors(5) = [0, 0, 0, 3, 4]
 
         ! assume tests pass
-        test_update_orbs_qn = .true.
+        test_update_orbs_rotation_qn = .true.
 
         ! set up an object whose solver level forwards to the host's mock orbital update
         ! with a host context distinct from that of its settings
-        object%error_origin = error_qn
+        object%error_origin = error_rotation_qn
         object%n_param = n_param
-        object%settings = default_qn_settings
+        object%settings = default_rotation_qn_settings
         object%solver_level%host%update_orbs => mock_update_orbs
         object%solver_level%host%context => contexts(1)
         context => object%solver_level
@@ -490,69 +505,70 @@ contains
             call object%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                     context)
             if (error /= case_errors(i_case)) then
-                write(stderr, *) "test_update_orbs_qn failed: Returned error code "// &
-                    "wrong for "//trim(case_names(i_case))//"."
-                test_update_orbs_qn = .false.
+                write(stderr, *) "test_update_orbs_rotation_qn failed: Returned "// &
+                    "error code wrong for "//trim(case_names(i_case))//"."
+                test_update_orbs_rotation_qn = .false.
             end if
             if (abs(func - sum(kappa)) > tol .or. &
                 any(abs(grad - 2.0_rp * kappa) > tol) .or. &
                 any(abs(h_diag - 3.0_rp * kappa) > tol)) then
-                write(stderr, *) "test_update_orbs_qn failed: Results of the "// &
-                    "host's orbital update not returned for "// &
+                write(stderr, *) "test_update_orbs_rotation_qn failed: Results of "// &
+                    "the host's orbital update not returned for "// &
                     trim(case_names(i_case))//"."
-                test_update_orbs_qn = .false.
+                test_update_orbs_rotation_qn = .false.
             end if
             if (contexts(1)%n_calls /= 1 .or. contexts(2)%n_calls /= 0) then
-                write(stderr, *) "test_update_orbs_qn failed: Host's orbital "// &
-                    "update not called with the host context of the solver level "// &
-                    "for "//trim(case_names(i_case))//"."
-                test_update_orbs_qn = .false.
+                write(stderr, *) "test_update_orbs_rotation_qn failed: Host's "// &
+                    "orbital update not called with the host context of the solver "// &
+                    "level for "//trim(case_names(i_case))//"."
+                test_update_orbs_rotation_qn = .false.
             end if
-            if (.not. host_context_reached("update_orbs_qn", contexts(1))) &
-                test_update_orbs_qn = .false.
+            if (.not. host_context_reached("update_orbs_rotation_qn", contexts(1))) &
+                test_update_orbs_rotation_qn = .false.
             if (i_case /= 4 .and. .not. associated(hess_x_funptr, hess_x_callback)) then
-                write(stderr, *) "test_update_orbs_qn failed: Role callback "// &
-                    "function of the Hessian linear transformation not returned "// &
-                    "for "//trim(case_names(i_case))//"."
-                test_update_orbs_qn = .false.
+                write(stderr, *) "test_update_orbs_rotation_qn failed: Role "// &
+                    "callback function of the Hessian linear transformation not "// &
+                    "returned for "//trim(case_names(i_case))//"."
+                test_update_orbs_rotation_qn = .false.
             end if
             if (object%n_added /= merge(1, 0, case_adds(i_case))) then
-                write(stderr, *) "test_update_orbs_qn failed: Point added wrongly "// &
-                    "for "//trim(case_names(i_case))//"."
-                test_update_orbs_qn = .false.
+                write(stderr, *) "test_update_orbs_rotation_qn failed: Point added "// &
+                    "wrongly for "//trim(case_names(i_case))//"."
+                test_update_orbs_rotation_qn = .false.
             else if (case_adds(i_case)) then
                 if (any(abs(object%added_kappa - kappa) > tol) .or. &
                     any(abs(object%added_grad - grad) > tol)) then
-                    write(stderr, *) "test_update_orbs_qn failed: Step or gradient "// &
-                        "of the added point wrong for "//trim(case_names(i_case))//"."
-                    test_update_orbs_qn = .false.
+                    write(stderr, *) "test_update_orbs_rotation_qn failed: Step or "// &
+                        "gradient of the added point wrong for "// &
+                        trim(case_names(i_case))//"."
+                    test_update_orbs_rotation_qn = .false.
                 end if
             end if
         end do
 
-    end function test_update_orbs_qn
+    end function test_update_orbs_rotation_qn
 
-    logical(c_bool) function test_init_qn() bind(C)
+    logical(c_bool) function test_init_rotation_qn() bind(C)
         !
-        ! this function tests the subroutine which initializes a quasi-Newton object
+        ! this function tests the subroutine which initializes a rotation QN object
         !
-        use otr_common, only: error_qn
-        use otr_qn, only: qn_settings_type, sr1_updating_type
-        use otr_qn_test_reference, only: ref_qn_settings, operator(/=)
+        use otr_common, only: error_rotation_qn
+        use otr_rotation_qn, only: rotation_qn_settings_type, sr1_updating_type
+        use otr_rotation_qn_test_reference, only: ref_rotation_qn_settings, operator(/=)
         use otr_common_test_reference, only: same_logger_and_context
         use opentrustregion_unit_tests, only: test_context_type, logger
 
         type(sr1_updating_type) :: object
-        type(qn_settings_type) :: settings
+        type(rotation_qn_settings_type) :: settings
         type(test_context_type), target :: context
 
         ! assume tests pass
-        test_init_qn = .true.
+        test_init_rotation_qn = .true.
 
         ! initialize a new object, which has to perform the orbital update and the
         ! Hessian linear transformation itself, take over the settings and the number
         ! of parameters and allocate the arrays of the history
-        settings = ref_qn_settings
+        settings = ref_rotation_qn_settings
         settings%logger => logger
         settings%context => context
         call object%init(n_param, settings)
@@ -560,38 +576,40 @@ contains
             any([object%provides%obj_func, object%provides%precond, &
                  object%provides%precond_pd, object%provides%project, &
                  object%provides%get_extra_trial_vectors])) then
-            write(stderr, *) "test_init_qn failed: Roles the object performs set wrong."
-            test_init_qn = .false.
+            write(stderr, *) "test_init_rotation_qn failed: Roles the object "// &
+                "performs set wrong."
+            test_init_rotation_qn = .false.
         end if
-        if (object%error_origin /= error_qn) then
-            write(stderr, *) "test_init_qn failed: Error origin of the object not set."
-            test_init_qn = .false.
+        if (object%error_origin /= error_rotation_qn) then
+            write(stderr, *) "test_init_rotation_qn failed: Error origin of the "// &
+                "object not set."
+            test_init_rotation_qn = .false.
         end if
         if (object%n_param /= n_param .or. object%settings /= settings .or. &
             .not. same_logger_and_context(object%settings, settings)) then
-            write(stderr, *) "test_init_qn failed: Settings or number of "// &
+            write(stderr, *) "test_init_rotation_qn failed: Settings or number of "// &
                 "parameters not taken over."
-            test_init_qn = .false.
+            test_init_rotation_qn = .false.
         end if
         if (any(shape(object%kappa_list) /= [n_param, settings%max_points]) .or. &
             any(shape(object%grad_diff_list) /= [n_param, settings%max_points])) then
-            write(stderr, *) "test_init_qn failed: Arrays of the history allocated "// &
-                "wrong."
-            test_init_qn = .false.
+            write(stderr, *) "test_init_rotation_qn failed: Arrays of the history "// &
+                "allocated wrong."
+            test_init_rotation_qn = .false.
         end if
 
-    end function test_init_qn
+    end function test_init_rotation_qn
 
-    logical(c_bool) function test_add_qn() bind(C)
+    logical(c_bool) function test_add_rotation_qn() bind(C)
         !
         ! this function tests the subroutine which adds a new point to the history of a
-        ! quasi-Newton object, so far only that it hands every call of the host's
+        ! rotation QN object, so far only that it hands every call of the host's
         ! transport function the host context of its settings and passes on the error
         ! of every call and that a pair the skipping criterion rejects leaves the
         ! history unchanged while the gradient becomes the last one, while its numerics
         ! are left to later tests
         !
-        use otr_qn, only: bfgs_updating_type
+        use otr_rotation_qn, only: bfgs_updating_type
         use test_reference, only: host_context, host_context_reached
 
         type(bfgs_updating_type) :: object
@@ -600,7 +618,7 @@ contains
         character(len=8) :: call_number
 
         ! assume tests pass
-        test_add_qn = .true.
+        test_add_rotation_qn = .true.
 
         ! add a point to an object with two points in its history and a last gradient,
         ! for which the routine transports both history arrays of each point and the
@@ -611,16 +629,17 @@ contains
         call random_number(grad)
         call object%add(kappa, grad, error)
         if (error /= 0) then
-            write(stderr, *) "test_add_qn failed: Produced error."
-            test_add_qn = .false.
+            write(stderr, *) "test_add_rotation_qn failed: Produced error."
+            test_add_rotation_qn = .false.
         end if
         n_calls = host_context%n_calls
         if (n_calls /= 5) then
-            write(stderr, *) "test_add_qn failed: Transport function not called "// &
-                "with the host context at every call site."
-            test_add_qn = .false.
+            write(stderr, *) "test_add_rotation_qn failed: Transport function not "// &
+                "called with the host context at every call site."
+            test_add_rotation_qn = .false.
         end if
-        if (.not. host_context_reached("add_qn")) test_add_qn = .false.
+        if (.not. host_context_reached("add_rotation_qn")) &
+            test_add_rotation_qn = .false.
 
         ! let every call of the transport function fail in turn, whose error the
         ! routine has to pass on
@@ -631,9 +650,9 @@ contains
             call object%add(kappa, grad, error)
             if (error /= 7) then
                 write(call_number, '(I0)') i_call
-                write(stderr, *) "test_add_qn failed: Error of call "// &
+                write(stderr, *) "test_add_rotation_qn failed: Error of call "// &
                     trim(call_number)//" of the transport function not passed on."
-                test_add_qn = .false.
+                test_add_rotation_qn = .false.
             end if
         end do
 
@@ -649,17 +668,17 @@ contains
         grad = object%last_grad + orthogonal
         call object%add(kappa, grad, error)
         if (error /= 0 .or. object%n_points /= 2) then
-            write(stderr, *) "test_add_qn failed: Error produced or history "// &
-                "changed for a pair the skipping criterion rejects."
-            test_add_qn = .false.
+            write(stderr, *) "test_add_rotation_qn failed: Error produced or "// &
+                "history changed for a pair the skipping criterion rejects."
+            test_add_rotation_qn = .false.
         end if
         if (norm2(object%last_grad - grad) > tol) then
-            write(stderr, *) "test_add_qn failed: Gradient not the last one after "// &
-                "a pair the skipping criterion rejects."
-            test_add_qn = .false.
+            write(stderr, *) "test_add_rotation_qn failed: Gradient not the last "// &
+                "one after a pair the skipping criterion rejects."
+            test_add_rotation_qn = .false.
         end if
 
-    end function test_add_qn
+    end function test_add_rotation_qn
 
     logical(c_bool) function test_sr1_skip_add() bind(C)
         !
@@ -668,7 +687,7 @@ contains
         ! Hessian function the host context of its settings and passes on the error of
         ! every call, while its numerics are left to later tests
         !
-        use otr_qn, only: sr1_updating_type
+        use otr_rotation_qn, only: sr1_updating_type
         use test_reference, only: host_context, host_context_reached
 
         type(sr1_updating_type) :: object
@@ -722,7 +741,7 @@ contains
         ! call, while its numerics are left to later tests
         !
         use otr_common_unit_tests, only: level_context
-        use otr_qn, only: sr1_updating_type
+        use otr_rotation_qn, only: sr1_updating_type
         use test_reference, only: host_context, host_context_reached
 
         type(sr1_updating_type), target :: object
@@ -776,7 +795,7 @@ contains
         ! call, while its numerics are left to later tests
         !
         use otr_common_unit_tests, only: level_context
-        use otr_qn, only: bfgs_updating_type
+        use otr_rotation_qn, only: bfgs_updating_type
         use test_reference, only: host_context, host_context_reached
 
         type(bfgs_updating_type), target :: object
@@ -823,4 +842,4 @@ contains
 
     end function test_hess_x_bfgs
 
-end module otr_qn_unit_tests
+end module otr_rotation_qn_unit_tests

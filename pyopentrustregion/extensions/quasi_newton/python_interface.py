@@ -56,26 +56,26 @@ init_hess_interface_type = callback_type(c_int, POINTER(c_real))
 
 
 # define classes corresponding to C structs for settings
-class QNSettingsC(Structure):
+class RotationQNSettingsC(Structure):
     _fields_ = [
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("verbose", c_int),
         ("max_points", c_int),
-        ("hess_update_scheme", c_char * (kw_len + 1)),
+        ("qn_method", c_char * (kw_len + 1)),
         ("context", c_void_p),
     ]
 
 
-class QNSettings(Settings):
+class RotationQNSettings(Settings):
 
-    c_struct = QNSettingsC
+    c_struct = RotationQNSettingsC
     try:
-        init_c_struct = lib.init_qn_settings
+        init_c_struct = lib.init_rotation_qn_settings
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install ."
+            "CMAKE_FLAGS='-DENABLE_ROTATION_QN=ON' pip install ."
         )
 
     callback_fields = {
@@ -86,8 +86,8 @@ class QNSettings(Settings):
 
 
 # ensure that appropriate fields are automatically set in settings_c object
-auto_bind_fields(QNSettings)
-bind_callback_fields(QNSettings)
+auto_bind_fields(RotationQNSettings)
+bind_callback_fields(RotationQNSettings)
 
 
 # define interface factories
@@ -144,7 +144,7 @@ class InitHessInterface(CallbackInterface):
         return 0
 
 
-def qn_factory(
+def rotation_qn_factory(
     n_param: int,
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -155,7 +155,7 @@ def qn_factory(
     init_hess: InitHessType,
     solver_settings: SolverSettings,
     solver_state: SolverState,
-    settings: Optional[QNSettings] = None,
+    settings: Optional[RotationQNSettings] = None,
 ) -> Tuple[
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -194,8 +194,8 @@ def qn_factory(
         settings.prepare_call(None, exception)
 
     # define result and argument types
-    lib.qn_factory.restype = c_int
-    lib.qn_factory.argtypes = [
+    lib.rotation_qn_factory.restype = c_int
+    lib.rotation_qn_factory.argtypes = [
         c_int,
         update_orbs_interface_type,
         obj_func_interface_type,
@@ -206,30 +206,30 @@ def qn_factory(
         POINTER(c_void_p),
         POINTER(SolverSettingsC),
         POINTER(SolverStateC),
-        POINTER(QNSettingsC),
+        POINTER(RotationQNSettingsC),
     ]
 
     # call Fortran function
-    update_orbs_qn_funptr = update_orbs_interface_type()
-    obj_func_qn_funptr = obj_func_interface_type()
+    update_orbs_rotation_qn_funptr = update_orbs_interface_type()
+    obj_func_rotation_qn_funptr = obj_func_interface_type()
     extension = c_void_p()
-    error = lib.qn_factory(
+    error = lib.rotation_qn_factory(
         n_param,
         update_orbs_interface,
         obj_func_interface,
         transport_interface,
         init_hess_interface,
-        byref(update_orbs_qn_funptr),
-        byref(obj_func_qn_funptr),
+        byref(update_orbs_rotation_qn_funptr),
+        byref(obj_func_rotation_qn_funptr),
         byref(extension),
         byref(solver_settings.settings_c),
         byref(solver_state.state_c),
         None if settings is None else byref(settings.settings_c),
     )
 
-    raise_on_failure(error, exception, "quasi-Newton factory")
+    raise_on_failure(error, exception, "rotation QN factory")
 
-    # the owner of the quasi-Newton object, which the solver settings keep alive, keeps
+    # the owner of the rotation QN object, which the solver settings keep alive, keeps
     # alive what the object calls, and the returned functions are called with the
     # context the factory has written into the solver settings, through which they
     # reach the object, and keep the solver settings alive
@@ -246,5 +246,8 @@ def qn_factory(
         },
     )
     return extension_functions(
-        update_orbs_qn_funptr, obj_func_qn_funptr, solver_settings, exception
+        update_orbs_rotation_qn_funptr,
+        obj_func_rotation_qn_funptr,
+        solver_settings,
+        exception,
     )

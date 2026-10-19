@@ -471,8 +471,8 @@ def check_extension_owner(call_factory, test_name):
 def toy_model():
     """
     this function reads the toy model of common_test_reference.f90, which the
-    integration tests of the orbital bases and ARH solve: a mean-field energy in a
-    non-orthogonal AO basis with the core Hamiltonian, the AO overlap matrix, the
+    integration tests of the orbital bases and density QN solve: a mean-field energy in
+    a non-orthogonal AO basis with the core Hamiltonian, the AO overlap matrix, the
     two-electron kernel g, whose Coulomb and exchange matrices are J[D]_pq = sum_rs
     g_pqrs D_rs and K[D]_pq = sum_rs g_prqs D_rs, a non-linear term c sum_p n_p^3 of
     the total diagonal density n_p, starting orbitals orthonormal in the AO metric and
@@ -501,8 +501,8 @@ class ToyRun:
     closed-shell ones row-major, so that the library rotates a copy of them, and the
     open-shell ones column-major, so that it rotates them in place, or density
     matrices, together with the density matrix evaluating functions of the orbital
-    basis and ARH, which count their calls and record whether the solver state was
-    current in them
+    basis and density QN, which count their calls and record whether the solver state
+    was current in them
     """
 
     def __init__(self, mo_basis, n_particle):
@@ -513,8 +513,8 @@ class ToyRun:
         self.settings = SolverSettings()
         self.settings.stability = True
         self.state = SolverState()
-        self.calls = {"evaluate_dm": 0, "get_response": 0, "arh_evaluate_dm": 0}
-        self.n_updates_seen = {"evaluate_dm": 0, "arh_evaluate_dm": 0}
+        self.calls = {"evaluate_dm": 0, "get_response": 0, "density_qn_evaluate_dm": 0}
+        self.n_updates_seen = {"evaluate_dm": 0, "density_qn_evaluate_dm": 0}
         self.state_not_current = False
 
         # MO coefficients of fewer MOs than AOs for every channel, so that the numbers
@@ -613,20 +613,20 @@ class ToyRun:
 
         return energy, response
 
-    def arh_evaluate_dm(self, dm, fock, v_coulomb, v_exchange, v_nonlinear):
+    def density_qn_evaluate_dm(self, dm, fock, v_coulomb, v_exchange, v_nonlinear):
         """
-        this function is the density matrix evaluating function of ARH
+        this function is the density matrix evaluating function of density QN
         """
-        self.called("arh_evaluate_dm")
+        self.called("density_qn_evaluate_dm")
         return self.outputs(dm, fock, v_coulomb, v_exchange, v_nonlinear)
 
-    def solve(self, update_orbs, obj_func, test_name, case_name, arh=False):
+    def solve(self, update_orbs, obj_func, test_name, case_name, density_qn=False):
         """
         this function solves the prepared run with the functions a factory returned and
         checks that the solve converged, that the density matrix evaluating functions
         were called with the current solver state, that the exact Hessian of the
-        orbital basis and, with ARH, its density matrix evaluating function were used
-        and that the orbitals of the caller moved and stayed orthonormal
+        orbital basis and, with density QN, its density matrix evaluating function were
+        used and that the orbitals of the caller moved and stayed orthonormal
         """
         try:
             solver(update_orbs, obj_func, self.n_param, self.settings, self.state)
@@ -643,9 +643,11 @@ class ToyRun:
             )
             test_passed = False
 
-        # the exact Hessian of the orbital basis is used for the solve or, with ARH, for
-        # the stability check, so the response function is called
-        names = ["evaluate_dm", "get_response"] + (["arh_evaluate_dm"] if arh else [])
+        # the exact Hessian of the orbital basis is used for the solve or, with density
+        # QN, for the stability check, so the response function is called
+        names = ["evaluate_dm", "get_response"] + (
+            ["density_qn_evaluate_dm"] if density_qn else []
+        )
         for name in names:
             if self.calls[name] == 0:
                 print(

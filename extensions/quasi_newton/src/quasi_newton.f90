@@ -4,11 +4,11 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module otr_qn
+module otr_rotation_qn
 
     use opentrustregion, only: rp, ip, kw_len, settings_type, update_orbs_type, &
                                hess_x_type, add_error_origin
-    use otr_common, only: extension_type, provided_roles_type, error_qn
+    use otr_common, only: extension_type, provided_roles_type, error_rotation_qn
 
     implicit none
 
@@ -37,35 +37,36 @@ module otr_qn
     end interface
 
     ! derived type for settings
-    type, extends(settings_type) :: qn_settings_type
-        character(len=kw_len) :: hess_update_scheme = "sr1"
+    type, extends(settings_type) :: rotation_qn_settings_type
+        character(len=kw_len) :: qn_method = "sr1"
         integer(ip) :: max_points = 10
     end type
 
-    type(qn_settings_type), parameter :: default_qn_settings = qn_settings_type()
+    type(rotation_qn_settings_type), parameter :: default_rotation_qn_settings = &
+        rotation_qn_settings_type()
 
     ! updating schemes
-    character(len=kw_len), parameter :: hess_update_schemes(2) = &
+    character(len=kw_len), parameter :: qn_methods(2) = &
         [character(len=kw_len) :: "sr1", "bfgs"]
 
     ! warning for settings that were not initialized
-    character(len=*), parameter :: qn_settings_uninitialized_warning_msg = &
-        "Quasi-Newton settings were not initialized. All quasi-Newton settings are "// &
+    character(len=*), parameter :: rotation_qn_settings_uninitialized_warning_msg = &
+        "Rotation QN settings were not initialized. All rotation QN settings are "// &
         "set to default values"
 
-    ! quasi-Newton object, holding the history of steps and gradient differences, the
+    ! rotation QN object, holding the history of steps and gradient differences, the
     ! settings and the host's transport and initial Hessian functions, whose updating
     ! schemes extend it with their Hessian linear transformation
     type, abstract, extends(extension_type) :: updating_type
         real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:)
         integer(ip) :: n_points = 0
-        type(qn_settings_type) :: settings
+        type(rotation_qn_settings_type) :: settings
         procedure(transport_type), pointer, nopass :: transport => null()
         procedure(init_hess_type), pointer, nopass :: init_hess => null()
     contains
-        procedure :: update_orbs => update_orbs_qn
-        procedure :: init => init_qn
-        procedure :: add => add_qn
+        procedure :: update_orbs => update_orbs_rotation_qn
+        procedure :: init => init_rotation_qn
+        procedure :: add => add_rotation_qn
         procedure(skip_add_interface), deferred :: skip_add
     end type
 
@@ -94,14 +95,14 @@ module otr_qn
 
 contains
 
-    subroutine qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                          transport_funptr, init_hess_funptr, update_orbs_qn_funptr, &
-                          obj_func_qn_funptr, solver_settings, solver_state, error, &
-                          settings)
+    subroutine rotation_qn_factory( &
+        n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+        init_hess_funptr, update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, &
+        solver_settings, solver_state, error, settings)
         !
-        ! this subroutine returns the quasi-Newton orbital updating function, which
+        ! this subroutine returns the rotation QN orbital updating function, which
         ! wraps the host's, and the objective function, and wires the solver settings
-        ! with a new quasi-Newton object, which they own and through which the host's
+        ! with a new rotation QN object, which they own and through which the host's
         ! callback functions keep receiving the host context, and which reads the state
         ! of the solver from the record the host also passes to the solver
         !
@@ -114,35 +115,36 @@ contains
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         procedure(transport_type), intent(in), pointer :: transport_funptr
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_qn_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_qn_funptr
+        procedure(update_orbs_type), intent(out), pointer :: &
+            update_orbs_rotation_qn_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_rotation_qn_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
         type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(qn_settings_type), intent(in), optional :: settings
+        type(rotation_qn_settings_type), intent(in), optional :: settings
 
-        type(qn_settings_type) :: local_settings
+        type(rotation_qn_settings_type) :: local_settings
         class(extension_type), allocatable, target :: object
 
         ! initialize error flag and the returned functions
         error = 0
-        update_orbs_qn_funptr => null()
-        obj_func_qn_funptr => null()
+        update_orbs_rotation_qn_funptr => null()
+        obj_func_rotation_qn_funptr => null()
 
         ! work on a copy of the given settings or, without any, of the default settings
         if (present(settings)) then
             local_settings = settings
         else
-            local_settings = default_qn_settings
+            local_settings = default_rotation_qn_settings
         end if
 
         ! perform sanity check, which also converts the updating scheme to lowercase
-        call qn_sanity_check(local_settings, n_param, error)
-        call add_error_origin(error, error_qn, local_settings)
+        call rotation_qn_sanity_check(local_settings, n_param, error)
+        call add_error_origin(error, error_rotation_qn, local_settings)
         if (error /= 0) return
 
         ! create the object of the updating scheme
-        if (local_settings%hess_update_scheme == "sr1") then
+        if (local_settings%qn_method == "sr1") then
             allocate(sr1_updating_type :: object)
         else
             allocate(bfgs_updating_type :: object)
@@ -161,23 +163,23 @@ contains
         ! and host contexts, and let the settings own it
         call solver_settings%wire(object, solver_state, local_settings, error, &
                                   update_orbs_funptr, obj_func_funptr)
-        call add_error_origin(error, error_qn, local_settings)
+        call add_error_origin(error, error_rotation_qn, local_settings)
         if (error /= 0) return
 
         ! get the orbital updating function and the objective function of the object
-        update_orbs_qn_funptr => update_orbs_callback
-        obj_func_qn_funptr => obj_func_callback
+        update_orbs_rotation_qn_funptr => update_orbs_callback
+        obj_func_rotation_qn_funptr => obj_func_callback
 
-    end subroutine qn_factory
+    end subroutine rotation_qn_factory
 
-    subroutine qn_sanity_check(settings, n_param, error)
+    subroutine rotation_qn_sanity_check(settings, n_param, error)
         !
-        ! this subroutine performs a sanity check for quasi-Newton input parameters,
+        ! this subroutine performs a sanity check for rotation QN input parameters,
         ! after converting the updating scheme to lowercase
         !
         use opentrustregion, only: verbosity_error, string_to_lowercase
 
-        type(qn_settings_type), intent(inout) :: settings
+        type(rotation_qn_settings_type), intent(inout) :: settings
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
 
@@ -202,24 +204,24 @@ contains
         end if
 
         ! convert strings to lowercase
-        settings%hess_update_scheme = string_to_lowercase(settings%hess_update_scheme)
+        settings%qn_method = string_to_lowercase(settings%qn_method)
 
         ! check for character options
-        if (.not. any(settings%hess_update_scheme == hess_update_schemes)) then
-            call settings%log( &
-                "Quasi-Newton updating scheme option unknown. Possible values are "// &
-                """sr1"" (symmetric rank-1 update) and ""bfgs"" "// &
-                "(Broyden-Fletcher-Goldfarb-Shanno update).", verbosity_error, .true.)
+        if (.not. any(settings%qn_method == qn_methods)) then
+            call settings%log("QN method option unknown. Possible values are "// &
+                              """sr1"" (symmetric rank-1 update) and ""bfgs"" "// &
+                              "(Broyden-Fletcher-Goldfarb-Shanno update).", &
+                              verbosity_error, .true.)
             error = 1
             return
         end if
 
-    end subroutine qn_sanity_check
+    end subroutine rotation_qn_sanity_check
 
-    recursive subroutine update_orbs_qn(self, kappa, func, grad, h_diag, &
-                                        hess_x_funptr, error, context)
+    recursive subroutine update_orbs_rotation_qn(self, kappa, func, grad, h_diag, &
+                                                 hess_x_funptr, error, context)
         !
-        ! this subroutine is the quasi-Newton orbital updating function, which updates
+        ! this subroutine is the rotation QN orbital updating function, which updates
         ! the orbitals with the host's orbital update and host context, replaces the
         ! Hessian linear transformation the host returns by the quasi-Newton one and
         ! adds the new point to the history
@@ -253,9 +255,9 @@ contains
             if (error /= 0) return
         end if
 
-    end subroutine update_orbs_qn
+    end subroutine update_orbs_rotation_qn
 
-    subroutine add_qn(self, kappa, grad, error)
+    subroutine add_rotation_qn(self, kappa, grad, error)
         !
         ! this subroutine adds a new rotation and gradient to the corresponding lists
         ! and transports the history accordingly; the gradient becomes the last one
@@ -317,20 +319,20 @@ contains
             deallocate(grad_diff)
         end if
 
-    end subroutine add_qn
+    end subroutine add_rotation_qn
 
-    subroutine init_qn(self, n_param, settings)
+    subroutine init_rotation_qn(self, n_param, settings)
         !
         ! this subroutine initializes an updating object with the given settings
         !
         class(updating_type), intent(inout) :: self
         integer(ip), intent(in) :: n_param
-        type(qn_settings_type), intent(in) :: settings
+        type(rotation_qn_settings_type), intent(in) :: settings
 
         ! set the roles the object performs itself, the orbital update and the Hessian
         ! linear transformation, the settings and the number of parameters
         self%provides = provided_roles_type(update_orbs=.true., hess_x=.true.)
-        self%error_origin = error_qn
+        self%error_origin = error_rotation_qn
         self%settings = settings
         self%n_param = n_param
 
@@ -338,7 +340,7 @@ contains
         allocate(self%kappa_list(n_param, self%settings%max_points), &
                  self%grad_diff_list(n_param, self%settings%max_points))
 
-    end subroutine init_qn
+    end subroutine init_rotation_qn
 
     function sr1_skip_add(self, kappa, grad_diff, error) result(skip)
         !
@@ -634,4 +636,4 @@ contains
 
     end subroutine hess_x_bfgs
 
-end module otr_qn
+end module otr_rotation_qn

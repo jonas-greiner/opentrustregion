@@ -244,8 +244,8 @@ class OrbitalOwner(ExtensionOwner):
     this class owns the orbital basis object an MO or OAO factory created for a Python
     host like ExtensionOwner and also holds the dimensions of its orbitals, the
     collector of the exceptions of the factory call and, if the library moves a copy of
-    the orbitals of the caller, the function that copies them back, which the ARH
-    factory, which builds on the object, needs for its own callback interfaces and
+    the orbitals of the caller, the function that copies them back, which the density
+    QN factory, which builds on the object, needs for its own callback interfaces and
     orbital updating function and shares with them
     """
 

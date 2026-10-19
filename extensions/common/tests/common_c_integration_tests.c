@@ -210,9 +210,9 @@ c_int toy_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
   return 0;
 }
 
-c_int toy_arh_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
-                          c_real *v_coulomb, c_real *v_exchange, c_real *v_nonlinear,
-                          void *context) {
+c_int toy_density_qn_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
+                                 c_real *v_coulomb, c_real *v_exchange,
+                                 c_real *v_nonlinear, void *context) {
   toy_host *host = host_of(context);
   if (!host)
     return 1;
@@ -247,9 +247,9 @@ void toy_run_init(toy_run *run, bool mo_basis, c_int n_particle) {
   run->settings = solver_settings_init();
   run->settings.stability = true;
   init_host(&run->host, n_particle, &run->state);
-  init_host(&run->arh_host, n_particle, &run->state);
+  init_host(&run->density_qn_host, n_particle, &run->state);
   current_hosts[0] = &run->host;
-  current_hosts[1] = &run->arh_host;
+  current_hosts[1] = &run->density_qn_host;
   n_wrong_context = 0;
 
   /* MO coefficients of fewer MOs than AOs for every channel, so that the numbers of
@@ -345,8 +345,8 @@ bool toy_run_solve(toy_run *run, const char *test_name, const char *case_name) {
     ok = false;
   }
 
-  /* the exact Hessian of the orbital basis is used for the solve or, with ARH, for the
-   * stability check, so the response function is called */
+  /* the exact Hessian of the orbital basis is used for the solve or, with density QN,
+   * for the stability check, so the response function is called */
   ok &= check_host(&run->host, run, "orbital basis", test_name, case_name);
   if (run->host.n_get_response == 0) {
     fprintf(stderr,
@@ -355,8 +355,9 @@ bool toy_run_solve(toy_run *run, const char *test_name, const char *case_name) {
             test_name, case_name);
     ok = false;
   }
-  if (run->arh_extension)
-    ok &= check_host(&run->arh_host, run, "ARH object", test_name, case_name);
+  if (run->density_qn_extension)
+    ok &= check_host(&run->density_qn_host, run, "density QN object", test_name,
+                     case_name);
 
   /* the orbitals of the caller moved and stayed orthonormal */
   c_real moved = 0.0;

@@ -98,8 +98,9 @@ module otr_common
 
     ! error origins of the extensions, with which their factories and objects tag the
     ! errors they detect themselves
-    integer(ip), parameter :: error_mo = 5100, error_oao = 5200, error_arh = 5300, &
-                              error_qn = 5400, error_s_gek = 5500
+    integer(ip), parameter :: error_mo = 5100, error_oao = 5200, &
+                              error_density_qn = 5300, error_rotation_qn = 5400, &
+                              error_s_gek = 5500
 
     ! warning for orbital bases set up without a density matrix evaluating function
     character(len=*), parameter :: evaluate_dm_missing_warning_msg = &

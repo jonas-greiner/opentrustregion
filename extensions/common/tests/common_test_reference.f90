@@ -88,11 +88,11 @@ contains
         bind(C)
         !
         ! this subroutine returns the toy model which the integration tests of the
-        ! orbital bases and ARH solve through the C and Python interfaces, a mean-field
-        ! energy of the shared numbers of AOs and occupied orbitals in a non-orthogonal
-        ! AO basis: the core Hamiltonian, the AO overlap matrix, the positive
-        ! semidefinite two-electron kernel g_pqrs = sum_k M^k_pq M^k_rs of a few
-        ! symmetric matrices M^k, the factor of the non-linear term and starting
+        ! orbital bases and density QN solve through the C and Python interfaces, a
+        ! mean-field energy of the shared numbers of AOs and occupied orbitals in a
+        ! non-orthogonal AO basis: the core Hamiltonian, the AO overlap matrix, the
+        ! positive semidefinite two-electron kernel g_pqrs = sum_k M^k_pq M^k_rs of a
+        ! few symmetric matrices M^k, the factor of the non-linear term and starting
         ! orbitals orthonormal in the AO metric, the inverse square root of the overlap
         ! matrix rotated so that they are not stationary, all deterministic so that C
         ! and Python solve the same model

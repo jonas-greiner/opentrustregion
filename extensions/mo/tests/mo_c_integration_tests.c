@@ -45,8 +45,8 @@ extern const char test_mo_settings_uninitialized_warning[];
  * Helpers
  * ------------------------------------------------------------------ */
 
-/* the setup declared in mo_c_integration_tests.h, which the integration tests of ARH
- * use too */
+/* the setup declared in mo_c_integration_tests.h, which the integration tests of
+ * density QN use too */
 bool setup_mo_toy_run(toy_run *run, c_int n_particle, const char *test_name,
                       const char *case_name) {
   toy_run_init(run, true, n_particle);

@@ -4,13 +4,13 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module otr_arh
+module otr_density_qn
 
     use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
                                hess_x_type, solver_settings_type, solver_state_type, &
                                add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, extension_type, &
-                          extension_solver_settings_type, channel_rows, error_arh
+                          extension_solver_settings_type, channel_rows, error_density_qn
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
 
@@ -20,27 +20,29 @@ module otr_arh
     real(rp), parameter :: history_window_factor = 2.0_rp, &
                            ms_sr1_skip_thresh = 0.05_rp, eig_val_noise_factor = 10.0_rp
 
-    type, extends(orbital_settings_type) :: arh_settings_type
-        character(len=kw_len) :: arh_type = "ms_sr1"
+    type, extends(orbital_settings_type) :: density_qn_settings_type
+        character(len=kw_len) :: qn_method = "ms_sr1"
     end type
 
-    type(arh_settings_type), parameter :: default_arh_settings = arh_settings_type()
+    type(density_qn_settings_type), parameter :: default_density_qn_settings = &
+        density_qn_settings_type()
 
     ! warning for settings that were not initialized
-    character(len=*), parameter :: arh_settings_uninitialized_warning_msg = &
-        "ARH settings were not initialized. All ARH settings are set to default values"
+    character(len=*), parameter :: density_qn_settings_uninitialized_warning_msg = &
+        "Density QN settings were not initialized. All density QN settings are set "// &
+        "to default values"
 
     ! define setting options
-    character(len=kw_len), parameter :: arh_types(5) = &
+    character(len=kw_len), parameter :: qn_methods(5) = &
         [character(len=kw_len) :: "arh", "symm_arh", "ms_psb", "ms_sp", "ms_sr1"]
 
     ! micro iteration limit of the subsystem solver, which the linear transformations
     ! of the approximate Hessian make cheap compared to the function evaluations
-    integer(ip), parameter :: arh_n_micro = 300
+    integer(ip), parameter :: density_qn_n_micro = 300
 
     abstract interface
-        subroutine arh_evaluate_dm_cs_type(dm, energy, fock, v_coulomb, v_exchange, &
-                                           v_nonlinear, error, context)
+        subroutine density_qn_evaluate_dm_cs_type( &
+            dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target, contiguous :: dm(:, :)
@@ -49,10 +51,10 @@ module otr_arh
                 fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
             integer(ip), intent(out) :: error
             class(*), intent(in), pointer :: context
-        end subroutine arh_evaluate_dm_cs_type
+        end subroutine density_qn_evaluate_dm_cs_type
 
-        subroutine arh_evaluate_dm_os_type(dm, energy, fock, v_coulomb, v_exchange, &
-                                           v_nonlinear, error, context)
+        subroutine density_qn_evaluate_dm_os_type( &
+            dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, context)
             import :: rp, ip
 
             real(rp), intent(in), target :: dm(:, :, :)
@@ -62,16 +64,16 @@ module otr_arh
                 v_nonlinear(:, :, :)
             integer(ip), intent(out) :: error
             class(*), intent(in), pointer :: context
-        end subroutine arh_evaluate_dm_os_type
+        end subroutine density_qn_evaluate_dm_os_type
     end interface
 
-    ! ARH object, holding the approximate Hessian model built from the history of the
-    ! orbitals it points to; the operations on the orbital basis which only ARH needs
-    ! are type-bound procedures of the types extending it for the MO and the OAO basis,
-    ! which point to the quantities of the object holding the orbitals that these
-    ! operations need
-    type, abstract, extends(extension_type) :: arh_type
-        type(arh_settings_type) :: settings
+    ! density QN object, holding the approximate Hessian model built from the history
+    ! of the orbitals it points to; the operations on the orbital basis which only
+    ! density QN needs are type-bound procedures of the types extending it for the MO
+    ! and the OAO basis, which point to the quantities of the object holding the
+    ! orbitals that these operations need
+    type, abstract, extends(extension_type) :: density_qn_type
+        type(density_qn_settings_type) :: settings
         logical :: evaluation_stale = .true., model_stale = .false.
         class(orbital_basis_type), pointer :: orbitals => null()
         real(rp), allocatable :: &
@@ -84,233 +86,239 @@ module otr_arh
             projection_dirs(:, :), coupling_matrix(:, :), &
             rotated_expansion_dirs(:, :), rotated_projection_dirs(:, :)
         real(rp) :: step_norm_ratio = 1.0_rp
-        procedure(arh_evaluate_dm_cs_type), pointer, nopass :: evaluate_dm_cs => null()
-        procedure(arh_evaluate_dm_os_type), pointer, nopass :: evaluate_dm_os => null()
+        procedure(density_qn_evaluate_dm_cs_type), pointer, nopass :: &
+            evaluate_dm_cs => null()
+        procedure(density_qn_evaluate_dm_os_type), pointer, nopass :: &
+            evaluate_dm_os => null()
     contains
-        procedure :: update_orbs => update_orbs_arh
-        procedure :: obj_func => obj_func_arh
-        procedure :: hess_x => hess_x_arh
-        procedure :: precond => precond_arh
-        procedure :: precond_pd => precond_pd_arh
-        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_arh
-        procedure :: inv_hess_x => inv_hess_x_arh
+        procedure :: update_orbs => update_orbs_density_qn
+        procedure :: obj_func => obj_func_density_qn
+        procedure :: hess_x => hess_x_density_qn
+        procedure :: precond => precond_density_qn
+        procedure :: precond_pd => precond_pd_density_qn
+        procedure :: get_extra_trial_vectors => get_extra_trial_vectors_density_qn
+        procedure :: inv_hess_x => inv_hess_x_density_qn
         procedure :: build_hess_model_cs
         procedure :: build_hess_model_os
         procedure :: rebuild_stale_hess_model
         procedure :: get_low_rank_hess_factors
         procedure :: history_window
         procedure :: density_in_history
-        procedure(rotate_trial_arh_type), deferred :: rotate_trial
-        procedure(history_dm_arh_type), deferred :: history_dm
-        procedure(to_history_basis_arh_type), deferred :: to_history_basis
-        procedure(history_columns_arh_type), deferred :: history_columns
-        procedure(channel_rows_arh_type), deferred :: history_channel_rows
-        procedure(channel_rows_arh_type), deferred :: packed_channel_rows
-        procedure(hess_x_static_arh_type), deferred :: hess_x_static
+        procedure(rotate_trial_density_qn_type), deferred :: rotate_trial
+        procedure(history_dm_density_qn_type), deferred :: history_dm
+        procedure(to_history_basis_density_qn_type), deferred :: to_history_basis
+        procedure(history_columns_density_qn_type), deferred :: history_columns
+        procedure(channel_rows_density_qn_type), deferred :: history_channel_rows
+        procedure(channel_rows_density_qn_type), deferred :: packed_channel_rows
+        procedure(hess_x_static_density_qn_type), deferred :: hess_x_static
     end type
 
     abstract interface
-        subroutine rotate_trial_arh_type(self, kappa, rot_dm_ao, rot_dm_hist, error)
-            import :: arh_type, rp, ip
+        subroutine rotate_trial_density_qn_type(self, kappa, rot_dm_ao, rot_dm_hist, &
+                                                error)
+            import :: density_qn_type, rp, ip
 
-            class(arh_type), intent(in) :: self
+            class(density_qn_type), intent(in) :: self
             real(rp), intent(in) :: kappa(:)
             real(rp), intent(out) :: rot_dm_ao(:, :, :), rot_dm_hist(:, :, :)
             integer(ip), intent(out) :: error
-        end subroutine rotate_trial_arh_type
+        end subroutine rotate_trial_density_qn_type
 
-        function history_dm_arh_type(self) result(dm)
-            import :: arh_type, rp
+        function history_dm_density_qn_type(self) result(dm)
+            import :: density_qn_type, rp
 
-            class(arh_type), intent(in) :: self
+            class(density_qn_type), intent(in) :: self
             real(rp), allocatable :: dm(:, :, :)
-        end function history_dm_arh_type
+        end function history_dm_density_qn_type
 
-        function to_history_basis_arh_type(self, matrix_ao) result(matrix)
-            import :: arh_type, rp
+        function to_history_basis_density_qn_type(self, matrix_ao) result(matrix)
+            import :: density_qn_type, rp
 
-            class(arh_type), intent(in) :: self
+            class(density_qn_type), intent(in) :: self
             real(rp), intent(in) :: matrix_ao(:, :, :)
             real(rp), allocatable :: matrix(:, :, :)
-        end function to_history_basis_arh_type
+        end function to_history_basis_density_qn_type
 
-        subroutine history_columns_arh_type(self, diff, cols, packed)
-            import :: arh_type, rp
+        subroutine history_columns_density_qn_type(self, diff, cols, packed)
+            import :: density_qn_type, rp
 
-            class(arh_type), intent(in) :: self
+            class(density_qn_type), intent(in) :: self
             real(rp), intent(in) :: diff(:, :, :, :)
             real(rp), intent(out), allocatable :: cols(:, :), packed(:, :)
-        end subroutine history_columns_arh_type
+        end subroutine history_columns_density_qn_type
 
-        function channel_rows_arh_type(self) result(rows)
-            import :: arh_type, ip
+        function channel_rows_density_qn_type(self) result(rows)
+            import :: density_qn_type, ip
 
-            class(arh_type), intent(in) :: self
+            class(density_qn_type), intent(in) :: self
             integer(ip), allocatable :: rows(:, :)
-        end function channel_rows_arh_type
+        end function channel_rows_density_qn_type
 
-        function hess_x_static_arh_type(self, x) result(hess_x)
-            import :: arh_type, rp
+        function hess_x_static_density_qn_type(self, x) result(hess_x)
+            import :: density_qn_type, rp
 
-            class(arh_type), intent(in) :: self
+            class(density_qn_type), intent(in) :: self
             real(rp), intent(in) :: x(:)
             real(rp), allocatable :: hess_x(:)
-        end function hess_x_static_arh_type
+        end function hess_x_static_density_qn_type
     end interface
 
-    ! ARH object for the MO basis, whose quantities the MO object holds
-    type, extends(arh_type) :: arh_mo_type
+    ! density QN object for the MO basis, whose quantities the MO object holds
+    type, extends(density_qn_type) :: density_qn_mo_type
         real(rp), pointer, contiguous :: mo_coeff(:, :, :) => null()
         real(rp), pointer :: ao_overlap(:, :) => null()
         type(mo_channel_type), pointer :: mo_channels(:) => null()
     contains
-        procedure :: rotate_trial => rotate_trial_arh_mo
-        procedure :: history_dm => history_dm_arh_mo
-        procedure :: to_history_basis => to_history_basis_arh_mo
-        procedure :: history_columns => history_columns_arh_mo
-        procedure :: history_channel_rows => history_channel_rows_arh_mo
-        procedure :: packed_channel_rows => packed_channel_rows_arh_mo
-        procedure :: hess_x_static => hess_x_static_arh_mo
+        procedure :: rotate_trial => rotate_trial_density_qn_mo
+        procedure :: history_dm => history_dm_density_qn_mo
+        procedure :: to_history_basis => to_history_basis_density_qn_mo
+        procedure :: history_columns => history_columns_density_qn_mo
+        procedure :: history_channel_rows => history_channel_rows_density_qn_mo
+        procedure :: packed_channel_rows => packed_channel_rows_density_qn_mo
+        procedure :: hess_x_static => hess_x_static_density_qn_mo
     end type
 
-    ! ARH object for the OAO basis, whose quantities the OAO object holds
-    type, extends(arh_type) :: arh_oao_type
+    ! density QN object for the OAO basis, whose quantities the OAO object holds
+    type, extends(density_qn_type) :: density_qn_oao_type
         real(rp), pointer :: s_inv_sqrt(:, :) => null(), dm_oao(:, :, :) => null(), &
                              fock_oo(:, :, :) => null(), fock_vv(:, :, :) => null()
     contains
-        procedure :: rotate_trial => rotate_trial_arh_oao
-        procedure :: history_dm => history_dm_arh_oao
-        procedure :: to_history_basis => to_history_basis_arh_oao
-        procedure :: history_columns => history_columns_arh_oao
-        procedure :: history_channel_rows => history_channel_rows_arh_oao
-        procedure :: packed_channel_rows => packed_channel_rows_arh_oao
-        procedure :: hess_x_static => hess_x_static_arh_oao
-        procedure :: project => project_arh_oao
+        procedure :: rotate_trial => rotate_trial_density_qn_oao
+        procedure :: history_dm => history_dm_density_qn_oao
+        procedure :: to_history_basis => to_history_basis_density_qn_oao
+        procedure :: history_columns => history_columns_density_qn_oao
+        procedure :: history_channel_rows => history_channel_rows_density_qn_oao
+        procedure :: packed_channel_rows => packed_channel_rows_density_qn_oao
+        procedure :: hess_x_static => hess_x_static_density_qn_oao
+        procedure :: project => project_density_qn_oao
     end type
 
     ! define the constructors for these types
-    interface arh_mo_type
-        module procedure construct_arh_mo
+    interface density_qn_mo_type
+        module procedure construct_density_qn_mo
     end interface
 
-    interface arh_oao_type
-        module procedure construct_arh_oao
+    interface density_qn_oao_type
+        module procedure construct_density_qn_oao
     end interface
 
 contains
 
-    subroutine arh_factory_cs(evaluate_dm_cs, update_orbs_arh_funptr, &
-                              obj_func_arh_funptr, solver_settings, solver_state, &
-                              error, settings)
+    subroutine density_qn_factory_cs(evaluate_dm_cs, update_orbs_density_qn_funptr, &
+                                     obj_func_density_qn_funptr, solver_settings, &
+                                     solver_state, error, settings)
         !
-        ! this function returns the ARH orbital updating function and objective
+        ! this function returns the density QN orbital updating function and objective
         ! function for the closed-shell case and wires the solver settings with a new
-        ! ARH object, which they own, building on the orbital basis object the settings
-        ! were last wired with by an MO or OAO factory, whose orbitals it moves; see
-        ! arh_factory_common
+        ! density QN object, which they own, building on the orbital basis object the
+        ! settings were last wired with by an MO or OAO factory, whose orbitals it
+        ! moves; see density_qn_factory_common
         !
         use otr_common, only: extension_level
 
-        procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        procedure(density_qn_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
+        procedure(update_orbs_type), intent(out), pointer :: &
+            update_orbs_density_qn_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_density_qn_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
         type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in), optional :: settings
+        type(density_qn_settings_type), intent(in), optional :: settings
 
-        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_os
+        procedure(density_qn_evaluate_dm_os_type), pointer :: evaluate_dm_os
 
         ! call common setup with the closed-shell density matrix evaluating function on
         ! the level of the orbital basis object, which is the context of the settings
         evaluate_dm_os => null()
-        call arh_factory_common(extension_level(solver_settings%context), &
-                                evaluate_dm_cs, evaluate_dm_os, &
-                                update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                solver_settings, solver_state, error, settings)
+        call density_qn_factory_common( &
+            extension_level(solver_settings%context), evaluate_dm_cs, evaluate_dm_os, &
+            update_orbs_density_qn_funptr, obj_func_density_qn_funptr, &
+            solver_settings, solver_state, error, settings)
 
-    end subroutine arh_factory_cs
+    end subroutine density_qn_factory_cs
 
-    subroutine arh_factory_os(evaluate_dm_os, update_orbs_arh_funptr, &
-                              obj_func_arh_funptr, solver_settings, solver_state, &
-                              error, settings)
+    subroutine density_qn_factory_os(evaluate_dm_os, update_orbs_density_qn_funptr, &
+                                     obj_func_density_qn_funptr, solver_settings, &
+                                     solver_state, error, settings)
         !
-        ! this function returns the ARH orbital updating function and objective
-        ! function for the open-shell case and wires the solver settings with a new ARH
-        ! object, which they own, building on the orbital basis object the settings
-        ! were last wired with by an MO or OAO factory, whose orbitals it moves; see
-        ! arh_factory_common
+        ! this function returns the density QN orbital updating function and objective
+        ! function for the open-shell case and wires the solver settings with a new
+        ! density QN object, which they own, building on the orbital basis object the
+        ! settings were last wired with by an MO or OAO factory, whose orbitals it
+        ! moves; see density_qn_factory_common
         !
         use otr_common, only: extension_level
 
-        procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        procedure(density_qn_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
+        procedure(update_orbs_type), intent(out), pointer :: &
+            update_orbs_density_qn_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_density_qn_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
         type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in), optional :: settings
+        type(density_qn_settings_type), intent(in), optional :: settings
 
-        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_cs
+        procedure(density_qn_evaluate_dm_cs_type), pointer :: evaluate_dm_cs
 
         ! call common setup with the open-shell density matrix evaluating function on
         ! the level of the orbital basis object, which is the context of the settings
         evaluate_dm_cs => null()
-        call arh_factory_common(extension_level(solver_settings%context), &
-                                evaluate_dm_cs, evaluate_dm_os, &
-                                update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                solver_settings, solver_state, error, settings)
+        call density_qn_factory_common( &
+            extension_level(solver_settings%context), evaluate_dm_cs, evaluate_dm_os, &
+            update_orbs_density_qn_funptr, obj_func_density_qn_funptr, &
+            solver_settings, solver_state, error, settings)
 
-    end subroutine arh_factory_os
+    end subroutine density_qn_factory_os
 
-    subroutine arh_factory_common(level, evaluate_dm_cs, evaluate_dm_os, &
-                                  update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                  solver_settings, solver_state, error, settings)
+    subroutine density_qn_factory_common( &
+        level, evaluate_dm_cs, evaluate_dm_os, update_orbs_density_qn_funptr, &
+        obj_func_density_qn_funptr, solver_settings, solver_state, error, settings)
         !
-        ! this subroutine sets up a new ARH object on the orbital basis object of the
-        ! given level, with the density matrix evaluating function of the shell of its
-        ! orbitals, wires the solver settings with it and returns its orbital updating
-        ! function and objective function; the object moves the orbitals of the orbital
-        ! basis object, whose positive-definite preconditioner and extra trial vectors
-        ! and, in the OAO basis, whose projection it uses, while the projection in the
-        ! MO basis is left to the caller, since the parameters are non-redundant, and
-        ! reads the state of the solver from the record the host also passes to the
-        ! solver; the settings are also asked to rebuild the Hessian information of the
-        ! subsystem solver after rejected steps and told whether the approximate
-        ! Hessian is symmetric
+        ! this subroutine sets up a new density QN object on the orbital basis object
+        ! of the given level, with the density matrix evaluating function of the shell
+        ! of its orbitals, wires the solver settings with it and returns its orbital
+        ! updating function and objective function; the object moves the orbitals of
+        ! the orbital basis object, whose positive-definite preconditioner and extra
+        ! trial vectors and, in the OAO basis, whose projection it uses, while the
+        ! projection in the MO basis is left to the caller, since the parameters are
+        ! non-redundant, and reads the state of the solver from the record the host
+        ! also passes to the solver; the settings are also asked to rebuild the Hessian
+        ! information of the subsystem solver after rejected steps and told whether the
+        ! approximate Hessian is symmetric
         !
         use opentrustregion, only: verbosity_error
         use otr_common, only: extension_level_type, update_orbs_callback, &
                               obj_func_callback
 
         type(extension_level_type), intent(in), pointer :: level
-        procedure(arh_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
-        procedure(arh_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_arh_funptr
+        procedure(density_qn_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_cs
+        procedure(density_qn_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_os
+        procedure(update_orbs_type), intent(out), pointer :: &
+            update_orbs_density_qn_funptr
+        procedure(obj_func_type), intent(out), pointer :: obj_func_density_qn_funptr
         type(extension_solver_settings_type), intent(inout), target :: solver_settings
         type(solver_state_type), intent(inout), target :: solver_state
         integer(ip), intent(out) :: error
-        type(arh_settings_type), intent(in), optional :: settings
+        type(density_qn_settings_type), intent(in), optional :: settings
 
-        type(arh_settings_type) :: local_settings
+        type(density_qn_settings_type) :: local_settings
         class(extension_type), allocatable, target :: object
 
         ! initialize error flag and the returned functions
         error = 0
-        update_orbs_arh_funptr => null()
-        obj_func_arh_funptr => null()
+        update_orbs_density_qn_funptr => null()
+        obj_func_density_qn_funptr => null()
 
         ! work on a copy of the given settings or, without any, of the default settings
         if (present(settings)) then
             local_settings = settings
         else
-            local_settings = default_arh_settings
+            local_settings = default_density_qn_settings
         end if
 
-        ! perform sanity check, which also converts the ARH type to lowercase
-        call arh_sanity_check(local_settings, error)
-        call add_error_origin(error, error_arh, local_settings)
+        ! perform sanity check, which also converts the QN method to lowercase
+        call density_qn_sanity_check(local_settings, error)
+        call add_error_origin(error, error_density_qn, local_settings)
         if (error /= 0) return
 
         ! set up the object in the basis of the orbital basis object of the level,
@@ -318,16 +326,16 @@ contains
         if (associated(level)) then
             select type (orbitals => level%extension)
             type is (mo_type)
-                allocate(object, source=arh_mo_type(orbitals))
+                allocate(object, source=density_qn_mo_type(orbitals))
             type is (oao_type)
-                allocate(object, source=arh_oao_type(orbitals))
+                allocate(object, source=density_qn_oao_type(orbitals))
             end select
         end if
         if (.not. allocated(object)) then
             call local_settings%log("The solver settings have to be those an MO or "// &
                                     "OAO factory wired last.", verbosity_error, .true.)
             error = 1
-            call add_error_origin(error, error_arh, local_settings)
+            call add_error_origin(error, error_density_qn, local_settings)
             return
         end if
 
@@ -335,17 +343,17 @@ contains
         ! its own settings, so the density matrix evaluating function of that shell has
         ! to be given
         select type (object)
-        class is (arh_type)
+        class is (density_qn_type)
             if (.not. merge(associated(evaluate_dm_cs), associated(evaluate_dm_os), &
                             object%orbitals%n_particle == 1)) then
                 call local_settings%log("The density matrix evaluating function of "// &
                                         "the shell of the orbitals has to be given.", &
                                         verbosity_error, .true.)
                 error = 1
-                call add_error_origin(error, error_arh, local_settings)
+                call add_error_origin(error, error_density_qn, local_settings)
                 return
             end if
-            object%error_origin = error_arh
+            object%error_origin = error_density_qn
             object%settings = local_settings
             object%evaluate_dm_cs => evaluate_dm_cs
             object%evaluate_dm_os => evaluate_dm_os
@@ -355,35 +363,35 @@ contains
         ! and saves the host's callback functions and host contexts, let the settings
         ! own it and adjust them to the approximate Hessian
         call solver_settings%wire(object, solver_state, local_settings, error)
-        call add_error_origin(error, error_arh, local_settings)
+        call add_error_origin(error, error_density_qn, local_settings)
         if (error /= 0) return
-        call arh_set_solver_settings(solver_settings%solver_settings_type, &
-                                     local_settings)
+        call density_qn_set_solver_settings(solver_settings%solver_settings_type, &
+                                            local_settings)
 
         ! get the orbital updating function and the objective function of the object
-        update_orbs_arh_funptr => update_orbs_callback
-        obj_func_arh_funptr => obj_func_callback
+        update_orbs_density_qn_funptr => update_orbs_callback
+        obj_func_density_qn_funptr => obj_func_callback
 
-    end subroutine arh_factory_common
+    end subroutine density_qn_factory_common
 
-    subroutine arh_sanity_check(settings, error)
+    subroutine density_qn_sanity_check(settings, error)
         !
-        ! this subroutine performs a sanity check for ARH input parameters
+        ! this subroutine performs a sanity check for density QN input parameters
         !
         use opentrustregion, only: verbosity_error, string_to_lowercase
 
-        type(arh_settings_type), intent(inout) :: settings
+        type(density_qn_settings_type), intent(inout) :: settings
         integer(ip), intent(out) :: error
 
         ! initialize error flag
         error = 0
 
         ! convert strings to lowercase
-        settings%arh_type = string_to_lowercase(settings%arh_type)
+        settings%qn_method = string_to_lowercase(settings%qn_method)
 
         ! check for character options
-        if (.not. any(settings%arh_type == arh_types)) then
-            call settings%log("ARH type option unknown. Possible values are "// &
+        if (.not. any(settings%qn_method == qn_methods)) then
+            call settings%log("QN method option unknown. Possible values are "// &
                               """arh"" (standard ARH), ""symm_arh"" (symmetrized "// &
                               "ARH), ""ms_sp"" (subspace-projected multisecant "// &
                               "method), ""ms_psb"" (multisecant PSB), and "// &
@@ -393,38 +401,38 @@ contains
             return
         end if
 
-    end subroutine arh_sanity_check
+    end subroutine density_qn_sanity_check
 
-    subroutine arh_set_solver_settings(solver_settings, settings)
+    subroutine density_qn_set_solver_settings(solver_settings, settings)
         !
         ! this subroutine asks the solver to rebuild the Hessian information of the
         ! subsystem solver after rejected steps, since the objective function adds the
         ! rejected point to the history, which changes the approximate Hessian, raises
         ! the micro iteration limit, since the linear transformations of the
         ! approximate Hessian are cheap, and tells it whether the approximate Hessian
-        ! of the ARH type of the given ARH settings is symmetric
+        ! of the QN method of the given density QN settings is symmetric
         !
         type(solver_settings_type), intent(inout) :: solver_settings
-        type(arh_settings_type), intent(in) :: settings
+        type(density_qn_settings_type), intent(in) :: settings
 
         ! rebuild the Hessian information after rejected steps
         solver_settings%refresh_hess = .true.
 
         ! converge the subsystem solver with the cheap approximate Hessian
-        solver_settings%n_micro = arh_n_micro
+        solver_settings%n_micro = density_qn_n_micro
 
-        ! only the standard ARH type breaks the symmetry of the approximate Hessian
-        solver_settings%hess_symm = settings%arh_type /= "arh"
+        ! only the standard ARH method breaks the symmetry of the approximate Hessian
+        solver_settings%hess_symm = settings%qn_method /= "arh"
 
-    end subroutine arh_set_solver_settings
+    end subroutine density_qn_set_solver_settings
 
-    function obj_func_arh(self, kappa, error, context) result(energy)
+    function obj_func_density_qn(self, kappa, error, context) result(energy)
         !
         ! this function defines the energy evaluation, which also adds the evaluated
         ! point with its Coulomb, exact-exchange and non-linear potentials to the
         ! history, unless it is already there
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
@@ -477,17 +485,17 @@ contains
             end if
         end if
 
-    end function obj_func_arh
+    end function obj_func_density_qn
 
-    subroutine update_orbs_arh(self, kappa, func, grad, h_diag, hess_x_funptr, error, &
-                               context)
+    subroutine update_orbs_density_qn(self, kappa, func, grad, h_diag, hess_x_funptr, &
+                                      error, context)
         !
         ! this function defines the energy, gradient, and Hessian diagonal evaluation
         ! and the Hessian linear transformation on the basis of augmented Roothaan-Hall
         !
         use otr_common, only: hess_x_callback
 
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         real(rp), intent(out) :: func
         real(rp), intent(out), target :: grad(:), h_diag(:)
@@ -595,14 +603,14 @@ contains
         h_diag = self%orbitals%h_diag
         hess_x_funptr => hess_x_callback
 
-    end subroutine update_orbs_arh
+    end subroutine update_orbs_density_qn
 
     subroutine build_hess_model_cs(self, error)
         !
         ! this subroutine assembles the closed-shell approximate Hessian model of the
         ! object from its history relative to the current point
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc, n_acc_nonlinear
@@ -647,7 +655,7 @@ contains
         call self%history_columns(dm_diff, dm_cols, dm_packed)
         call self%history_columns(v_nonlinear_diff, v_nonlinear_cols, &
                                   v_nonlinear_packed)
-        if (self%settings%arh_type == "ms_sr1") then
+        if (self%settings%qn_method == "ms_sr1") then
             call self%history_columns(v_coulomb_diff, v_coulomb_cols, v_coulomb_packed)
             call self%history_columns(v_exchange_diff, v_exchange_cols, &
                                       v_exchange_packed)
@@ -672,7 +680,7 @@ contains
                                n_acc_nonlinear, keep_nonlinear)
 
         ! MS-SR1
-        if (self%settings%arh_type == "ms_sr1") then
+        if (self%settings%qn_method == "ms_sr1") then
             ! linear part: the difference of a Coulomb and an exact-exchange
             ! multisecant term, each exact since Coulomb and exact exchange are linear
             ! in the density matrix, and each bounded by its kernel, which is positive
@@ -705,7 +713,7 @@ contains
             self%dm_dirs = rebase_dirs(dm_packed, map, chol)
             self%dm_dirs_nonlinear = &
                 rebase_dirs(dm_packed, map_nonlinear, chol_nonlinear)
-            if (self%settings%arh_type /= "ms_sp") then
+            if (self%settings%qn_method /= "ms_sp") then
                 self%linear_potential_dirs = rebase_dirs(v_linear_packed, map, chol)
                 self%nonlinear_potential_dirs = &
                     rebase_dirs(v_nonlinear_packed, map_nonlinear, chol_nonlinear)
@@ -713,8 +721,8 @@ contains
 
             ! construct A = S^T Y for the linear and non-linear system,
             ! congruence-transformed into its own orthonormalized S-basis
-            if (self%settings%arh_type == "ms_sp" .or. &
-                self%settings%arh_type == "ms_psb") then
+            if (self%settings%qn_method == "ms_sp" .or. &
+                self%settings%qn_method == "ms_psb") then
                 self%a_sym = build_a_transformed(dm_cols, v_linear_cols, map, chol)
                 self%a_sym_nonlinear = build_a_transformed( &
                     dm_cols, v_nonlinear_cols, map_nonlinear, chol_nonlinear)
@@ -734,7 +742,7 @@ contains
         ! this subroutine assembles the open-shell approximate Hessian model of the
         ! object from its history relative to the current point
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_ao, n_particle, i, n_list, n_acc1, n_acc2, n_acc_nl, &
@@ -800,7 +808,7 @@ contains
         ! its own Coulomb minus exact-exchange potential, and the opposite-spin
         ! potential, the Coulomb potential of the other channel; the history basis is
         ! shared by both channels, so that a potential can be moved between them
-        if (self%settings%arh_type == "ms_sr1") then
+        if (self%settings%qn_method == "ms_sr1") then
             v_coulomb_alpha_diff = spread(v_coulomb_diff(:, :, 1, :), 3, n_particle)
             v_coulomb_beta_diff = spread(v_coulomb_diff(:, :, 2, :), 3, n_particle)
             call self%history_columns(v_coulomb_alpha_diff, v_coulomb_alpha_cols, &
@@ -834,14 +842,14 @@ contains
         ! resulting orthonormalized basis via a single triangular solve; the two
         ! channels never mix in this factorization (the metric itself is block-diagonal
         ! across channels), so they are factorized independently and then combined into
-        ! one block-diagonal (chol, map) pair wherever the coupled types or the linear
-        ! multisecant system need to act on both channels together
+        ! one block-diagonal (chol, map) pair wherever the coupled methods or the
+        ! linear multisecant system need to act on both channels together
         call factorize_history(dm_cols1, chol1, map1, n_acc1)
         call factorize_history(dm_cols2, chol2, map2, n_acc2)
         call combine_channels(chol1, map1, chol2, map2, n_list, chol_comb, map_comb)
 
         ! MS-SR1
-        if (self%settings%arh_type == "ms_sr1") then
+        if (self%settings%qn_method == "ms_sr1") then
             ! linear part: spin-separated, which is exact since Coulomb and exact
             ! exchange are linear in the density matrix, and the difference of a
             ! Coulomb and an exact-exchange multisecant term, each bounded by its
@@ -897,7 +905,7 @@ contains
                                           self%dm_dirs)
             call cache_channel_split_dirs(dm_packed, packed_rows, map_comb_nl, &
                                           chol_comb_nl, self%dm_dirs_nonlinear)
-            if (self%settings%arh_type /= "ms_sp") then
+            if (self%settings%qn_method /= "ms_sp") then
                 call cache_combined_channel_dirs( &
                     v_same_spin_packed, v_opposite_spin_packed, packed_rows, map_comb, &
                     chol_comb, self%linear_potential_dirs)
@@ -908,8 +916,8 @@ contains
 
             ! construct A = S^T Y for the linear and non-linear system,
             ! congruence-transformed into its own combined orthonormalized S-basis
-            if (self%settings%arh_type == "ms_sp" .or. &
-                self%settings%arh_type == "ms_psb") then
+            if (self%settings%qn_method == "ms_sp" .or. &
+                self%settings%qn_method == "ms_psb") then
                 self%a_sym = build_a_block_linear_os(dm_cols, v_same_spin_cols, &
                                                      v_opposite_spin_cols, &
                                                      history_rows, map_comb, chol_comb)
@@ -933,7 +941,7 @@ contains
         ! assembled, so that the Hessian linear transformation and the preconditioner
         ! always use the whole history
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         ! initialize error flag
@@ -951,12 +959,12 @@ contains
 
     end subroutine rebuild_stale_hess_model
 
-    subroutine hess_x_arh(self, x, hess_x, error, context)
+    subroutine hess_x_density_qn(self, x, hess_x, error, context)
         !
         ! this function defines the Hessian linear transformation on the basis of
         ! augmented Roothaan-Hall and related methods
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
@@ -994,9 +1002,9 @@ contains
             deallocate(projected_x, coupled_x)
         end if
 
-    end subroutine hess_x_arh
+    end subroutine hess_x_density_qn
 
-    subroutine inv_hess_x_arh(self, x, inv_hess_x, error, level_shift)
+    subroutine inv_hess_x_density_qn(self, x, inv_hess_x, error, level_shift)
         !
         ! this subroutine applies the exact inverse of the approximate Hessian to a
         ! vector, optionally level-shifted as (G - level_shift*I)^-1; G is the static
@@ -1011,7 +1019,7 @@ contains
         use opentrustregion, only: verbosity_error
         use otr_common, only: level_shifted_divisors
 
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: inv_hess_x(:)
         integer(ip), intent(out) :: error
@@ -1121,13 +1129,14 @@ contains
         correction = correction / divisors
         inv_hess_x = self%orbitals%rotate_from_hess_eigenbasis(scaled_x - correction)
 
-    end subroutine inv_hess_x_arh
+    end subroutine inv_hess_x_density_qn
 
-    subroutine precond_arh(self, residual, mu, precond_residual, error, context)
+    subroutine precond_density_qn(self, residual, mu, precond_residual, error, context)
         !
-        ! this subroutine defines the preconditioner of the ARH approximate Hessian
+        ! this subroutine defines the preconditioner of the density QN approximate
+        ! Hessian
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
         real(rp), intent(out), target :: precond_residual(:)
@@ -1136,14 +1145,14 @@ contains
 
         call self%inv_hess_x(residual, precond_residual, error, mu)
 
-    end subroutine precond_arh
+    end subroutine precond_density_qn
 
-    subroutine precond_pd_arh(self, residual, precond_residual, error, context)
+    subroutine precond_pd_density_qn(self, residual, precond_residual, error, context)
         !
         ! this subroutine defines the positive-definite preconditioner based on the
         ! exact eigendecomposition of the static part of the Hessian of the orbitals
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
@@ -1151,95 +1160,95 @@ contains
 
         call self%orbitals%precond_pd(residual, precond_residual, error, context)
 
-    end subroutine precond_pd_arh
+    end subroutine precond_pd_density_qn
 
-    subroutine get_extra_trial_vectors_arh(self, trial_vectors, error, context)
+    subroutine get_extra_trial_vectors_density_qn(self, trial_vectors, error, context)
         !
         ! this subroutine returns the extra trial vectors of the orbitals for the
         ! solver's initial trial space
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
         real(rp), intent(out), target :: trial_vectors(:, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
         call self%orbitals%get_extra_trial_vectors(trial_vectors, error, context)
 
-    end subroutine get_extra_trial_vectors_arh
+    end subroutine get_extra_trial_vectors_density_qn
 
-    subroutine project_arh_oao(self, vector, error, context)
+    subroutine project_density_qn_oao(self, vector, error, context)
         !
         ! this subroutine applies the projection of the orbitals in the OAO basis onto
         ! their non-redundant rotations
         !
-        class(arh_oao_type), intent(inout) :: self
+        class(density_qn_oao_type), intent(inout) :: self
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
         call self%orbitals%project(vector, error, context)
 
-    end subroutine project_arh_oao
+    end subroutine project_density_qn_oao
 
-    function construct_arh_mo(mo) result(arh)
+    function construct_density_qn_mo(mo) result(density_qn)
         !
-        ! this function returns the ARH object for the MO basis pointing to the given
-        ! MO object and to those of its quantities which are allocated
+        ! this function returns the density QN object for the MO basis pointing to the
+        ! given MO object and to those of its quantities which are allocated
         !
         use otr_common, only: provided_roles_type
 
         type(mo_type), intent(in), target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
 
         ! point to the orbitals, whose parameters are those of the object, which
         ! performs every role but the projection itself
-        arh%orbitals => mo
-        arh%n_param = mo%n_param
-        arh%provides = provided_roles_type( &
+        density_qn%orbitals => mo
+        density_qn%n_param = mo%n_param
+        density_qn%provides = provided_roles_type( &
             update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
             precond_pd=.true., get_extra_trial_vectors=.true.)
 
         ! associate matrices and particle channels
-        if (associated(mo%mo_coeff)) arh%mo_coeff => mo%mo_coeff
-        if (allocated(mo%ao_overlap)) arh%ao_overlap => mo%ao_overlap
-        if (allocated(mo%mo_channels)) arh%mo_channels => mo%mo_channels
+        if (associated(mo%mo_coeff)) density_qn%mo_coeff => mo%mo_coeff
+        if (allocated(mo%ao_overlap)) density_qn%ao_overlap => mo%ao_overlap
+        if (allocated(mo%mo_channels)) density_qn%mo_channels => mo%mo_channels
 
-    end function construct_arh_mo
+    end function construct_density_qn_mo
 
-    function construct_arh_oao(oao) result(arh)
+    function construct_density_qn_oao(oao) result(density_qn)
         !
-        ! this function returns the ARH object for the OAO basis pointing to the given
-        ! OAO object and to those of its quantities which are allocated
+        ! this function returns the density QN object for the OAO basis pointing to the
+        ! given OAO object and to those of its quantities which are allocated
         !
         use otr_common, only: provided_roles_type
 
         type(oao_type), intent(in), target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
 
         ! point to the orbitals, whose parameters are those of the object, which
         ! performs every role itself
-        arh%orbitals => oao
-        arh%n_param = oao%n_param
-        arh%provides = provided_roles_type( &
+        density_qn%orbitals => oao
+        density_qn%n_param = oao%n_param
+        density_qn%provides = provided_roles_type( &
             update_orbs=.true., obj_func=.true., hess_x=.true., precond=.true., &
             precond_pd=.true., project=.true., get_extra_trial_vectors=.true.)
 
         ! associate matrices
-        if (allocated(oao%s_inv_sqrt)) arh%s_inv_sqrt => oao%s_inv_sqrt
-        if (allocated(oao%dm_oao)) arh%dm_oao => oao%dm_oao
-        if (allocated(oao%fock_oo)) arh%fock_oo => oao%fock_oo
-        if (allocated(oao%fock_vv)) arh%fock_vv => oao%fock_vv
+        if (allocated(oao%s_inv_sqrt)) density_qn%s_inv_sqrt => oao%s_inv_sqrt
+        if (allocated(oao%dm_oao)) density_qn%dm_oao => oao%dm_oao
+        if (allocated(oao%fock_oo)) density_qn%fock_oo => oao%fock_oo
+        if (allocated(oao%fock_vv)) density_qn%fock_vv => oao%fock_vv
 
-    end function construct_arh_oao
+    end function construct_density_qn_oao
 
-    subroutine rotate_trial_arh_mo(self, kappa, rot_dm_ao, rot_dm_hist, error)
+    subroutine rotate_trial_density_qn_mo(self, kappa, rot_dm_ao, rot_dm_hist, error)
         !
         ! this subroutine returns the density matrix rotated by kappa in the AO basis
         ! and in the history basis (S D S) without moving the current orbitals
         !
         use otr_mo, only: rotate_mo_coeff, mo_transform
 
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         real(rp), intent(in) :: kappa(:)
         real(rp), intent(out) :: rot_dm_ao(:, :, :), rot_dm_hist(:, :, :)
         integer(ip), intent(out) :: error
@@ -1259,16 +1268,16 @@ contains
             rot_dm_hist(:, :, i) = mo_transform(self%ao_overlap, rot_dm_ao(:, :, i))
         end do
 
-    end subroutine rotate_trial_arh_mo
+    end subroutine rotate_trial_density_qn_mo
 
-    subroutine rotate_trial_arh_oao(self, kappa, rot_dm_ao, rot_dm_hist, error)
+    subroutine rotate_trial_density_qn_oao(self, kappa, rot_dm_ao, rot_dm_hist, error)
         !
         ! this subroutine returns the density matrix rotated by kappa in the AO basis
         ! and in the history basis (the OAO basis) without moving the current orbitals
         !
         use otr_oao, only: rotate_dm_ao
 
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         real(rp), intent(in) :: kappa(:)
         real(rp), intent(out) :: rot_dm_ao(:, :, :), rot_dm_hist(:, :, :)
         integer(ip), intent(out) :: error
@@ -1278,9 +1287,9 @@ contains
                           self%settings, error, rot_dm_hist)
         call add_error_origin(error, self%error_origin, self%settings)
 
-    end subroutine rotate_trial_arh_oao
+    end subroutine rotate_trial_density_qn_oao
 
-    function history_dm_arh_mo(self) result(dm)
+    function history_dm_density_qn_mo(self) result(dm)
         !
         ! this function returns the current density matrix in the history basis (the
         ! density matrix in the AO basis multiplied by the AO overlap matrix from both
@@ -1289,7 +1298,7 @@ contains
         !
         use otr_mo, only: mo_transform
 
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         real(rp), allocatable :: dm(:, :, :)
 
         integer(ip) :: i
@@ -1300,50 +1309,50 @@ contains
             dm(:, :, i) = mo_transform(self%ao_overlap, self%orbitals%dm_ao(:, :, i))
         end do
 
-    end function history_dm_arh_mo
+    end function history_dm_density_qn_mo
 
-    function history_dm_arh_oao(self) result(dm)
+    function history_dm_density_qn_oao(self) result(dm)
         !
         ! this function returns the current density matrix in the history basis (the
         ! OAO basis)
         !
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         real(rp), allocatable :: dm(:, :, :)
 
         dm = self%dm_oao
 
-    end function history_dm_arh_oao
+    end function history_dm_density_qn_oao
 
-    function to_history_basis_arh_mo(self, matrix_ao) result(matrix)
+    function to_history_basis_density_qn_mo(self, matrix_ao) result(matrix)
         !
         ! this function transforms a potential given in the AO basis to the history
         ! basis, which for the MO basis, since it changes with every orbital update, is
         ! the AO basis itself
         !
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         real(rp), intent(in) :: matrix_ao(:, :, :)
         real(rp), allocatable :: matrix(:, :, :)
 
         matrix = matrix_ao
 
-    end function to_history_basis_arh_mo
+    end function to_history_basis_density_qn_mo
 
-    function to_history_basis_arh_oao(self, matrix_ao) result(matrix)
+    function to_history_basis_density_qn_oao(self, matrix_ao) result(matrix)
         !
         ! this function transforms a potential given in the AO basis to the history
         ! basis (the OAO basis)
         !
         use otr_oao, only: symmetric_transformation
 
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         real(rp), intent(in) :: matrix_ao(:, :, :)
         real(rp), allocatable :: matrix(:, :, :)
 
         matrix = symmetric_transformation(self%s_inv_sqrt, matrix_ao)
 
-    end function to_history_basis_arh_oao
+    end function to_history_basis_density_qn_oao
 
-    subroutine history_columns_arh_mo(self, diff, cols, packed)
+    subroutine history_columns_density_qn_mo(self, diff, cols, packed)
         !
         ! this subroutine expresses a history of difference matrices in the AO basis,
         ! with density matrices stored as S D S, as history columns (the full
@@ -1353,7 +1362,7 @@ contains
         !
         use otr_mo, only: mo_transform, pack_ov
 
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         real(rp), intent(in) :: diff(:, :, :, :)
         real(rp), intent(out), allocatable :: cols(:, :), packed(:, :)
 
@@ -1385,9 +1394,9 @@ contains
             end do
         end do
 
-    end subroutine history_columns_arh_mo
+    end subroutine history_columns_density_qn_mo
 
-    subroutine history_columns_arh_oao(self, diff, cols, packed)
+    subroutine history_columns_density_qn_oao(self, diff, cols, packed)
         !
         ! this subroutine expresses a history of difference matrices in the OAO basis
         ! as history columns (the flattened difference matrices whose inner products
@@ -1396,7 +1405,7 @@ contains
         !
         use otr_oao, only: project_asymm, pack_asymm
 
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         real(rp), intent(in) :: diff(:, :, :, :)
         real(rp), intent(out), allocatable :: cols(:, :), packed(:, :)
 
@@ -1417,29 +1426,29 @@ contains
                                       self%orbitals%n_param)
         end do
 
-    end subroutine history_columns_arh_oao
+    end subroutine history_columns_density_qn_oao
 
-    function history_channel_rows_arh_mo(self) result(rows)
+    function history_channel_rows_density_qn_mo(self) result(rows)
         !
         ! this function returns the rows every particle channel occupies in a history
         ! column, which holds the full difference matrix of every channel in the MO
         ! basis
         !
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         integer(ip), allocatable :: rows(:, :)
 
         rows = channel_rows(spread(size(self%mo_coeff, 2, kind=ip)**2, 1, &
                                    self%orbitals%n_particle))
 
-    end function history_channel_rows_arh_mo
+    end function history_channel_rows_density_qn_mo
 
-    function history_channel_rows_arh_oao(self) result(rows)
+    function history_channel_rows_density_qn_oao(self) result(rows)
         !
         ! this function returns the rows every particle channel occupies in a history
         ! column, which holds the full difference matrix of every channel in the OAO
         ! basis
         !
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         integer(ip), allocatable :: rows(:, :)
 
         integer(ip) :: n_ao, n_particle
@@ -1451,9 +1460,9 @@ contains
         ! every particle channel holds the same number of rows
         rows = channel_rows(spread(n_ao**2, 1, n_particle))
 
-    end function history_channel_rows_arh_oao
+    end function history_channel_rows_density_qn_oao
 
-    function packed_channel_rows_arh_mo(self) result(rows)
+    function packed_channel_rows_density_qn_mo(self) result(rows)
         !
         ! this function returns the rows every particle channel occupies in a packed
         ! column, which holds the occupied-virtual rotations of every channel in the MO
@@ -1461,20 +1470,20 @@ contains
         !
         use otr_mo, only: mo_param_rows
 
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         integer(ip), allocatable :: rows(:, :)
 
         rows = mo_param_rows(self%mo_channels)
 
-    end function packed_channel_rows_arh_mo
+    end function packed_channel_rows_density_qn_mo
 
-    function packed_channel_rows_arh_oao(self) result(rows)
+    function packed_channel_rows_density_qn_oao(self) result(rows)
         !
         ! this function returns the rows every particle channel occupies in a packed
         ! column, which holds the antisymmetric parameters of every channel in the OAO
         ! basis
         !
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         integer(ip), allocatable :: rows(:, :)
 
         integer(ip) :: n_ao, n_particle
@@ -1486,9 +1495,9 @@ contains
         ! every particle channel holds the same number of rows
         rows = channel_rows(spread(n_ao * (n_ao - 1) / 2, 1, n_particle))
 
-    end function packed_channel_rows_arh_oao
+    end function packed_channel_rows_density_qn_oao
 
-    function hess_x_static_arh_mo(self, x) result(hess_x)
+    function hess_x_static_density_qn_mo(self, x) result(hess_x)
         !
         ! this function applies the static part of the Hessian in the MO basis (which
         ! is built from the occupied-occupied and virtual-virtual blocks of the Fock
@@ -1496,15 +1505,15 @@ contains
         !
         use otr_mo, only: hess_x_static_mo
 
-        class(arh_mo_type), intent(in) :: self
+        class(density_qn_mo_type), intent(in) :: self
         real(rp), intent(in) :: x(:)
         real(rp), allocatable :: hess_x(:)
 
         hess_x = hess_x_static_mo(x, self%mo_channels)
 
-    end function hess_x_static_arh_mo
+    end function hess_x_static_density_qn_mo
 
-    function hess_x_static_arh_oao(self, x) result(hess_x)
+    function hess_x_static_density_qn_oao(self, x) result(hess_x)
         !
         ! this function applies the static part of the Hessian in the OAO basis (which
         ! is built from the occupied-occupied and virtual-virtual blocks of the Fock
@@ -1512,7 +1521,7 @@ contains
         !
         use otr_oao, only: unpack_asymm, hess_x_static_oao, project_asymm, pack_asymm
 
-        class(arh_oao_type), intent(in) :: self
+        class(density_qn_oao_type), intent(in) :: self
         real(rp), intent(in) :: x(:)
         real(rp), allocatable :: hess_x(:)
 
@@ -1540,7 +1549,7 @@ contains
         end if
         deallocate(x_full, hess_x_full)
 
-    end function hess_x_static_arh_oao
+    end function hess_x_static_density_qn_oao
 
     subroutine cache_channel_split_dirs(packed, rows, map, chol, dirs)
         !
@@ -1629,7 +1638,7 @@ contains
         ! the factor of 2 above, times a factor of 4 (or 2) for the closed- (or
         ! open-)shell scaling of the Hessian linear transformation
         !
-        class(arh_type), intent(inout) :: self
+        class(density_qn_type), intent(inout) :: self
 
         integer(ip) :: n_linear, n_nonlinear, n_total, i
         real(rp) :: shell_scale
@@ -1645,7 +1654,7 @@ contains
         ! set scaling factor for closed- and open-shell systems
         shell_scale = merge(1.0_rp, 0.5_rp, self%orbitals%n_particle == 1)
 
-        select case (self%settings%arh_type)
+        select case (self%settings%qn_method)
         ! multisecant SR1: the linear and non-linear parts of the potential enter as
         ! independent blocks, each contracted against its own inverse rather than
         ! against a single inverse of the summed potential
@@ -1752,7 +1761,7 @@ contains
 
         ! standard ARH: the response expands in the potential difference history while
         ! contracting against the density difference history, so unlike every other
-        ! type the two sets of directions differ
+        ! method the two sets of directions differ
         case ("arh")
             n_linear = size(self%dm_dirs, 2)
             n_nonlinear = size(self%dm_dirs_nonlinear, 2)
@@ -1773,8 +1782,8 @@ contains
             end do
         end select
 
-        ! every type except standard ARH expands in and contracts against the same set
-        ! of directions
+        ! every method except standard ARH expands in and contracts against the same
+        ! set of directions
         if (.not. allocated(self%projection_dirs)) &
             self%projection_dirs = self%expansion_dirs
 
@@ -1960,7 +1969,7 @@ contains
         ! norm of the step; without a state or before the solver set a trust radius,
         ! the whole history is used
         !
-        class(arh_type), intent(in) :: self
+        class(density_qn_type), intent(in) :: self
         real(rp) :: max_step
 
         max_step = huge(1.0_rp)
@@ -2185,7 +2194,7 @@ contains
         integer(ip), intent(in) :: map(:)
         real(rp), intent(in) :: chol(:, :)
         real(rp), intent(out), allocatable :: a_inv(:, :)
-        type(arh_settings_type), intent(in) :: settings
+        type(density_qn_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_dm, n_accepted
@@ -2251,7 +2260,7 @@ contains
                                 v_exchange_packed(:, :), chol(:, :)
         integer(ip), intent(in) :: map(:)
         real(rp), intent(out), allocatable :: a_inv(:, :), dirs(:, :)
-        type(arh_settings_type), intent(in) :: settings
+        type(density_qn_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_dm
@@ -2292,7 +2301,7 @@ contains
             v_coulomb_beta_packed(:, :), v_exchange_packed(:, :), chol(:, :)
         integer(ip), intent(in) :: rows(:, :), packed_rows(:, :), map(:)
         real(rp), intent(out), allocatable :: a_inv(:, :), dirs(:, :)
-        type(arh_settings_type), intent(in) :: settings
+        type(density_qn_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_dm, n1, n2, i, k
@@ -2367,7 +2376,7 @@ contains
         logical, intent(in) :: no_exchange
         integer(ip), intent(in) :: map(:)
         real(rp), intent(out), allocatable :: a_inv(:, :), dirs(:, :)
-        type(arh_settings_type), intent(in) :: settings
+        type(density_qn_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_accepted, n_param, i
@@ -2522,7 +2531,7 @@ contains
         !
         use opentrustregion, only: numerical_zero
 
-        class(arh_type), intent(in) :: self
+        class(density_qn_type), intent(in) :: self
         real(rp), intent(in) :: dm(:, :, :)
         logical :: in_history
 
@@ -2567,4 +2576,4 @@ contains
 
     end subroutine prepend
 
-end module otr_arh
+end module otr_density_qn

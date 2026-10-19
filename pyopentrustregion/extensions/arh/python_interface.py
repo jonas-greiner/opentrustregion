@@ -41,7 +41,7 @@ from pyopentrustregion.extensions.common.python_interface import (
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional, Dict
 
-    ARHEvaluateDMType = Callable[
+    DensityQNEvaluateDMType = Callable[
         [
             np.ndarray,
             Optional[np.ndarray],
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-arh_evaluate_dm_interface_type = callback_type(
+density_qn_evaluate_dm_interface_type = callback_type(
     c_int,
     POINTER(c_real),
     POINTER(c_real),
@@ -68,25 +68,25 @@ arh_evaluate_dm_interface_type = callback_type(
 
 
 # define classes corresponding to C structs for settings
-class ARHSettingsC(Structure):
+class DensityQNSettingsC(Structure):
     _fields_ = [
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("verbose", c_int),
-        ("arh_type", c_char * (kw_len + 1)),
+        ("qn_method", c_char * (kw_len + 1)),
         ("context", c_void_p),
     ]
 
 
-class ARHSettings(Settings):
+class DensityQNSettings(Settings):
 
-    c_struct = ARHSettingsC
+    c_struct = DensityQNSettingsC
     try:
-        init_c_struct = lib.init_arh_settings
+        init_c_struct = lib.init_density_qn_settings
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_ARH=ON' pip install ."
+            "CMAKE_FLAGS='-DENABLE_DENSITY_QN=ON' pip install ."
         )
 
     callback_fields = {
@@ -97,19 +97,19 @@ class ARHSettings(Settings):
 
 
 # ensure that appropriate fields are automatically set in settings_c object
-auto_bind_fields(ARHSettings)
-bind_callback_fields(ARHSettings)
+auto_bind_fields(DensityQNSettings)
+bind_callback_fields(DensityQNSettings)
 
 
 # define interface factories
 @dataclass
-class ARHEvaluateDMInterface(CallbackInterface):
+class DensityQNEvaluateDMInterface(CallbackInterface):
     """
     this class provides the interface to the density matrix evaluating function with
     Coulomb, exact-exchange and non-linear potential contributions
     """
 
-    evaluate_dm: ARHEvaluateDMType
+    evaluate_dm: DensityQNEvaluateDMType
     n_ao: int
     n_particle: int
     closed_shell: bool
@@ -159,11 +159,11 @@ class ARHEvaluateDMInterface(CallbackInterface):
         return 0
 
 
-def arh_factory(
-    evaluate_dm: ARHEvaluateDMType,
+def density_qn_factory(
+    evaluate_dm: DensityQNEvaluateDMType,
     solver_settings: SolverSettings,
     solver_state: SolverState,
-    settings: Optional[ARHSettings] = None,
+    settings: Optional[DensityQNSettings] = None,
 ) -> Tuple[
     Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -171,9 +171,9 @@ def arh_factory(
     ],
     Callable[[np.ndarray], float],
 ]:
-    # the ARH object builds on the orbital basis object of the MO or OAO factory which
-    # wired the solver settings last, whose owner holds the dimensions of the orbitals
-    # the callback interfaces need, which the C interface does not receive
+    # the density QN object builds on the orbital basis object of the MO or OAO factory
+    # which wired the solver settings last, whose owner holds the dimensions of the
+    # orbitals the callback interfaces need, which the C interface does not receive
     orbitals = getattr(solver_settings, "_extension_owner", None)
     if not isinstance(orbitals, OrbitalOwner):
         raise ValueError(
@@ -182,8 +182,8 @@ def arh_factory(
     n_ao, n_particle = orbitals.n_ao, orbitals.n_particle
 
     # collector for exceptions raised inside the callback functions the object calls,
-    # shared with the orbital basis object, whose functions the ARH object calls, which
-    # the solver adopts from the returned functions
+    # shared with the orbital basis object, whose functions the density QN object
+    # calls, which the solver adopts from the returned functions
     exception = orbitals.exception
 
     # define interfaces for callback functions, whose arguments the C interface cannot
@@ -193,8 +193,8 @@ def arh_factory(
         "evaluate_dm",
         ("dm", "fock", "v_coulomb", "v_exchange", "v_nonlinear"),
     )
-    evaluate_dm_interface = arh_evaluate_dm_interface_type(
-        ARHEvaluateDMInterface(
+    evaluate_dm_interface = density_qn_evaluate_dm_interface_type(
+        DensityQNEvaluateDMInterface(
             evaluate_dm, n_ao, n_particle, n_particle == 1, exception
         )
     )
@@ -204,35 +204,35 @@ def arh_factory(
         settings.prepare_call(None, exception)
 
     # define result and argument types
-    lib.arh_factory.restype = c_int
-    lib.arh_factory.argtypes = [
-        arh_evaluate_dm_interface_type,
+    lib.density_qn_factory.restype = c_int
+    lib.density_qn_factory.argtypes = [
+        density_qn_evaluate_dm_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         POINTER(c_void_p),
         POINTER(SolverSettingsC),
         POINTER(SolverStateC),
-        POINTER(ARHSettingsC),
+        POINTER(DensityQNSettingsC),
     ]
 
     # call Fortran function
-    update_orbs_arh_funptr = update_orbs_interface_type()
-    obj_func_arh_funptr = obj_func_interface_type()
+    update_orbs_density_qn_funptr = update_orbs_interface_type()
+    obj_func_density_qn_funptr = obj_func_interface_type()
     extension = c_void_p()
-    error = lib.arh_factory(
+    error = lib.density_qn_factory(
         evaluate_dm_interface,
-        byref(update_orbs_arh_funptr),
-        byref(obj_func_arh_funptr),
+        byref(update_orbs_density_qn_funptr),
+        byref(obj_func_density_qn_funptr),
         byref(extension),
         byref(solver_settings.settings_c),
         byref(solver_state.state_c),
         None if settings is None else byref(settings.settings_c),
     )
 
-    raise_on_failure(error, exception, "ARH factory")
+    raise_on_failure(error, exception, "density QN factory")
 
-    # the owner of the ARH object, which the solver settings keep alive, keeps alive
-    # what the object calls and the owner of the orbital basis object, which the
+    # the owner of the density QN object, which the solver settings keep alive, keeps
+    # alive what the object calls and the owner of the orbital basis object, which the
     # settings were wired with before, and the returned functions are called with the
     # context the factory has written into the solver settings, through which they
     # reach the object, keep the solver settings alive and copy the orbitals back like
@@ -247,8 +247,8 @@ def arh_factory(
         },
     )
     return extension_functions(
-        update_orbs_arh_funptr,
-        obj_func_arh_funptr,
+        update_orbs_density_qn_funptr,
+        obj_func_density_qn_funptr,
         solver_settings,
         exception,
         orbitals.copy_back,

@@ -49,23 +49,23 @@ except AttributeError:
     pass
 
 try:
-    from pyopentrustregion.extensions.quasi_newton.tests import (
-        QNTests,
-        QNCInterfaceTests,
-        QNPyInterfaceTests,
-        QNCIntegrationTests,
-        QNPyIntegrationTests,
+    from pyopentrustregion.extensions.rotation_qn.tests import (
+        RotationQNTests,
+        RotationQNCInterfaceTests,
+        RotationQNPyInterfaceTests,
+        RotationQNCIntegrationTests,
+        RotationQNPyIntegrationTests,
     )
 except AttributeError:
     pass
 
 try:
-    from pyopentrustregion.extensions.arh.tests import (
-        ARHTests,
-        ARHCInterfaceTests,
-        ARHPyInterfaceTests,
-        ARHCIntegrationTests,
-        ARHPyIntegrationTests,
+    from pyopentrustregion.extensions.density_qn.tests import (
+        DensityQNTests,
+        DensityQNCInterfaceTests,
+        DensityQNPyInterfaceTests,
+        DensityQNCIntegrationTests,
+        DensityQNPyIntegrationTests,
     )
 except AttributeError:
     pass

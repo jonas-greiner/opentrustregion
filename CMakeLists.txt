@@ -46,22 +46,22 @@ message(STATUS "Showing option ${otr}_ENABLE_XHOST: ${${otr}_ENABLE_XHOST}")
 # optional extension modules, all off by default
 option(ENABLE_MO "Include molecular orbital extension in OpenTrustRegion" OFF)
 option(ENABLE_OAO "Include orthogonal AO extension in OpenTrustRegion" OFF)
-option(ENABLE_QUASI_NEWTON "Include quasi-Newton extension in OpenTrustRegion" OFF)
-option(ENABLE_ARH "Include augmented Roothaan-Hall extension in OpenTrustRegion" OFF)
+option(ENABLE_ROTATION_QN "Include rotation quasi-Newton extension in OpenTrustRegion" OFF)
+option(ENABLE_DENSITY_QN "Include density quasi-Newton extension in OpenTrustRegion" OFF)
 option(ENABLE_S_GEK
        "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
-if(ENABLE_ARH AND NOT ENABLE_MO)
-    message(STATUS "Including molecular orbital extension module as a dependency for augmented Roothaan-Hall")
-    set(ENABLE_MO ON CACHE BOOL "Enabled by ARH dependency" FORCE)
+if(ENABLE_DENSITY_QN AND NOT ENABLE_MO)
+    message(STATUS "Including molecular orbital extension module as a dependency for density quasi-Newton")
+    set(ENABLE_MO ON CACHE BOOL "Enabled by density quasi-Newton dependency" FORCE)
 endif()
-if(ENABLE_ARH AND NOT ENABLE_OAO)
-    message(STATUS "Including orthogonal AO extension module as a dependency for augmented Roothaan-Hall")
-    set(ENABLE_OAO ON CACHE BOOL "Enabled by ARH dependency" FORCE)
+if(ENABLE_DENSITY_QN AND NOT ENABLE_OAO)
+    message(STATUS "Including orthogonal AO extension module as a dependency for density quasi-Newton")
+    set(ENABLE_OAO ON CACHE BOOL "Enabled by density quasi-Newton dependency" FORCE)
 endif()
 message(STATUS "Showing option ENABLE_MO: ${ENABLE_MO}")
 message(STATUS "Showing option ENABLE_OAO: ${ENABLE_OAO}")
-message(STATUS "Showing option ENABLE_QUASI_NEWTON: ${ENABLE_QUASI_NEWTON}")
-message(STATUS "Showing option ENABLE_ARH: ${ENABLE_ARH}")
+message(STATUS "Showing option ENABLE_ROTATION_QN: ${ENABLE_ROTATION_QN}")
+message(STATUS "Showing option ENABLE_DENSITY_QN: ${ENABLE_DENSITY_QN}")
 message(STATUS "Showing option ENABLE_S_GEK: ${ENABLE_S_GEK}")
 
 # ====  Build  ==================================================================
@@ -213,29 +213,29 @@ if(ENABLE_OAO)
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include
     )
 endif()
-if(ENABLE_QUASI_NEWTON)
-    message(STATUS "Including quasi-Newton in OpenTrustRegion")
+if(ENABLE_ROTATION_QN)
+    message(STATUS "Including rotation quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
         extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
-        extensions/quasi_newton/src/quasi_newton.f90
-        extensions/quasi_newton/src/quasi_newton_c_interface.f90
+        extensions/rotation_qn/src/rotation_qn.f90
+        extensions/rotation_qn/src/rotation_qn_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/rotation_qn/include
     )
 endif()
-if(ENABLE_ARH)
-    message(STATUS "Including augmented Roothaan-Hall in OpenTrustRegion")
+if(ENABLE_DENSITY_QN)
+    message(STATUS "Including density quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
         extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
-        extensions/arh/src/arh.f90
-        extensions/arh/src/arh_c_interface.f90
+        extensions/density_qn/src/density_qn.f90
+        extensions/density_qn/src/density_qn_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/density_qn/include
     )
 endif()
 if(ENABLE_S_GEK)
@@ -355,7 +355,7 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/oao/tests/oao_c_integration_tests.c
         )
     endif()
-    if(ENABLE_QUASI_NEWTON)
+    if(ENABLE_ROTATION_QN)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
             extensions/common/tests/common_test_reference.f90
@@ -363,15 +363,15 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
             extensions/common/tests/common_c_integration_tests.c
-            extensions/quasi_newton/tests/quasi_newton_test_reference.f90
-            extensions/quasi_newton/tests/quasi_newton_unit_tests.f90
-            extensions/quasi_newton/tests/quasi_newton_c_interface_unit_tests.f90
-            extensions/quasi_newton/tests/quasi_newton_mock.f90
-            extensions/quasi_newton/tests/quasi_newton_c_interface_mock.f90
-            extensions/quasi_newton/tests/quasi_newton_c_integration_tests.c
+            extensions/rotation_qn/tests/rotation_qn_test_reference.f90
+            extensions/rotation_qn/tests/rotation_qn_unit_tests.f90
+            extensions/rotation_qn/tests/rotation_qn_c_interface_unit_tests.f90
+            extensions/rotation_qn/tests/rotation_qn_mock.f90
+            extensions/rotation_qn/tests/rotation_qn_c_interface_mock.f90
+            extensions/rotation_qn/tests/rotation_qn_c_integration_tests.c
         )
     endif()
-    if(ENABLE_ARH)
+    if(ENABLE_DENSITY_QN)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
             extensions/common/tests/common_test_reference.f90
@@ -379,12 +379,12 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
             extensions/common/tests/common_c_integration_tests.c
-            extensions/arh/tests/arh_test_reference.f90
-            extensions/arh/tests/arh_unit_tests.f90
-            extensions/arh/tests/arh_c_interface_unit_tests.f90
-            extensions/arh/tests/arh_mock.f90
-            extensions/arh/tests/arh_c_interface_mock.f90
-            extensions/arh/tests/arh_c_integration_tests.c
+            extensions/density_qn/tests/density_qn_test_reference.f90
+            extensions/density_qn/tests/density_qn_unit_tests.f90
+            extensions/density_qn/tests/density_qn_c_interface_unit_tests.f90
+            extensions/density_qn/tests/density_qn_mock.f90
+            extensions/density_qn/tests/density_qn_c_interface_mock.f90
+            extensions/density_qn/tests/density_qn_c_integration_tests.c
         )
     endif()
     if(ENABLE_S_GEK)
@@ -462,7 +462,7 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT ${runtime_component}
 )
-if(ENABLE_OAO OR ENABLE_MO OR ENABLE_QUASI_NEWTON OR ENABLE_S_GEK)
+if(ENABLE_OAO OR ENABLE_MO OR ENABLE_ROTATION_QN OR ENABLE_S_GEK)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             COMPONENT ${runtime_component}
@@ -480,14 +480,14 @@ if(ENABLE_OAO)
             COMPONENT ${runtime_component}
     )
 endif()
-if(ENABLE_QUASI_NEWTON)
-    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/quasi_newton/include/
+if(ENABLE_ROTATION_QN)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/rotation_qn/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             COMPONENT ${runtime_component}
     )
 endif()
-if(ENABLE_ARH)
-    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/arh/include/
+if(ENABLE_DENSITY_QN)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/density_qn/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             COMPONENT ${runtime_component}
     )

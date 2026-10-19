@@ -483,11 +483,11 @@ The library uses structured integer return codes to indicate whether a function 
 | `18`               | `precond_pd`                                                               |
 | `51`               | MO extension                                                               |
 | `52`               | OAO extension                                                              |
-| `53`               | ARH extension                                                              |
-| `54`               | Quasi-Newton extension                                                     |
+| `53`               | Density QN extension                                                       |
+| `54`               | Rotation QN extension                                                      |
 | `55`               | S-GEK extension                                                            |
 
-The factory of an extension tags the errors it detects, in its arguments, in the solver settings it wires or, in C, a missing record of the state, with the origin of its extension, and its object the errors it detects itself while performing a role, such as a missing density matrix evaluating function or a failed eigendecomposition. An error in the numerics of the orbital basis object an ARH object builds on carries the origin of the orbital basis. Errors of your own callback functions keep the origin of the role, such as `1201` for an `evaluate_dm` that fails during the orbital update.
+The factory of an extension tags the errors it detects, in its arguments, in the solver settings it wires or, in C, a missing record of the state, with the origin of its extension, and its object the errors it detects itself while performing a role, such as a missing density matrix evaluating function or a failed eigendecomposition. An error in the numerics of the orbital basis object a density QN object builds on carries the origin of the orbital basis. Errors of your own callback functions keep the origin of the role, such as `1201` for an `evaluate_dm` that fails during the orbital update.
 
 ### Error Codes (`EE`)
 
@@ -511,7 +511,7 @@ Future versions may define more specific codes for other actionable failure mode
 
 ## Optional Extensions
 
-OpenTrustRegion (OTR) supports additional optional modules that can be enabled during installation. These include **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **quasi-Newton**, **augmented Roothaan–Hall (ARH)**, and **subspace gradient-enhanced kriging (S-GEK)**.
+OpenTrustRegion (OTR) supports additional optional modules that can be enabled during installation. These include **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **rotation quasi-Newton (rotation QN)**, **density quasi-Newton (density QN)**, and **subspace gradient-enhanced kriging (S-GEK)**.
 
 A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the quasi-Newton and S-GEK factories do on settings a factory wired, Fortran accepts only the returned functions themselves, C cannot tell a wrapper from your own function, and Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
 
@@ -527,7 +527,7 @@ def counted_update_orbs(kappa, grad, h_diag):
 
 ### Molecular Orbitals (MO)
 
-This extension provides orbital optimization in the molecular orbital (MO) basis for RHF and UHF, whose parameters are only the occupied-virtual rotations of every particle channel, and only those between orbitals of the same irreducible representation (irrep) if the irreps of the MOs are given. It is the foundation of ARH's MO basis, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
+This extension provides orbital optimization in the molecular orbital (MO) basis for RHF and UHF, whose parameters are only the occupied-virtual rotations of every particle channel, and only those between orbitals of the same irreducible representation (irrep) if the irreps of the MOs are given. It is the foundation of density QN's MO basis, and can also be used on its own when the exact Hessian-vector product (rather than density QN's history-based approximation) is preferred.
 
 #### Installation
 
@@ -555,11 +555,11 @@ The routine `mo_factory` constructs and returns MO versions of the orbital updat
 - **`n_particle`** (integer): Specifies the number of distinct particles (1 for closed-shell, 2 for open-shell).
 - **`n_ao`** (integer): Specifies the number of AOs.
 - **`n_mo`** (integer): Specifies the number of MOs, which must not exceed the number of AOs.
-- **`evaluate_dm`** (subroutine): Accepts an AO density matrix, built from the occupied orbitals of every particle channel, and returns the same quantities as the `evaluate_dm` of the OAO extension, whose description below applies unchanged. A host that only uses the MO object through ARH, see [Augmented Roothaan–Hall (ARH)](#augmented-roothaanhall-arh), and does not want an internal stability check with the exact Hessian can pass none: a disassociated procedure pointer in Fortran, `NULL` in C and `None` in Python. Without an `evaluate_dm`, the factory prints a warning, and the returned functions and the Hessian linear transformation of the object, which would need it, return an error when they are called.
+- **`evaluate_dm`** (subroutine): Accepts an AO density matrix, built from the occupied orbitals of every particle channel, and returns the same quantities as the `evaluate_dm` of the OAO extension, whose description below applies unchanged. A host that only uses the MO object through density QN, see [Density Quasi-Newton (Density QN)](#density-quasi-newton-density-qn), and does not want an internal stability check with the exact Hessian can pass none: a disassociated procedure pointer in Fortran, `NULL` in C and `None` in Python. Without an `evaluate_dm`, the factory prints a warning, and the returned functions and the Hessian linear transformation of the object, which would need it, return an error when they are called.
 - **`update_orbs_mo`** (subroutine): Returned MO orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_mo`** (function): Returned MO objective function as defined for the `solver` subroutine.
-- **`extension`** (C only, `void **`): Returns the handle of the new MO object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it, such as that of ARH. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new MO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `arh_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The MO object provides the following routines:
+- **`extension`** (C only, `void **`): Returns the handle of the new MO object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it, such as that of density QN. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new MO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `density_qn_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The MO object provides the following routines:
   - **`precond`**: MO level-shifted preconditioner, based on the exact eigendecomposition of the static part of the Hessian, also for the stability check.
   - **`precond_pd`**: MO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`get_extra_trial_vectors`**: MO extra trial vectors, the rotations between the pseudo-canonical occupied and virtual orbitals with the most negative orbital energy differences, also for the stability check.
@@ -697,8 +697,8 @@ solver(update_orbs_mo, obj_func_mo, n_param, settings, state)
 - `evaluate_dm` is a callback procedure provided elsewhere.
 - MO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
 - `mo_factory` returns two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings and the state record passed to the factory. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
-- Unlike ARH, MO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
-- ARH in the MO basis builds on the MO object: pass the settings `mo_factory` wired to `arh_factory`. Keep the exact `evaluate_dm`, since the orbital update `mo_factory` returned provides the exact Hessian for the stability check, as shown for ARH, see [Augmented Roothaan–Hall (ARH)](#augmented-roothaanhall-arh), and leave it out only if no stability check with the exact Hessian is wanted, which is not recommended. Fortran and C hosts call the functions `mo_factory` returned with the context the settings had right after `mo_factory`.
+- Unlike density QN, MO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
+- Density QN in the MO basis builds on the MO object: pass the settings `mo_factory` wired to `density_qn_factory`. Keep the exact `evaluate_dm`, since the orbital update `mo_factory` returned provides the exact Hessian for the stability check, as shown for density QN, see [Density Quasi-Newton (Density QN)](#density-quasi-newton-density-qn), and leave it out only if no stability check with the exact Hessian is wanted, which is not recommended. Fortran and C hosts call the functions `mo_factory` returned with the context the settings had right after `mo_factory`.
 - The MO object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`. The final orbitals are the MO coefficients passed to the factory, which are rotated in place.
 
 #### Optional Settings
@@ -710,7 +710,7 @@ The MO factory can be fine-tuned using the following settings:
 
 ### Orthogonal Atomic Orbitals (OAO)
 
-This extension provides orbital optimization in the orthogonalized atomic orbital (OAO) basis for RHF and UHF. It is the foundation of ARH's OAO basis, and can also be used on its own when the exact Hessian-vector product (rather than ARH's history-based approximation) is preferred.
+This extension provides orbital optimization in the orthogonalized atomic orbital (OAO) basis for RHF and UHF. It is the foundation of density QN's OAO basis, and can also be used on its own when the exact Hessian-vector product (rather than density QN's history-based approximation) is preferred.
 
 #### Installation
 
@@ -746,11 +746,11 @@ The routine `oao_factory` constructs and returns OAO versions of the orbital upd
 
   Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` (or, for `get_response`, `False`) in Python, and the callback must not build it.
 
-  A host that only uses the OAO object through ARH, see [Augmented Roothaan–Hall (ARH)](#augmented-roothaanhall-arh), and does not want an internal stability check with the exact Hessian can pass no `evaluate_dm`: a disassociated procedure pointer in Fortran, `NULL` in C and `None` in Python. Without an `evaluate_dm`, the factory prints a warning, and the returned functions and the Hessian linear transformation of the object, which would need it, return an error when they are called.
+  A host that only uses the OAO object through density QN, see [Density Quasi-Newton (Density QN)](#density-quasi-newton-density-qn), and does not want an internal stability check with the exact Hessian can pass no `evaluate_dm`: a disassociated procedure pointer in Fortran, `NULL` in C and `None` in Python. Without an `evaluate_dm`, the factory prints a warning, and the returned functions and the Hessian linear transformation of the object, which would need it, return an error when they are called.
 - **`update_orbs_oao`** (subroutine): Returned OAO orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_oao`** (function): Returned OAO objective function as defined for the `solver` subroutine.
-- **`extension`** (C only, `void **`): Returns the handle of the new OAO object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it, such as that of ARH. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new OAO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `arh_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The OAO object provides the following routines:
+- **`extension`** (C only, `void **`): Returns the handle of the new OAO object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it, such as that of density QN. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new OAO object: the routines listed below replace your callback functions, while your other callback functions stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings, or pass them on to `density_qn_factory`. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The OAO object provides the following routines:
   - **`precond`**: OAO level-shifted preconditioner, based on the exact eigendecomposition of the static part of the Hessian, also for the stability check.
   - **`precond_pd`**: OAO positive-definite preconditioner, based on the exact eigendecomposition of the static part of the Hessian.
   - **`project`**: OAO projection onto the non-redundant orbital rotations, also for the stability check.
@@ -886,8 +886,8 @@ solver(update_orbs_oao, obj_func_oao, n_param, settings, state)
 - `evaluate_dm` is a callback procedure provided elsewhere.
 - OAO settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
 - `oao_factory` returns two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings and the state record passed to the factory. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
-- Unlike ARH, OAO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
-- ARH in the OAO basis builds on the OAO object: pass the settings `oao_factory` wired to `arh_factory`. Keep the exact `evaluate_dm`, since the orbital update `oao_factory` returned provides the exact Hessian for the stability check, as shown for ARH, see [Augmented Roothaan–Hall (ARH)](#augmented-roothaanhall-arh), and leave it out only if no stability check with the exact Hessian is wanted, which is not recommended. Fortran and C hosts call the functions `oao_factory` returned with the context the settings had right after `oao_factory`.
+- Unlike density QN, OAO uses the exact Hessian-vector product, obtained by calling back into the `get_response` function returned by `evaluate_dm`, rather than a history-based approximation.
+- Density QN in the OAO basis builds on the OAO object: pass the settings `oao_factory` wired to `density_qn_factory`. Keep the exact `evaluate_dm`, since the orbital update `oao_factory` returned provides the exact Hessian for the stability check, as shown for density QN, see [Density Quasi-Newton (Density QN)](#density-quasi-newton-density-qn), and leave it out only if no stability check with the exact Hessian is wanted, which is not recommended. Fortran and C hosts call the functions `oao_factory` returned with the context the settings had right after `oao_factory`.
 - The OAO object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`. The final AO density matrix is the one passed to the factory, which is updated in place.
 
 #### Optional Settings
@@ -897,58 +897,58 @@ The OAO factory can be fine-tuned using the following settings:
 - **`logger`** (subroutine): Accepts a log message of the OAO routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm`, of the `get_response` it returns and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
-### Quasi-Newton Extension
+### Rotation Quasi-Newton (Rotation QN)
 
-This extension currently provides symmetric rank-1 and Broyden-Fletcher-Goldfarb-Shanno Hessian updating schemes.
+This extension provides quasi-Newton approximations of the Hessian built from the history of the orbital rotations, currently with symmetric rank-1 and Broyden-Fletcher-Goldfarb-Shanno updates.
 
 #### Installation
 
 Enable the extension at build time using CMake:
 
 ```sh
-cmake -DENABLE_QUASI_NEWTON=ON ..
+cmake -DENABLE_ROTATION_QN=ON ..
 ```
 
 or, when installing the Python package:
 
 ```sh
-CMAKE_FLAGS='-DENABLE_QUASI_NEWTON=ON' pip install .
+CMAKE_FLAGS='-DENABLE_ROTATION_QN=ON' pip install .
 ```
 
 #### Usage
 
-This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `qn_factory` constructs and returns quasi-Newton versions of the orbital updating subroutine and the objective function and wires the solver settings with a new quasi-Newton object. This routine takes the following arguments:
+This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `rotation_qn_factory` constructs and returns rotation QN versions of the orbital updating subroutine and the objective function and wires the solver settings with a new rotation QN object. This routine takes the following arguments:
 
 #### Required Arguments
 
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine it returns is not used. The returned orbital updating subroutine calls it with the host context of the solver settings.
 - **`obj_func`** (function): Original objective function as defined for the `solver` subroutine, which the returned objective function calls with the host context of the solver settings.
-- **`transport`** (subroutine): Transports a tangent vector in place along the geodesic of an orbital rotation, so that the stored steps and gradient differences refer to the current orbitals, and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
-- **`init_hess`** (subroutine): Applies the initial Hessian approximation in place to a vector and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the quasi-Newton settings as its last argument.
-- **`update_orbs_qn`** (subroutine): Returned quasi-Newton orbital updating subroutine as defined for the `solver` subroutine.
-- **`obj_func_qn`** (function): Returned objective function as defined for the `solver` subroutine.
-- **`extension`** (C only, `void **`): Returns the handle of the new quasi-Newton object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new quasi-Newton object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`transport`** (subroutine): Transports a tangent vector in place along the geodesic of an orbital rotation, so that the stored steps and gradient differences refer to the current orbitals, and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the rotation QN settings as its last argument.
+- **`init_hess`** (subroutine): Applies the initial Hessian approximation in place to a vector and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the rotation QN settings as its last argument.
+- **`update_orbs_rotation_qn`** (subroutine): Returned rotation QN orbital updating subroutine as defined for the `solver` subroutine.
+- **`obj_func_rotation_qn`** (function): Returned objective function as defined for the `solver` subroutine.
+- **`extension`** (C only, `void **`): Returns the handle of the new rotation QN object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new rotation QN object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `rotation_qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`qn_settings`** (qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
+- **`rotation_qn_settings`** (rotation_qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
 
 ---
 
-The following Fortran snippet demonstrates how to use the quasi-Newton interface:
+The following Fortran snippet demonstrates how to use the rotation QN interface:
 
 ```fortran
 use opentrustregion, only: ip, solver_state_type, update_orbs_type, obj_func_type, &
                            solver
 use otr_common, only: extension_solver_settings_type
-use otr_qn, only: qn_factory, qn_settings_type, transport_type, init_hess_type
+use otr_rotation_qn, only: rotation_qn_factory, rotation_qn_settings_type, transport_type, init_hess_type
 
 type(extension_solver_settings_type), target :: settings
 type(solver_state_type), target :: state
-type(qn_settings_type) :: qn_settings
-procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_qn_funptr
-procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_qn_funptr
+type(rotation_qn_settings_type) :: rotation_qn_settings
+procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_rotation_qn_funptr
+procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_rotation_qn_funptr
 procedure(transport_type), pointer :: transport_funptr
 procedure(init_hess_type), pointer :: init_hess_funptr
 integer(ip) :: n_param, error
@@ -960,16 +960,16 @@ transport_funptr => transport
 init_hess_funptr => init_hess
 
 ! override default settings
-qn_settings%verbose = 1
-qn_settings%hess_update_scheme = "sr1"
+rotation_qn_settings%verbose = 1
+rotation_qn_settings%qn_method = "sr1"
 
-! get quasi-Newton routines and wire the settings with a new quasi-Newton object
-call qn_factory(n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-                init_hess_funptr, update_orbs_qn_funptr, obj_func_qn_funptr, settings, &
-                state, error, qn_settings)
+! get rotation QN routines and wire the settings with a new rotation QN object
+call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
+                init_hess_funptr, update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, settings, &
+                state, error, rotation_qn_settings)
 
 ! call solver
-call solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, error, settings, state)
+call solver(update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, n_param, error, settings, state)
 ```
 
 ---
@@ -979,7 +979,7 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 ```c
 #include <string.h>
 #include "opentrustregion.h"
-#include "opentrustregion_quasi_newton.h"
+#include "opentrustregion_rotation_qn.h"
 
 c_int n_param;
 
@@ -989,37 +989,37 @@ obj_func_fp obj_func_funptr = (void*)obj_func;
 transport_fp transport_funptr = (void*)transport;
 init_hess_fp init_hess_funptr = (void*)init_hess;
 
-// initialize quasi-Newton settings
-qn_settings_type qn_settings = qn_settings_init();
+// initialize rotation QN settings
+rotation_qn_settings_type rotation_qn_settings = rotation_qn_settings_init();
 
 // override default settings
-qn_settings.verbose = 1;
-strcpy(qn_settings.hess_update_scheme, "sr1");
+rotation_qn_settings.verbose = 1;
+strcpy(rotation_qn_settings.qn_method, "sr1");
 
 // initialize settings
 solver_settings_type settings = solver_settings_init();
 
-// get quasi-Newton functions and wire the settings with a new quasi-Newton object
-update_orbs_fp update_orbs_qn_funptr;
-obj_func_fp obj_func_qn_funptr;
+// get rotation QN functions and wire the settings with a new rotation QN object
+update_orbs_fp update_orbs_rotation_qn_funptr;
+obj_func_fp obj_func_rotation_qn_funptr;
 void *extension;
 solver_state_type state;
-c_int error = qn_factory(n_param,
+c_int error = rotation_qn_factory(n_param,
                          update_orbs_funptr,
                          obj_func_funptr,
                          transport_funptr,
                          init_hess_funptr,
-                         &update_orbs_qn_funptr,
-                         &obj_func_qn_funptr,
+                         &update_orbs_rotation_qn_funptr,
+                         &obj_func_rotation_qn_funptr,
                          &extension,
                          &settings,
                          &state,
-                         &qn_settings);
+                         &rotation_qn_settings);
 
 // call solver
-error = solver(update_orbs_qn_funptr, obj_func_qn_funptr, n_param, &settings, &state);
+error = solver(update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, n_param, &settings, &state);
 
-// release the quasi-Newton object
+// release the rotation QN object
 release_extension(extension);
 ```
 
@@ -1029,69 +1029,69 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 
 ```python
 from pyopentrustregion import SolverSettings, SolverState, solver
-from pyopentrustregion.extensions.quasi_newton import QNSettings, qn_factory
+from pyopentrustregion.extensions.rotation_qn import RotationQNSettings, rotation_qn_factory
 
-# initialize quasi-Newton settings
-qn_settings = QNSettings()
+# initialize rotation QN settings
+rotation_qn_settings = RotationQNSettings()
 
 # override default settings
-qn_settings.verbose = 1
-qn_settings.hess_update_scheme = "sr1"
+rotation_qn_settings.verbose = 1
+rotation_qn_settings.qn_method = "sr1"
 
 # initialize settings and state
 settings = SolverSettings()
 state = SolverState()
 
-# get quasi-Newton functions and wire the settings with a new quasi-Newton object
-update_orbs_qn, obj_func_qn = qn_factory(
-    n_param, update_orbs, obj_func, transport, init_hess, settings, state, qn_settings
+# get rotation QN functions and wire the settings with a new rotation QN object
+update_orbs_rotation_qn, obj_func_rotation_qn = rotation_qn_factory(
+    n_param, update_orbs, obj_func, transport, init_hess, settings, state, rotation_qn_settings
 )
 
 # call solver
-solver(update_orbs_qn, obj_func_qn, n_param, settings, state)
+solver(update_orbs_rotation_qn, obj_func_rotation_qn, n_param, settings, state)
 ```
 
 ---
 
 - Callback functions (`update_orbs`, `obj_func`, `transport`, `init_hess`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
-- Quasi-Newton settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `hess_update_scheme`) can then be overridden.
-- Quasi-Newton versions of the orbital updating function and the objective function are obtained by calling `qn_factory`, which also wires the solver settings with a new quasi-Newton object.
+- Rotation QN settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `qn_method`) can then be overridden.
+- Rotation QN versions of the orbital updating function and the objective function are obtained by calling `rotation_qn_factory`, which also wires the solver settings with a new rotation QN object.
 - The `solver` is then called with the returned functions, the wired settings and the state record passed to the factory.
-- The quasi-Newton object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`.
+- The rotation QN object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`.
 
 #### Optional Settings
-The quasi-Newton factory function can be fine-tuned using the following settings:
+The rotation QN factory function can be fine-tuned using the following settings:
 
-- **`hess_update_scheme`** (string): Specifies which quasi-Newton updating scheme to use, in any case. Options include:
+- **`qn_method`** (string): Specifies which quasi-Newton updating scheme to use, in any case. Options include:
   - `"sr1"`: symmetric rank-1 update,
   - `"bfgs"`: Broyden-Fletcher-Goldfarb-Shanno update,
 - **`max_points`** (integer): Maximum number of points the history of steps and gradient differences keeps, at least 0, where 0 keeps none.
-- **`verbose`** (integer): Controls the verbosity of output of the quasi-Newton routines.
-- **`logger`** (subroutine): Accepts a log message of the quasi-Newton routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`verbose`** (integer): Controls the verbosity of output of the rotation QN routines.
+- **`logger`** (subroutine): Accepts a log message of the rotation QN routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
-### Augmented Roothaan–Hall (ARH)
+### Density Quasi-Newton (Density QN)
 
-This extension provides access to the augmented Roothaan-Hall method for RHF and UHF, with the orbitals parameterized either in the molecular orbital (MO) basis, the default, or in the orthogonalized atomic orbital (OAO) basis. The ARH factory builds on the orbital basis object which `mo_factory` or `oao_factory` wired into the solver settings last, so that setting up ARH takes two calls: the factory of the basis, which needs no exact `evaluate_dm` for ARH, and then the ARH factory, called `arh_factory` in C and Python and `arh_factory_cs` and `arh_factory_os` for the closed- and the open-shell `evaluate_dm` in Fortran. Both bases share the same history-based approximation of the Hessian and every ARH type.
+This extension provides quasi-Newton approximations of the Hessian built from the history of the density matrices, the augmented Roothaan–Hall (ARH) method and its multisecant relatives, for RHF and UHF, with the orbitals parameterized either in the molecular orbital (MO) basis, the default, or in the orthogonalized atomic orbital (OAO) basis. The density QN factory builds on the orbital basis object which `mo_factory` or `oao_factory` wired into the solver settings last, so that setting up density QN takes two calls: the factory of the basis, which needs no exact `evaluate_dm` for density QN, and then the density QN factory, called `density_qn_factory` in C and Python and `density_qn_factory_cs` and `density_qn_factory_os` for the closed- and the open-shell `evaluate_dm` in Fortran. Both bases share the same history-based approximation of the Hessian and every QN method.
 
 #### Installation
 
 Enable the extension at build time using CMake:
 
 ```sh
-cmake -DENABLE_ARH=ON ..
+cmake -DENABLE_DENSITY_QN=ON ..
 ```
 
 or, when installing the Python package:
 
 ```sh
-CMAKE_FLAGS='-DENABLE_ARH=ON' pip install .
+CMAKE_FLAGS='-DENABLE_DENSITY_QN=ON' pip install .
 ```
 
 #### Usage
 
-The ARH factory constructs and returns ARH versions of the orbital updating subroutine and the objective function and wires the solver settings with a new ARH object, which moves the orbitals of the orbital basis object and provides ARH versions of the preconditioning and extra trial vector functions. The parameters are those of the orbital basis: in the MO basis, the occupied-virtual rotations of every particle channel, or only those between orbitals of the same irrep if the MO factory was given `orbsym`, and in the OAO basis, the rotations between all orthogonalized AOs, packed as the `n_ao * (n_ao - 1) / 2` elements of an antisymmetric matrix per particle channel. The factory takes the following arguments:
+The density QN factory constructs and returns density QN versions of the orbital updating subroutine and the objective function and wires the solver settings with a new density QN object, which moves the orbitals of the orbital basis object and provides density QN versions of the preconditioning and extra trial vector functions. The parameters are those of the orbital basis: in the MO basis, the occupied-virtual rotations of every particle channel, or only those between orbitals of the same irrep if the MO factory was given `orbsym`, and in the OAO basis, the rotations between all orthogonalized AOs, packed as the `n_ao * (n_ao - 1) / 2` elements of an antisymmetric matrix per particle channel. The factory takes the following arguments:
 
 #### Required Arguments
 
@@ -1103,42 +1103,42 @@ The ARH factory constructs and returns ARH versions of the orbital updating subr
   - Exact-exchange potential (real array, written in-place): the exchange matrix of the density matrix of every spin channel, weighted by the exact-exchange fractions of the functional, and zero for a functional without exact exchange
   - Non-linear (exchange-correlation) potential (real array, written in-place)
   - An integer error code (0 for success, positive integers < 100 for errors)
-  - Receives the host context of the ARH settings as its last argument.
+  - Receives the host context of the density QN settings as its last argument.
 
   The linear (Coulomb and exact exchange) potential of a spin channel is thereby the Coulomb potential of both spin channels minus its own exact-exchange potential, and the non-linear potential is the rest of the effective potential, i.e. the effective potential minus this linear potential.
 
-  Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it. The arrays have the dimensions of the density matrices of the orbital basis, as for the `evaluate_dm` of the OAO extension; Fortran hosts call `arh_factory_cs` with the closed-shell interface `arh_evaluate_dm_cs_type` and `arh_factory_os` with the open-shell interface `arh_evaluate_dm_os_type`, which has to be that of the orbitals.
-- **`update_orbs_arh`** (subroutine): Returned ARH orbital updating subroutine as defined for the `solver` subroutine.
-- **`obj_func_arh`** (function): Returned ARH objective function as defined for the `solver` subroutine.
-- **`extension`** (C only, `void **`): Returns the handle of the new ARH object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, before the extension of the orbital basis object, which the ARH object uses. Fortran frees both objects together with the settings, which own them, and Python once the settings and the returned functions are gone.
-- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings which `mo_factory` or `oao_factory` wired last, whose orbital basis object the ARH object builds on; settings another factory or no factory wired last are refused with an error, except that a C host has to pass settings some factory wired or settings without a context, since the C interface cannot tell the context a factory wrote into the settings from a host's own context, which it would misread. The factory wires them with the new ARH object: the routines listed below replace those of the orbital basis object, while the other callback functions stay in effect. Call the `solver` with the returned functions and these settings. Their context then belongs to the ARH object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. The factory also sets `refresh_hess`, which has to stay set since every energy evaluation changes the approximate Hessian, `n_micro` to 300, since the approximate Hessian is cheap to apply, and `hess_symm` according to `arh_type`. The ARH object provides the following routines:
-  - **`precond`**: ARH level-shifted preconditioner, which applies the exact, level-shifted inverse of the full ARH approximate Hessian, also for the stability check.
-  - **`precond_pd`**: ARH positive-definite preconditioner, that of the orbital basis object, based on the exact eigendecomposition of the static part of the Hessian.
-  - **`get_extra_trial_vectors`**: ARH extra trial vectors, those of the orbital basis object, which only depend on the static part of the Hessian, also for the stability check.
+  Every output but the energy and the error code is optional: when the caller does not need a quantity it is passed as an absent argument in Fortran, as a null pointer in C and as `None` in Python, and the callback must not build it. The arrays have the dimensions of the density matrices of the orbital basis, as for the `evaluate_dm` of the OAO extension; Fortran hosts call `density_qn_factory_cs` with the closed-shell interface `density_qn_evaluate_dm_cs_type` and `density_qn_factory_os` with the open-shell interface `density_qn_evaluate_dm_os_type`, which has to be that of the orbitals.
+- **`update_orbs_density_qn`** (subroutine): Returned density QN orbital updating subroutine as defined for the `solver` subroutine.
+- **`obj_func_density_qn`** (function): Returned density QN objective function as defined for the `solver` subroutine.
+- **`extension`** (C only, `void **`): Returns the handle of the new density QN object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, before the extension of the orbital basis object, which the density QN object uses. Fortran frees both objects together with the settings, which own them, and Python once the settings and the returned functions are gone.
+- **`settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings which `mo_factory` or `oao_factory` wired last, whose orbital basis object the density QN object builds on; settings another factory or no factory wired last are refused with an error, except that a C host has to pass settings some factory wired or settings without a context, since the C interface cannot tell the context a factory wrote into the settings from a host's own context, which it would misread. The factory wires them with the new density QN object: the routines listed below replace those of the orbital basis object, while the other callback functions stay in effect. Call the `solver` with the returned functions and these settings. Their context then belongs to the density QN object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. The factory also sets `refresh_hess`, which has to stay set since every energy evaluation changes the approximate Hessian, `n_micro` to 300, since the approximate Hessian is cheap to apply, and `hess_symm` according to `qn_method`. The density QN object provides the following routines:
+  - **`precond`**: Density QN level-shifted preconditioner, which applies the exact, level-shifted inverse of the full density QN approximate Hessian, also for the stability check.
+  - **`precond_pd`**: Density QN positive-definite preconditioner, that of the orbital basis object, based on the exact eigendecomposition of the static part of the Hessian.
+  - **`get_extra_trial_vectors`**: Density QN extra trial vectors, those of the orbital basis object, which only depend on the static part of the Hessian, also for the stability check.
 
-  In the MO basis, whose parameters are non-redundant, the ARH object provides no projection and leaves the projection to the caller, while in the OAO basis it provides the projection of the OAO object onto the non-redundant rotations, also for the stability check, which replaces a projection that is already set. Without `orbsym` and for `n_mo` equal to `n_ao`, the approximate Hessian of the MO basis equals that of the OAO basis in MO coordinates.
+  In the MO basis, whose parameters are non-redundant, the density QN object provides no projection and leaves the projection to the caller, while in the OAO basis it provides the projection of the OAO object onto the non-redundant rotations, also for the stability check, which replaces a projection that is already set. Without `orbsym` and for `n_mo` equal to `n_ao`, the approximate Hessian of the MO basis equals that of the OAO basis in MO coordinates.
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the orbital basis factory and the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`arh_settings`** (arh_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it, and the orbital basis object keeps its own settings. Without it, the default settings are used, which `NULL` in C and `None` in Python select.
+- **`density_qn_settings`** (density_qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it, and the orbital basis object keeps its own settings. Without it, the default settings are used, which `NULL` in C and `None` in Python select.
 
 ---
 
-The following Fortran snippet demonstrates how to use the ARH interface in the MO basis, with the exact Hessian of the MO object for the stability check:
+The following Fortran snippet demonstrates how to use the density QN interface in the MO basis, with the exact Hessian of the MO object for the stability check:
 
 ```fortran
 use opentrustregion, only: ip, rp, solver_state_type, solver, obj_func_type, &
                            update_orbs_type, hess_x_type
 use otr_common, only: extension_solver_settings_type, evaluate_dm_cs_type
 use otr_mo, only: mo_factory
-use otr_arh, only: arh_factory_cs, arh_settings_type, arh_evaluate_dm_cs_type
+use otr_density_qn, only: density_qn_factory_cs, density_qn_settings_type, density_qn_evaluate_dm_cs_type
 
 type(extension_solver_settings_type), target :: settings
 type(solver_state_type), target :: state
-type(arh_settings_type) :: arh_settings
+type(density_qn_settings_type) :: density_qn_settings
 procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_mo_funptr
-procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-procedure(update_orbs_type), pointer :: update_orbs_mo_funptr, update_orbs_arh_funptr
-procedure(obj_func_type), pointer :: obj_func_mo_funptr, obj_func_arh_funptr
+procedure(density_qn_evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
+procedure(update_orbs_type), pointer :: update_orbs_mo_funptr, update_orbs_density_qn_funptr
+procedure(obj_func_type), pointer :: obj_func_mo_funptr, obj_func_density_qn_funptr
 procedure(hess_x_type), pointer :: hess_x_mo_funptr
 integer(ip) :: n_occ, n_particle, n_ao, n_mo, n_param, error
 real(rp) :: func
@@ -1146,12 +1146,12 @@ real(rp), allocatable, target :: mo_coeff(:, :)
 real(rp), allocatable :: ao_overlap(:, :), kappa(:), grad(:), h_diag(:)
 
 ! set callback function pointers to existing implementations, the exact density matrix
-! evaluating function for the MO object and that of ARH
+! evaluating function for the MO object and that of density QN
 evaluate_dm_mo_funptr => evaluate_dm_mo
 evaluate_dm_funptr => evaluate_dm
 
 ! override default settings
-arh_settings%verbose = 1
+density_qn_settings%verbose = 1
 
 ! request a stability check of the converged solution
 settings%stability = .true.
@@ -1166,19 +1166,19 @@ n_param = n_occ * (n_mo - n_occ)
 
 ! get the exact Hessian linear transformation of the MO object, which follows the
 ! orbitals, for the stability check from its orbital update at the starting orbitals,
-! before the ARH factory, which keeps it with the context of the MO object
+! before the density QN factory, which keeps it with the context of the MO object
 allocate(kappa(n_param), grad(n_param), h_diag(n_param))
 kappa = 0.0_rp
 call update_orbs_mo_funptr(kappa, func, grad, h_diag, hess_x_mo_funptr, error, &
                            settings%context)
 settings%stability_hess_x => hess_x_mo_funptr
 
-! wire the settings with a new ARH object built on the MO object
-call arh_factory_cs(evaluate_dm_funptr, update_orbs_arh_funptr, obj_func_arh_funptr, &
-                    settings, state, error, arh_settings)
+! wire the settings with a new density QN object built on the MO object
+call density_qn_factory_cs(evaluate_dm_funptr, update_orbs_density_qn_funptr, obj_func_density_qn_funptr, &
+                    settings, state, error, density_qn_settings)
 
 ! call solver
-call solver(update_orbs_arh_funptr, obj_func_arh_funptr, n_param, error, settings, &
+call solver(update_orbs_density_qn_funptr, obj_func_density_qn_funptr, n_param, error, settings, &
             state)
 ```
 
@@ -1189,30 +1189,30 @@ The following C snippet demonstrates equivalent usage through the C interface:
 ```C
 #include <stddef.h>
 #include "opentrustregion.h"
-#include "opentrustregion_arh.h"
+#include "opentrustregion_density_qn.h"
 
 c_int n_occ[1], n_particle, n_ao, n_mo, n_param;
 c_real *mo_coeff, *ao_overlap, *kappa, *grad, *h_diag, func;
 
 // set callback function pointers to existing implementations, the exact density
-// matrix evaluating function for the MO object and that of ARH
+// matrix evaluating function for the MO object and that of density QN
 evaluate_dm_fp evaluate_dm_mo_funptr = (void*)evaluate_dm_mo;
-arh_evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
+density_qn_evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
 
-// initialize ARH settings
-arh_settings_type arh_settings = arh_settings_init();
+// initialize density QN settings
+density_qn_settings_type density_qn_settings = density_qn_settings_init();
 
 // override default settings
-arh_settings.verbose = 1;
+density_qn_settings.verbose = 1;
 
 // initialize settings and request a stability check of the converged solution
 solver_settings_type settings = solver_settings_init();
 settings.stability = true;
 
 // wire the settings with a new MO object
-update_orbs_fp update_orbs_mo_funptr, update_orbs_arh_funptr;
-obj_func_fp obj_func_mo_funptr, obj_func_arh_funptr;
-void *extension_mo, *extension_arh;
+update_orbs_fp update_orbs_mo_funptr, update_orbs_density_qn_funptr;
+obj_func_fp obj_func_mo_funptr, obj_func_density_qn_funptr;
+void *extension_mo, *extension_density_qn;
 solver_state_type state;
 c_int error = mo_factory(mo_coeff,
                          ao_overlap,
@@ -1234,7 +1234,7 @@ n_param = n_occ[0] * (n_mo - n_occ[0]);
 
 // get the exact Hessian linear transformation of the MO object, which follows the
 // orbitals, for the stability check from its orbital update at the starting orbitals,
-// before the ARH factory, which keeps it with the context of the MO object
+// before the density QN factory, which keeps it with the context of the MO object
 hess_x_fp hess_x_mo_funptr;
 error = update_orbs_mo_funptr(kappa,
                               &func,
@@ -1244,20 +1244,20 @@ error = update_orbs_mo_funptr(kappa,
                               settings.context);
 settings.stability_hess_x = hess_x_mo_funptr;
 
-// wire the settings with a new ARH object built on the MO object
-error = arh_factory(evaluate_dm_funptr,
-                    &update_orbs_arh_funptr,
-                    &obj_func_arh_funptr,
-                    &extension_arh,
+// wire the settings with a new density QN object built on the MO object
+error = density_qn_factory(evaluate_dm_funptr,
+                    &update_orbs_density_qn_funptr,
+                    &obj_func_density_qn_funptr,
+                    &extension_density_qn,
                     &settings,
                     &state,
-                    &arh_settings);
+                    &density_qn_settings);
 
 // call solver
-error = solver(update_orbs_arh_funptr, obj_func_arh_funptr, n_param, &settings, &state);
+error = solver(update_orbs_density_qn_funptr, obj_func_density_qn_funptr, n_param, &settings, &state);
 
-// release the ARH object and then the MO object
-release_extension(extension_arh);
+// release the density QN object and then the MO object
+release_extension(extension_density_qn);
 release_extension(extension_mo);
 ```
 
@@ -1268,13 +1268,13 @@ The following Python snippet demonstrates the equivalent usage through the Pytho
 ```python
 from pyopentrustregion import SolverSettings, SolverState, solver
 from pyopentrustregion.extensions.mo import mo_factory
-from pyopentrustregion.extensions.arh import ARHSettings, arh_factory
+from pyopentrustregion.extensions.density_qn import DensityQNSettings, density_qn_factory
 
-# initialize ARH settings
-arh_settings = ARHSettings()
+# initialize density QN settings
+density_qn_settings = DensityQNSettings()
 
 # override default settings
-arh_settings.verbose = 1
+density_qn_settings.verbose = 1
 
 # initialize settings and state and request a stability check of the converged solution
 settings = SolverSettings()
@@ -1294,36 +1294,36 @@ n_param = sum(occ * (n_mo - occ) for occ in np.atleast_1d(n_occ))
 _, hess_x_mo = update_orbs_mo(np.zeros(n_param), np.empty(n_param), np.empty(n_param))
 settings.stability_hess_x = hess_x_mo
 
-# wire the settings with a new ARH object built on the MO object
-update_orbs_arh, obj_func_arh = arh_factory(evaluate_dm, settings, state, arh_settings)
+# wire the settings with a new density QN object built on the MO object
+update_orbs_density_qn, obj_func_density_qn = density_qn_factory(evaluate_dm, settings, state, density_qn_settings)
 
 # call solver
-solver(update_orbs_arh, obj_func_arh, n_param, settings, state)
+solver(update_orbs_density_qn, obj_func_density_qn, n_param, settings, state)
 ```
 
 ---
 
 - `mo_coeff`, `ao_overlap`, `n_occ`, `n_particle`, `n_ao` and `n_mo` are assumed to be prepared elsewhere, in C also `kappa`, a zero vector, and `grad` and `h_diag`, each with `n_param` elements.
 - `evaluate_dm_mo`, the exact density matrix evaluating function of the MO extension, and `evaluate_dm` are callback procedures provided elsewhere.
-- ARH settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
-- In the OAO basis, `oao_factory` takes the place of `mo_factory`, with the number of parameters of the OAO basis; the call of the ARH factory is the same. The MO and the OAO basis build on the MO and the OAO extension, which `-DENABLE_ARH=ON` always builds.
-- The stability of the converged solution has to be decided with the exact Hessian, which the orbital basis object provides through its exact `evaluate_dm`, not with the approximate Hessian of ARH. The Hessian linear transformation the orbital update of the orbital basis factory returns follows the orbitals as ARH moves them, so it is obtained once, at the starting orbitals, and set as `stability_hess_x`. Fortran and C hosts set it before calling `arh_factory`, which keeps it together with the context of the orbital basis object: set after it, it receives the context of the ARH object and applies the approximate Hessian of ARH instead, without an error. Since the ARH object needs neither, the orbital basis factory can be given no `evaluate_dm` and the stability check left out, which is not recommended.
-- The ARH factory returns two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings and the state record. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
-- Every ARH type fits the linear (Coulomb and exact-exchange) part of the response to the whole history, whose secant pairs are exact at any distance, and the non-linear (exchange-correlation) part only to the history within two trust radii of the current point, since a non-linear secant pair is only accurate for a short step: its error grows with the step length.
-- Of the five `arh_type` options below, only `"arh"` breaks Hessian symmetry; `"symm_arh"`, `"ms_psb"`, `"ms_sp"`, and the default `"ms_sr1"` are symmetric. The factory sets `hess_symm` of the solver settings accordingly.
-- The ARH and orbital basis objects are freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases the ARH extension before that of the orbital basis with `release_extension`. The final orbitals are the MO coefficients or the AO density matrix passed to the orbital basis factory, which are updated in place.
+- Density QN settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose`) can then be overridden.
+- In the OAO basis, `oao_factory` takes the place of `mo_factory`, with the number of parameters of the OAO basis; the call of the density QN factory is the same. The MO and the OAO basis build on the MO and the OAO extension, which `-DENABLE_DENSITY_QN=ON` always builds.
+- The stability of the converged solution has to be decided with the exact Hessian, which the orbital basis object provides through its exact `evaluate_dm`, not with the approximate Hessian of density QN. The Hessian linear transformation the orbital update of the orbital basis factory returns follows the orbitals as density QN moves them, so it is obtained once, at the starting orbitals, and set as `stability_hess_x`. Fortran and C hosts set it before calling `density_qn_factory`, which keeps it together with the context of the orbital basis object: set after it, it receives the context of the density QN object and applies the approximate Hessian of density QN instead, without an error. Since the density QN object needs neither, the orbital basis factory can be given no `evaluate_dm` and the stability check left out, which is not recommended.
+- The density QN factory returns two procedures, `update_orbs` and `obj_func`, which are passed to the normal `solver` together with the wired settings and the state record. To use the `solver`'s default diagonal preconditioner or no extra trial vectors instead, unset the corresponding callback function, and its stability check counterpart, after the factory call.
+- Every QN method fits the linear (Coulomb and exact-exchange) part of the response to the whole history, whose secant pairs are exact at any distance, and the non-linear (exchange-correlation) part only to the history within two trust radii of the current point, since a non-linear secant pair is only accurate for a short step: its error grows with the step length.
+- Of the five `qn_method` options below, only `"arh"` breaks Hessian symmetry; `"symm_arh"`, `"ms_psb"`, `"ms_sp"`, and the default `"ms_sr1"` are symmetric. The factory sets `hess_symm` of the solver settings accordingly.
+- The density QN and orbital basis objects are freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases the density QN extension before that of the orbital basis with `release_extension`. The final orbitals are the MO coefficients or the AO density matrix passed to the orbital basis factory, which are updated in place.
 
 #### Optional Settings
-The ARH factory can be fine-tuned using the following settings:
+The density QN factory can be fine-tuned using the following settings:
 
-- **`arh_type`** (string): Specifies which ARH type to use. Options include:
+- **`qn_method`** (string): Specifies which QN method to use. Options include:
   - `"arh"`: standard ARH method which is not symmetric but fulfills all multisecant conditions,
-  - `"symm_arh"`: simple symmetrized version of ARH which does not fulfill the multisecant conditions,
+  - `"symm_arh"`: simple symmetrized version of density QN which does not fulfill the multisecant conditions,
   - `"ms_psb"`: multisecant Powell symmetric Broyden which is only symmetric and fulfills all multisecant conditions for HF and other methods for which the energy is quadratic in the density matrix,
   - `"ms_sp"`: subspace-projected multisecant method,
   - `"ms_sr1"`: multisecant symmetric-rank-1 method, which treats the linear (Coulomb and exact exchange) part of the response exactly as the difference of a Coulomb and an exact-exchange multisecant term, each bounded by its positive semidefinite kernel, and the non-linear (exchange-correlation) part through a separate multisecant system regularized by the multisecant analogue of the SR1 skipping criterion.
-- **`verbose`** (integer): Controls the verbosity of output of the ARH routines.
-- **`logger`** (subroutine): Accepts a log message of the ARH routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`verbose`** (integer): Controls the verbosity of output of the density QN routines.
+- **`logger`** (subroutine): Accepts a log message of the density QN routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ### Subspace Gradient-Enhanced Kriging Extension

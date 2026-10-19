@@ -1721,9 +1721,9 @@ contains
             end if
 
             ! mark the response as stale, as an approximate-Hessian extension such as
-            ! ARH would after moving the orbitals without going through this routine,
-            ! and call again without an orbital rotation, and determine if this forces
-            ! an evaluation and clears the flag
+            ! density QN would after moving the orbitals without going through this
+            ! routine, and call again without an orbital rotation, and determine if
+            ! this forces an evaluation and clears the flag
             mo%response_stale = .true.
             if (.not. check_update_orbs_mo_stage(2_ip, "a stale response")) &
                 test_update_orbs_mo = .false.
@@ -1960,8 +1960,8 @@ contains
             deallocate(mo, x, hess_x)
         end do
 
-        ! set up the open-shell MO object again, mark the response as stale, as ARH
-        ! would after moving the orbitals without going through the orbital updating
+        ! set up the open-shell MO object again, mark the response as stale, as density
+        ! QN would after moving the orbitals without going through the orbital updating
         ! routine, replace the response function by one of outdated orbitals, and
         ! determine if this triggers the density matrix evaluating function to refresh
         ! the response, which is then used

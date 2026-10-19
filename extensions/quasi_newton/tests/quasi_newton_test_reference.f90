@@ -4,11 +4,11 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module otr_qn_test_reference
+module otr_rotation_qn_test_reference
 
     use opentrustregion, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
-    use otr_qn, only: qn_settings_type
+    use otr_rotation_qn, only: rotation_qn_settings_type
     use test_reference, only: n_param, tol, tol_c
     use, intrinsic :: iso_c_binding, only: &
         c_size_t, c_sizeof, c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, &
@@ -16,19 +16,20 @@ module otr_qn_test_reference
 
     implicit none
 
-    ! reference quasi-Newton settings, every field but the logging function and the
-    ! host context differing from its default and every integer from the other
-    type(qn_settings_type), parameter :: ref_qn_settings = qn_settings_type( &
-        logger=null(), verbose=3, max_points=100, hess_update_scheme="bfgs")
+    ! reference rotation QN settings, every field but the logging function and the host
+    ! context differing from its default and every integer from the other
+    type(rotation_qn_settings_type), parameter :: ref_rotation_qn_settings = &
+        rotation_qn_settings_type(logger=null(), verbose=3, max_points=100, &
+                                  qn_method="bfgs")
 
     interface operator(==)
-        module procedure equal_qn
-        module procedure equal_qn_c
+        module procedure equal_rotation_qn
+        module procedure equal_rotation_qn_c
     end interface
 
     interface operator(/=)
-        module procedure not_equal_qn
-        module procedure not_equal_qn_c
+        module procedure not_equal_rotation_qn
+        module procedure not_equal_rotation_qn_c
     end interface
 
 contains
@@ -38,7 +39,7 @@ contains
         !
         ! this function tests a provided transport function pointer
         !
-        use otr_qn, only: transport_type
+        use otr_rotation_qn, only: transport_type
 
         procedure(transport_type), intent(in), pointer :: transport_funptr
         character(len=*), intent(in) :: test_name, message
@@ -93,7 +94,7 @@ contains
         !
         ! this function tests a provided transport C function pointer
         !
-        use otr_qn_c_interface, only: transport_c_type
+        use otr_rotation_qn_c_interface, only: transport_c_type
 
         type(c_funptr), intent(in) :: transport_c_funptr
         character(len=*), intent(in) :: test_name, message
@@ -152,7 +153,7 @@ contains
         !
         ! this function tests a provided initial Hessian function pointer
         !
-        use otr_qn, only: init_hess_type
+        use otr_rotation_qn, only: init_hess_type
 
         procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         character(len=*), intent(in) :: test_name, message
@@ -206,7 +207,7 @@ contains
         !
         ! this function tests a provided initial Hessian C function pointer
         !
-        use otr_qn_c_interface, only: init_hess_c_type
+        use otr_rotation_qn_c_interface, only: init_hess_c_type
 
         type(c_funptr), intent(in) :: init_hess_c_funptr
         character(len=*), intent(in) :: test_name, message
@@ -259,16 +260,16 @@ contains
 
     end function check_init_hess_c_funptr
 
-    subroutine get_reference_qn_values(values_out) bind(C)
+    subroutine get_reference_rotation_qn_values(values_out) bind(C)
         !
-        ! this subroutine exports the reference quasi-Newton settings as C settings
+        ! this subroutine exports the reference rotation QN settings as C settings
         ! whose fields are set one by one without the conversion routines under test,
         ! the logging function and the host context are set to distinct addresses
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use test_reference, only: ref_character_to_c
 
-        type(qn_settings_type_c), intent(out) :: values_out
+        type(rotation_qn_settings_type_c), intent(out) :: values_out
 
         ! set logging function and host context to distinct addresses
         values_out%logger = transfer(1_c_intptr_t, c_null_funptr)
@@ -276,34 +277,33 @@ contains
 
         ! set logical, integers and keyword
         values_out%initialized = .true.
-        values_out%verbose = int(ref_qn_settings%verbose, kind=c_ip)
-        values_out%max_points = int(ref_qn_settings%max_points, kind=c_ip)
-        values_out%hess_update_scheme = &
-            ref_character_to_c(ref_qn_settings%hess_update_scheme)
+        values_out%verbose = int(ref_rotation_qn_settings%verbose, kind=c_ip)
+        values_out%max_points = int(ref_rotation_qn_settings%max_points, kind=c_ip)
+        values_out%qn_method = ref_character_to_c(ref_rotation_qn_settings%qn_method)
 
-    end subroutine get_reference_qn_values
+    end subroutine get_reference_rotation_qn_values
 
-    subroutine reference_qn_field(name_c, field_value, keyword_c) bind(C)
+    subroutine reference_rotation_qn_field(name_c, field_value, keyword_c) bind(C)
         !
-        ! this subroutine returns the value of a field of the C quasi-Newton settings
-        ! exported by get_reference_qn_values by its name, a numeric, logical (as 1 or
-        ! 0) or pointer (as its address) field in field_value and a keyword field as a
-        ! null-terminated character array in keyword_c, so that the Python tests need no
-        ! values of their own
+        ! this subroutine returns the value of a field of the C rotation QN settings
+        ! exported by get_reference_rotation_qn_values by its name, a numeric, logical
+        ! (as 1 or 0) or pointer (as its address) field in field_value and a keyword
+        ! field as a null-terminated character array in keyword_c, so that the Python
+        ! tests need no values of their own
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use test_reference, only: ref_character_from_c
 
         character(kind=c_char), intent(in) :: name_c(*)
         real(c_rp), intent(out) :: field_value
         character(kind=c_char), intent(out) :: keyword_c(kw_len + 1)
 
-        type(qn_settings_type_c) :: values
+        type(rotation_qn_settings_type_c) :: values
 
         ! export reference values and select field by name
         field_value = 0.0_c_rp
         keyword_c = c_null_char
-        call get_reference_qn_values(values)
+        call get_reference_rotation_qn_values(values)
         select case (ref_character_from_c(name_c))
         case ("logger")
             field_value = real(transfer(values%logger, 0_c_intptr_t), kind=c_rp)
@@ -315,97 +315,98 @@ contains
             field_value = values%verbose
         case ("max_points")
             field_value = values%max_points
-        case ("hess_update_scheme")
-            keyword_c = values%hess_update_scheme
+        case ("qn_method")
+            keyword_c = values%qn_method
         end select
 
-    end subroutine reference_qn_field
+    end subroutine reference_rotation_qn_field
 
-    logical(c_bool) function is_default_qn_settings(settings_c) bind(C)
+    logical(c_bool) function is_default_rotation_qn_settings(settings_c) bind(C)
         !
-        ! this function checks whether C quasi-Newton settings hold the default values
+        ! this function checks whether C rotation QN settings hold the default values
         ! without logging function and host context, so that a C test can compare
         ! against them without values of its own
         !
-        use otr_qn, only: default_qn_settings
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn, only: default_rotation_qn_settings
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
 
-        type(qn_settings_type_c), intent(in) :: settings_c
+        type(rotation_qn_settings_type_c), intent(in) :: settings_c
 
-        is_default_qn_settings = settings_c == default_qn_settings .and. &
-                                 .not. c_associated(settings_c%logger) .and. &
-                                 .not. c_associated(settings_c%context)
+        is_default_rotation_qn_settings = &
+            settings_c == default_rotation_qn_settings .and. &
+            .not. c_associated(settings_c%logger) .and. &
+            .not. c_associated(settings_c%context)
 
-    end function is_default_qn_settings
+    end function is_default_rotation_qn_settings
 
-    integer(c_size_t) function qn_settings_size() bind(C)
+    integer(c_size_t) function rotation_qn_settings_size() bind(C)
         !
-        ! this function returns the size of the C quasi-Newton settings, so that the
+        ! this function returns the size of the C rotation QN settings, so that the
         ! layout tests detect a field missing from the C or Python settings
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
 
-        type(qn_settings_type_c) :: settings_c
+        type(rotation_qn_settings_type_c) :: settings_c
 
-        qn_settings_size = c_sizeof(settings_c)
+        rotation_qn_settings_size = c_sizeof(settings_c)
 
-    end function qn_settings_size
+    end function rotation_qn_settings_size
 
-    logical function equal_qn(lhs, rhs)
+    logical function equal_rotation_qn(lhs, rhs)
         !
-        ! this function overloads the comparison operator to compare quasi-Newton
-        ! settings to different quasi-Newton settings
+        ! this function overloads the comparison operator to compare rotation QN
+        ! settings to different rotation QN settings
         !
-        type(qn_settings_type), intent(in) :: lhs, rhs
+        type(rotation_qn_settings_type), intent(in) :: lhs, rhs
 
-        equal_qn = lhs%verbose == rhs%verbose .and. &
-                   lhs%max_points == rhs%max_points .and. &
-                   lhs%hess_update_scheme == rhs%hess_update_scheme
+        equal_rotation_qn = lhs%verbose == rhs%verbose .and. &
+                            lhs%max_points == rhs%max_points .and. &
+                            lhs%qn_method == rhs%qn_method
 
-    end function equal_qn
+    end function equal_rotation_qn
 
-    logical function not_equal_qn(lhs, rhs)
+    logical function not_equal_rotation_qn(lhs, rhs)
         !
-        ! this function overloads the negated comparison operator to compare
-        ! quasi-Newton settings to different quasi-Newton settings
+        ! this function overloads the negated comparison operator to compare rotation
+        ! QN settings to different rotation QN settings
         !
-        type(qn_settings_type), intent(in) :: lhs, rhs
+        type(rotation_qn_settings_type), intent(in) :: lhs, rhs
 
-        not_equal_qn = .not. (lhs == rhs)
+        not_equal_rotation_qn = .not. (lhs == rhs)
 
-    end function not_equal_qn
+    end function not_equal_rotation_qn
 
-    logical function equal_qn_c(lhs_c, rhs)
+    logical function equal_rotation_qn_c(lhs_c, rhs)
         !
-        ! this function overloads the comparison operator to compare C quasi-Newton
-        ! settings to Fortran quasi-Newton settings field by field, independently of
-        ! the conversion routines under test
+        ! this function overloads the comparison operator to compare C rotation QN
+        ! settings to Fortran rotation QN settings field by field, independently of the
+        ! conversion routines under test
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use test_reference, only: ref_character_from_c
 
-        type(qn_settings_type_c), intent(in) :: lhs_c
-        type(qn_settings_type), intent(in) :: rhs
+        type(rotation_qn_settings_type_c), intent(in) :: lhs_c
+        type(rotation_qn_settings_type), intent(in) :: rhs
 
-        equal_qn_c = lhs_c%initialized .and. lhs_c%verbose == rhs%verbose .and. &
-                     lhs_c%max_points == rhs%max_points .and. &
-                     ref_character_from_c(lhs_c%hess_update_scheme) == &
-                     trim(rhs%hess_update_scheme)
+        equal_rotation_qn_c = &
+            lhs_c%initialized .and. lhs_c%verbose == rhs%verbose .and. &
+            lhs_c%max_points == rhs%max_points .and. &
+            ref_character_from_c(lhs_c%qn_method) == trim(rhs%qn_method)
 
-    end function equal_qn_c
+    end function equal_rotation_qn_c
 
-    logical function not_equal_qn_c(lhs_c, rhs)
+    logical function not_equal_rotation_qn_c(lhs_c, rhs)
         !
-        ! this function overloads the negated comparison operator to compare C
-        ! quasi-Newton settings to Fortran quasi-Newton settings
+        ! this function overloads the negated comparison operator to compare C rotation
+        ! QN settings to Fortran rotation QN settings
         !
-        use otr_qn_c_interface, only: qn_settings_type_c
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
 
-        type(qn_settings_type_c), intent(in) :: lhs_c
-        type(qn_settings_type), intent(in) :: rhs
+        type(rotation_qn_settings_type_c), intent(in) :: lhs_c
+        type(rotation_qn_settings_type), intent(in) :: rhs
 
-        not_equal_qn_c = .not. (lhs_c == rhs)
+        not_equal_rotation_qn_c = .not. (lhs_c == rhs)
 
-    end function not_equal_qn_c
+    end function not_equal_rotation_qn_c
 
-end module otr_qn_test_reference
+end module otr_rotation_qn_test_reference

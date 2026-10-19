@@ -1284,9 +1284,9 @@ contains
             end if
 
             ! mark the response as stale, as an approximate-Hessian extension such as
-            ! ARH would after moving the density without going through this routine,
-            ! and call again without an orbital rotation, and determine if this forces
-            ! an evaluation and clears the flag
+            ! density QN would after moving the density without going through this
+            ! routine, and call again without an orbital rotation, and determine if
+            ! this forces an evaluation and clears the flag
             oao%response_stale = .true.
             if (.not. check_update_orbs_oao_stage(2_ip, "a stale response")) &
                 test_update_orbs_oao = .false.
@@ -1542,11 +1542,11 @@ contains
             context%mock_error = 0
         end do
 
-        ! mark the response as stale, as ARH would after moving the density without
-        ! going through the orbital updating routine, replace the response function by
-        ! one of an outdated density and call again for the open-shell trial vector,
-        ! and determine if this triggers the density matrix evaluating function to
-        ! refresh the response, which is then used
+        ! mark the response as stale, as density QN would after moving the density
+        ! without going through the orbital updating routine, replace the response
+        ! function by one of an outdated density and call again for the open-shell
+        ! trial vector, and determine if this triggers the density matrix evaluating
+        ! function to refresh the response, which is then used
         oao%dm_ao => dm_oao
         oao%evaluate_dm_os => mock_evaluate_dm_os
         oao%get_response_os => mock_get_stale_response_os

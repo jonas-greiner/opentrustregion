@@ -95,7 +95,7 @@ def setup_mo_toy_run(n_particle):
     """
     this function prepares a solve of the toy model in the MO basis and the given shell
     through the MO factory and returns the run and the functions the factory returned,
-    also for the integration tests of ARH
+    also for the integration tests of density QN
     """
     run = ToyRun(True, n_particle)
     update_orbs, obj_func = mo_factory(
@@ -328,7 +328,8 @@ class MOPyInterfaceTests(unittest.TestCase):
 
             # check if MO coefficients stored column-major in double precision are
             # rotated in place and all others copied back, by the returned orbital
-            # updating function and for the ARH factory by the owner of the object
+            # updating function and for the density QN factory by the owner of the
+            # object
             in_place = column_major and dtype == np.float64
             owner = solver_settings._extension_owner
             if (
@@ -353,8 +354,8 @@ class MOPyInterfaceTests(unittest.TestCase):
 
         # call MO factory python interface without settings and without a density
         # matrix evaluating function, which have to be passed as none, and determine if
-        # the owner of the object holds the dimensions of the orbitals for the ARH
-        # factory
+        # the owner of the object holds the dimensions of the orbitals for the density
+        # QN factory
         settings_flag = c_bool.in_dll(lib, "mo_settings_passed")
         evaluate_dm_flag = c_bool.in_dll(lib, "mo_evaluate_dm_passed")
         settings_flag.value = True

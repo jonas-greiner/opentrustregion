@@ -40,10 +40,10 @@ void init_oao_settings(oao_settings_type *settings);
  *                                                n_ao^2)
  * @param n_particle_c                            Number of particles
  * @param n_ao_c                                  Number of AO basis functions
- * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback, may
- *                                                be NULL for an object only ARH builds
- *                                                on, whose returned functions then
- *                                                return an error
+ * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback,
+ *                                                may be NULL for an object only
+ *                                                density QN builds on, whose returned
+ *                                                functions then return an error
  * @param update_orbs_oao_c_funptr                Output: wrapped update_orbs function
  *                                                pointer
  * @param obj_func_oao_c_funptr                   Output: wrapped objective function

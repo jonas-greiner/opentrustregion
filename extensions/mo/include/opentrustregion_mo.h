@@ -46,10 +46,10 @@ void init_mo_settings(mo_settings_type *settings);
  * @param n_particle_c                            Number of particles
  * @param n_ao_c                                  Number of AO basis functions
  * @param n_mo_c                                  Number of MOs
- * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback, may
- *                                                be NULL for an object only ARH builds
- *                                                on, whose returned functions then
- *                                                return an error
+ * @param evaluate_dm_c_funptr                    C pointer to evaluate_dm callback,
+ *                                                may be NULL for an object only
+ *                                                density QN builds on, whose returned
+ *                                                functions then return an error
  * @param update_orbs_mo_c_funptr                 Output: wrapped update_orbs function
  *                                                pointer
  * @param obj_func_mo_c_funptr                    Output: wrapped objective function

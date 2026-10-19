@@ -97,7 +97,7 @@ def setup_oao_toy_run(n_particle):
     """
     this function prepares a solve of the toy model in the OAO basis and the given shell
     through the OAO factory and returns the run and the functions the factory returned,
-    also for the integration tests of ARH
+    also for the integration tests of density QN
     """
     run = ToyRun(False, n_particle)
     update_orbs, obj_func = oao_factory(
@@ -348,8 +348,8 @@ class OAOPyInterfaceTests(unittest.TestCase):
 
         # call OAO factory python interface without settings and without a density
         # matrix evaluating function, which have to be passed as none, and determine if
-        # the owner of the object holds the dimensions of the orbitals for the ARH
-        # factory and keeps the density matrix alive
+        # the owner of the object holds the dimensions of the orbitals for the density
+        # QN factory and keeps the density matrix alive
         settings_flag = c_bool.in_dll(lib, "oao_settings_passed")
         evaluate_dm_flag = c_bool.in_dll(lib, "oao_evaluate_dm_passed")
         settings_flag.value = True

@@ -4,12 +4,12 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module otr_arh_unit_tests
+module otr_density_qn_unit_tests
 
     use opentrustregion, only: rp, ip, stderr
     use test_reference, only: tol
     use otr_common_unit_tests, only: mock_orbital_basis_type
-    use otr_arh, only: arh_mo_type
+    use otr_density_qn, only: density_qn_mo_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -28,13 +28,14 @@ module otr_arh_unit_tests
     real(rp), parameter :: mock_v_nonlinear_factor = 6.0_rp
 
     ! multipliers the mock density matrix evaluating functions apply on their first
-    ! call to the potentials the ARH object keeps, in the order of stacked_potentials
+    ! call to the potentials the density QN object keeps, in the order of
+    ! stacked_potentials
     real(rp), parameter :: mock_potential_factors(3) = &
         [mock_v_coulomb_factor(1), mock_v_exchange_factor(1), mock_v_nonlinear_factor]
 
-    ! orbital basis which records what the roles an ARH object hands on to its orbitals
-    ! receive and returns three times its input with the error code it is set to, for
-    ! the tests of these roles
+    ! orbital basis which records what the roles a density QN object hands on to its
+    ! orbitals receive and returns three times its input with the error code it is set
+    ! to, for the tests of these roles
     type, extends(mock_orbital_basis_type) :: recording_basis_type
         real(rp), allocatable :: received(:)
         class(*), pointer :: received_context => null()
@@ -45,11 +46,11 @@ module otr_arh_unit_tests
         procedure :: get_extra_trial_vectors => recording_basis_extra_trial_vectors
     end type
 
-    ! ARH object in the MO basis which records the calls of the inverse of its
+    ! density QN object in the MO basis which records the calls of the inverse of its
     ! approximate Hessian and of the builders of its model and returns three times the
     ! vector it receives with the error code it is set to, for the tests of the
     ! routines which hand on to them
-    type, extends(arh_mo_type) :: recording_arh_type
+    type, extends(density_qn_mo_type) :: recording_density_qn_type
         real(rp), allocatable :: received(:)
         logical :: level_shift_received = .false.
         real(rp) :: received_level_shift = 0.0_rp
@@ -255,9 +256,9 @@ contains
     subroutine recording_inv_hess_x(self, x, inv_hess_x, error, level_shift)
         !
         ! this subroutine records the vector and the level shift the inverse of the
-        ! approximate Hessian of the recording ARH object receives
+        ! approximate Hessian of the recording density QN object receives
         !
-        class(recording_arh_type), intent(inout) :: self
+        class(recording_density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: inv_hess_x(:)
         integer(ip), intent(out) :: error
@@ -274,9 +275,9 @@ contains
     subroutine recording_build_hess_model_cs(self, error)
         !
         ! this subroutine records that the closed-shell model builder of the recording
-        ! ARH object was called
+        ! density QN object was called
         !
-        class(recording_arh_type), intent(inout) :: self
+        class(recording_density_qn_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         self%built_shell = "cs"
@@ -287,9 +288,9 @@ contains
     subroutine recording_build_hess_model_os(self, error)
         !
         ! this subroutine records that the open-shell model builder of the recording
-        ! ARH object was called
+        ! density QN object was called
         !
-        class(recording_arh_type), intent(inout) :: self
+        class(recording_density_qn_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
         self%built_shell = "os"
@@ -356,19 +357,20 @@ contains
 
     end function generate_random_psd_matrix
 
-    subroutine setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
+    subroutine setup_density_qn_and_mo_objects(density_qn, mo, mo_coeff, ao_overlap, &
+                                               n_occ, context)
         !
-        ! this subroutine sets up the given MO and ARH objects for orbitals
-        ! parameterized in the MO basis the way the MO and ARH factories would,
+        ! this subroutine sets up the given MO and density QN objects for orbitals
+        ! parameterized in the MO basis the way the MO and density QN factories would,
         ! pointing to the test-local MO coefficients
         !
-        use otr_common, only: error_arh
-        use otr_arh, only: arh_type, arh_mo_type
+        use otr_common, only: error_density_qn
+        use otr_density_qn, only: density_qn_type, density_qn_mo_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_unit_tests, only: setup_mo_object
 
-        class(arh_type), allocatable, intent(out) :: arh
+        class(density_qn_type), allocatable, intent(out) :: density_qn
         type(mo_type), allocatable, intent(out), target :: mo
         real(rp), intent(inout), target, contiguous :: mo_coeff(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -378,30 +380,30 @@ contains
         ! set up the MO object
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
 
-        ! set up the ARH object in the MO basis
-        allocate(arh, source=arh_mo_type(mo))
-        arh%error_origin = error_arh
-        call setup_settings(arh%settings, context)
+        ! set up the density QN object in the MO basis
+        allocate(density_qn, source=density_qn_mo_type(mo))
+        density_qn%error_origin = error_density_qn
+        call setup_settings(density_qn%settings, context)
 
-    end subroutine setup_arh_and_mo_objects
+    end subroutine setup_density_qn_and_mo_objects
 
-    subroutine setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, dm_oao, &
-                                                context)
+    subroutine setup_density_qn_and_scaled_oao_objects(density_qn, oao, basis_scale, &
+                                                       dm_ao, dm_oao, context)
         !
         ! this subroutine sets up the given OAO object for random density matrices in
         ! an AO basis whose overlap has the inverse square root c I, so that the
-        ! transformation to the OAO basis scales by c^2, and the given ARH object
-        ! pointing to it the way the ARH factory would
+        ! transformation to the OAO basis scales by c^2, and the given density QN
+        ! object pointing to it the way the density QN factory would
         !
-        use otr_common, only: error_oao, error_arh
-        use otr_arh, only: arh_type, arh_oao_type
+        use otr_common, only: error_oao, error_density_qn
+        use otr_density_qn, only: density_qn_type, density_qn_oao_type
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
         use otr_common_unit_tests, only: generate_random_density_matrix
         use otr_common_test_reference, only: n_occ
 
-        class(arh_type), allocatable, intent(out) :: arh
+        class(density_qn_type), allocatable, intent(out) :: density_qn
         type(oao_type), allocatable, intent(out), target :: oao
         real(rp), intent(in) :: basis_scale
         real(rp), intent(out), target, contiguous :: dm_ao(:, :, :)
@@ -431,64 +433,65 @@ contains
                  oao%fock_vv(n_ao, n_ao, n_particle), oao%grad(n_param), &
                  oao%h_diag(n_param))
 
-        ! set up the ARH object
-        allocate(arh, source=arh_oao_type(oao))
-        arh%error_origin = error_arh
-        call setup_settings(arh%settings, context)
+        ! set up the density QN object
+        allocate(density_qn, source=density_qn_oao_type(oao))
+        density_qn%error_origin = error_density_qn
+        call setup_settings(density_qn%settings, context)
 
-    end subroutine setup_arh_and_scaled_oao_objects
+    end subroutine setup_density_qn_and_scaled_oao_objects
 
-    subroutine setup_empty_history(arh, n_particle)
+    subroutine setup_empty_history(density_qn, n_particle)
         !
-        ! this subroutine sets up the given ARH object with an empty history and
+        ! this subroutine sets up the given density QN object with an empty history and
         ! vanishing potentials at the current point for the closed- or open-shell case
         !
-        use otr_arh, only: arh_type
+        use otr_density_qn, only: density_qn_type
 
-        class(arh_type), intent(inout) :: arh
+        class(density_qn_type), intent(inout) :: density_qn
         integer(ip), intent(in) :: n_particle
 
         integer(ip) :: n_ao
 
-        n_ao = arh%orbitals%n_ao
-        allocate(arh%dm_list(n_ao, n_ao, n_particle, 0), &
-                 arh%v_coulomb_list(n_ao, n_ao, n_particle, 0), &
-                 arh%v_exchange_list(n_ao, n_ao, n_particle, 0), &
-                 arh%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
-        allocate(arh%v_coulomb(n_ao, n_ao, n_particle), &
-                 arh%v_exchange(n_ao, n_ao, n_particle), &
-                 arh%v_nonlinear(n_ao, n_ao, n_particle))
-        arh%v_coulomb = 0.0_rp
-        arh%v_exchange = 0.0_rp
-        arh%v_nonlinear = 0.0_rp
+        n_ao = density_qn%orbitals%n_ao
+        allocate(density_qn%dm_list(n_ao, n_ao, n_particle, 0), &
+                 density_qn%v_coulomb_list(n_ao, n_ao, n_particle, 0), &
+                 density_qn%v_exchange_list(n_ao, n_ao, n_particle, 0), &
+                 density_qn%v_nonlinear_list(n_ao, n_ao, n_particle, 0))
+        allocate(density_qn%v_coulomb(n_ao, n_ao, n_particle), &
+                 density_qn%v_exchange(n_ao, n_ao, n_particle), &
+                 density_qn%v_nonlinear(n_ao, n_ao, n_particle))
+        density_qn%v_coulomb = 0.0_rp
+        density_qn%v_exchange = 0.0_rp
+        density_qn%v_nonlinear = 0.0_rp
         if (n_particle == 1) then
-            arh%evaluate_dm_cs => mock_evaluate_dm_cs
+            density_qn%evaluate_dm_cs => mock_evaluate_dm_cs
         else
-            arh%evaluate_dm_os => mock_evaluate_dm_os
+            density_qn%evaluate_dm_os => mock_evaluate_dm_os
         end if
 
     end subroutine setup_empty_history
 
-    function stacked_potentials(arh, k) result(potentials)
+    function stacked_potentials(density_qn, k) result(potentials)
         !
-        ! this function stacks the potentials the given ARH object keeps along the last
-        ! dimension, the current ones for k = 0 and those of the k-th history entry
-        ! otherwise
+        ! this function stacks the potentials the given density QN object keeps along
+        ! the last dimension, the current ones for k = 0 and those of the k-th history
+        ! entry otherwise
         !
-        use otr_arh, only: arh_type
+        use otr_density_qn, only: density_qn_type
 
-        class(arh_type), intent(in) :: arh
+        class(density_qn_type), intent(in) :: density_qn
         integer(ip), intent(in) :: k
         real(rp), allocatable :: potentials(:, :, :, :)
 
         if (k == 0) then
-            potentials = reshape([arh%v_coulomb, arh%v_exchange, arh%v_nonlinear], &
-                                 [shape(arh%v_nonlinear), 3])
-        else
             potentials = reshape( &
-                [arh%v_coulomb_list(:, :, :, k), arh%v_exchange_list(:, :, :, k), &
-                 arh%v_nonlinear_list(:, :, :, k)], &
-                [shape(arh%v_nonlinear_list(:, :, :, k)), 3])
+                [density_qn%v_coulomb, density_qn%v_exchange, density_qn%v_nonlinear], &
+                [shape(density_qn%v_nonlinear), 3])
+        else
+            potentials = reshape([density_qn%v_coulomb_list(:, :, :, k), &
+                                  density_qn%v_exchange_list(:, :, :, k), &
+                                  density_qn%v_nonlinear_list(:, :, :, k)], &
+                                 [shape(density_qn%v_nonlinear_list(:, :, :, k)), 3])
         end if
 
     end function stacked_potentials
@@ -516,7 +519,7 @@ contains
         ! the level of numerical noise are discarded, as are directions whose
         ! eigenvalue is small against the norm of the response they divide
         !
-        use otr_arh, only: eig_val_noise_factor, ms_sr1_skip_thresh
+        use otr_density_qn, only: eig_val_noise_factor, ms_sr1_skip_thresh
 
         real(rp), intent(in) :: a_tilde(:, :), y_gram(:, :)
         real(rp), allocatable :: a_inv(:, :)
@@ -557,7 +560,7 @@ contains
         ! semidefinite in exact arithmetic: eigenvalues above the noise floor relative
         ! to the given spectral scale are inverted, all others discarded
         !
-        use otr_arh, only: eig_val_noise_factor
+        use otr_density_qn, only: eig_val_noise_factor
 
         real(rp), intent(in) :: a_tilde(:, :), scale
         real(rp), allocatable :: a_inv(:, :)
@@ -631,18 +634,18 @@ contains
         !
         ! this function checks the assembly of the approximate Hessian model from the
         ! history for the closed- or open-shell case: standard ARH has to reproduce any
-        ! history in the MO basis exactly and every other ARH type one that symmetric
+        ! history in the MO basis exactly and every other QN method one that symmetric
         ! linear Coulomb and exact-exchange kernels produce, subspace-projected
         ! multisecant and symmetrized ARH only in the closed-shell case, where its
         ! potential differences lie in the span of the density matrix differences,
-        ! while every ARH type in the OAO basis has to keep the whole history in the
+        ! while every QN method in the OAO basis has to keep the whole history in the
         ! linear system, drop the entries beyond the window of the trust radius from
         ! the non-linear system, keep them without a state, leave the non-linear system
         ! out without a non-linear response and cache every quantity in the basis of
         ! its own system, without evaluating the density matrix or changing the history
         !
         use opentrustregion, only: solver_state_type
-        use otr_arh, only: arh_type, arh_types, arh_oao_type
+        use otr_density_qn, only: density_qn_type, qn_methods, density_qn_oao_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use otr_mo_test_reference, only: n_mo
@@ -660,7 +663,7 @@ contains
         type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
         type(mo_type), allocatable, target :: mo
-        class(arh_type), allocatable, target :: arh
+        class(density_qn_type), allocatable, target :: density_qn
         type(solver_state_type), target :: state
         integer(ip), intent(in) :: n_particle
         character(len=*), intent(in) :: test_name
@@ -679,9 +682,9 @@ contains
                                  dm_list(:, :, :, :), current(:, :, :, :), &
                                  lists(:, :, :, :, :)
         integer(ip) :: n_pot, n_list, n_linear, n_nonlinear, n_systems, n_terms, i, j, &
-                       k, i_case, i_type, error
+                       k, i_case, i_method, error
         logical :: built
-        character(len=:), allocatable :: case_arh_type, case_name
+        character(len=:), allocatable :: case_qn_method, case_name
 
         ! assume test passes
         passed = .true.
@@ -691,16 +694,16 @@ contains
         ! channels minus its exact-exchange potential
         n_pot = 3
 
-        ! set up the ARH object in the MO basis at random orbitals, whose MOs span the
-        ! same space for both channels as they do in practice, so that the history
-        ! inner product of the two channels agrees and a Coulomb kernel acting on both
-        ! channels is symmetric
+        ! set up the density QN object in the MO basis at random orbitals, whose MOs
+        ! span the same space for both channels as they do in practice, so that the
+        ! history inner product of the two channels agrees and a Coulomb kernel acting
+        ! on both channels is symmetric
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         if (n_particle == 2) mo_coeff(:, :, 2) = &
             matmul(mo_coeff(:, :, 1), generate_random_orthogonal_matrix(n_mo))
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, &
-                                      n_occ(:n_particle), context)
+        call setup_density_qn_and_mo_objects(density_qn, mo, mo_coeff, ao_overlap, &
+                                             n_occ(:n_particle), context)
 
         ! current density matrix, multiplied by the AO overlap matrix from both sides
         do j = 1, n_particle
@@ -745,26 +748,26 @@ contains
             lists(:, :, :, k, n_pot) = current(:, :, :, n_pot)
         end do
 
-        ! build the model for every ARH type and determine if the low-rank part
+        ! build the model for every QN method and determine if the low-rank part
         ! reproduces the linear potential difference of every step, which pins the
         ! scaling of the low-rank part, the matrices it couples the directions with and
         ! the (map, chol) pair its directions are rebased with
-        do i_type = 1, size(arh_types)
-            case_arh_type = trim(arh_types(i_type))
-            arh%settings%arh_type = case_arh_type
+        do i_method = 1, size(qn_methods)
+            case_qn_method = trim(qn_methods(i_method))
+            density_qn%settings%qn_method = case_qn_method
 
             ! subspace-projected multisecant and symmetrized ARH only reproduce
             ! potential differences in the span of the density matrix differences,
             ! which the Coulomb potential of the other channel leaves in the open-shell
             ! case
-            if ((case_arh_type == "ms_sp" .or. case_arh_type == "symm_arh") .and. &
+            if ((case_qn_method == "ms_sp" .or. case_qn_method == "symm_arh") .and. &
                 n_particle == 2) cycle
 
-            ! every type but standard ARH only reproduces a history that symmetric
+            ! every method but standard ARH only reproduces a history that symmetric
             ! linear kernels produce: Coulomb and exact-exchange potentials of every
             ! channel that are positive multiples of its density matrix difference, so
             ! that the Coulomb potentials of both channels act on every channel
-            if (case_arh_type /= "arh") then
+            if (case_qn_method /= "arh") then
                 do k = 1, n_hist
                     do j = 1, n_particle
                         dm_step = dm_list(:, :, j, k) - dm_hist(:, :, j)
@@ -777,24 +780,24 @@ contains
             call build_from_history()
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error for "// &
-                    case_arh_type//" in the MO basis."
+                    case_qn_method//" in the MO basis."
                 passed = .false.
             end if
-            if (arh%model_stale) then
+            if (density_qn%model_stale) then
                 write(stderr, *) test_name//" failed: Hessian model still marked "// &
-                    "stale for "//case_arh_type//" in the MO basis."
+                    "stale for "//case_qn_method//" in the MO basis."
                 passed = .false.
             end if
-            if (.not. allocated(arh%coupling_matrix)) then
+            if (.not. allocated(density_qn%coupling_matrix)) then
                 write(stderr, *) test_name//" failed: No low-rank part for "// &
-                    case_arh_type//" in the MO basis."
+                    case_qn_method//" in the MO basis."
                 passed = .false.
                 cycle
             end if
             do k = 1, n_hist
-                response = matmul(arh%expansion_dirs, matmul( &
-                    arh%coupling_matrix, &
-                    matmul(transpose(arh%projection_dirs), steps(:, k))))
+                response = matmul(density_qn%expansion_dirs, matmul( &
+                    density_qn%coupling_matrix, &
+                    matmul(transpose(density_qn%projection_dirs), steps(:, k))))
                 do j = 1, n_particle
                     v_diff_mo(:, :, j) = ref_mo_transform(mo_coeff(:, :, j), sum( &
                         lists(:, :, :, k, 1) - current(:, :, :, 1), &
@@ -804,12 +807,12 @@ contains
                           ref_pack_ov(v_diff_mo, mo%mo_channels)) > &
                     tol * (1.0_rp + norm2(response))) then
                     write(stderr, *) test_name//" failed: History not reproduced "// &
-                        "exactly for "//case_arh_type//" in the MO basis."
+                        "exactly for "//case_qn_method//" in the MO basis."
                     passed = .false.
                 end if
             end do
         end do
-        deallocate(arh, mo, dm_list, current, lists)
+        deallocate(density_qn, mo, dm_list, current, lists)
 
         ! set up the OAO object with an orthonormal AO basis, so that the AO and the
         ! OAO basis coincide
@@ -873,14 +876,14 @@ contains
             if (i_case == 4) &
                 lists(:, :, :, :, n_pot) = spread(current(:, :, :, n_pot), 4, n_list)
 
-            ! build the model for every ARH type on a newly set up ARH object
-            do i_type = 1, size(arh_types)
-                case_arh_type = trim(arh_types(i_type))
-                allocate(arh, source=arh_oao_type(oao))
-                call setup_settings(arh%settings, context)
-                arh%settings%arh_type = case_arh_type
+            ! build the model for every QN method on a newly set up density QN object
+            do i_method = 1, size(qn_methods)
+                case_qn_method = trim(qn_methods(i_method))
+                allocate(density_qn, source=density_qn_oao_type(oao))
+                call setup_settings(density_qn%settings, context)
+                density_qn%settings%qn_method = case_qn_method
                 if (i_case /= 3) then
-                    arh%state => state
+                    density_qn%state => state
                     state%trust_radius = case_trust_radii(i_case)
                 end if
                 call build_from_history()
@@ -889,67 +892,68 @@ contains
                 ! evaluating the density matrix or changing the history
                 if (error /= 0) then
                     write(stderr, *) test_name//" failed: Produced error for "// &
-                        case_arh_type//" and "//case_name//"."
+                        case_qn_method//" and "//case_name//"."
                     passed = .false.
                 end if
-                if (arh%model_stale) then
+                if (density_qn%model_stale) then
                     write(stderr, *) test_name//" failed: Hessian model still "// &
-                        "marked stale for "//case_arh_type//" and "//case_name//"."
+                        "marked stale for "//case_qn_method//" and "//case_name//"."
                     passed = .false.
                 end if
                 if (size(mock_requests) /= 0) then
                     write(stderr, *) test_name// &
                         " failed: Density matrix evaluating function called for "// &
-                        case_arh_type//" and "//case_name//"."
+                        case_qn_method//" and "//case_name//"."
                     passed = .false.
                 end if
                 do k = 1, n_list
-                    if (norm2(arh%dm_list(:, :, :, k) - dm_list(:, :, :, k)) > &
-                        tol .or. norm2(stacked_potentials(arh, k) - &
+                    if (norm2(density_qn%dm_list(:, :, :, k) - dm_list(:, :, :, k)) > &
+                        tol .or. norm2(stacked_potentials(density_qn, k) - &
                                        lists(:, :, :, k, :)) > tol) then
                         write(stderr, *) test_name//" failed: History changed for "// &
-                            case_arh_type//" and "//case_name//"."
+                            case_qn_method//" and "//case_name//"."
                         passed = .false.
                     end if
                 end do
-                if (.not. (allocated(arh%expansion_dirs) .and. &
-                           allocated(arh%projection_dirs) .and. &
-                           allocated(arh%coupling_matrix))) then
+                if (.not. (allocated(density_qn%expansion_dirs) .and. &
+                           allocated(density_qn%projection_dirs) .and. &
+                           allocated(density_qn%coupling_matrix))) then
                     write(stderr, *) test_name//" failed: Low-rank Hessian factors "// &
-                        "not assembled for "//case_arh_type//" and "//case_name//"."
+                        "not assembled for "//case_qn_method//" and "//case_name//"."
                     passed = .false.
                 end if
 
-                ! determine if the linear and non-linear systems of the ARH type are
+                ! determine if the linear and non-linear systems of the QN method are
                 ! constructed
-                if (case_arh_type == "ms_sr1") then
-                    built = allocated(arh%a_inv) .and. allocated(arh%a_inv_comb) .and. &
-                            allocated(arh%linear_potential_dirs) .and. &
-                            allocated(arh%nonlinear_potential_dirs)
+                if (case_qn_method == "ms_sr1") then
+                    built = allocated(density_qn%a_inv) .and. &
+                            allocated(density_qn%a_inv_comb) .and. &
+                            allocated(density_qn%linear_potential_dirs) .and. &
+                            allocated(density_qn%nonlinear_potential_dirs)
                 else
-                    built = allocated(arh%dm_dirs) .and. &
-                            allocated(arh%dm_dirs_nonlinear)
-                    if (case_arh_type /= "ms_sp") &
-                        built = built .and. allocated(arh%linear_potential_dirs) .and. &
-                                allocated(arh%nonlinear_potential_dirs)
-                    if (case_arh_type == "ms_sp" .or. case_arh_type == "ms_psb") &
-                        built = built .and. allocated(arh%a_sym) .and. &
-                                allocated(arh%a_sym_nonlinear)
+                    built = allocated(density_qn%dm_dirs) .and. &
+                            allocated(density_qn%dm_dirs_nonlinear)
+                    if (case_qn_method /= "ms_sp") built = &
+                        built .and. allocated(density_qn%linear_potential_dirs) .and. &
+                        allocated(density_qn%nonlinear_potential_dirs)
+                    if (case_qn_method == "ms_sp" .or. case_qn_method == "ms_psb") &
+                        built = built .and. allocated(density_qn%a_sym) .and. &
+                                allocated(density_qn%a_sym_nonlinear)
                 end if
                 if (.not. built) then
                     write(stderr, *) test_name//" failed: Linear and non-linear "// &
-                        "systems not constructed for "//case_arh_type//" and "// &
+                        "systems not constructed for "//case_qn_method//" and "// &
                         case_name//"."
                     passed = .false.
-                    deallocate(arh)
+                    deallocate(density_qn)
                     cycle
                 end if
-                if (case_arh_type == "ms_sr1") then
-                    n_linear = size(arh%linear_potential_dirs, 2)
-                    n_nonlinear = size(arh%nonlinear_potential_dirs, 2)
+                if (case_qn_method == "ms_sr1") then
+                    n_linear = size(density_qn%linear_potential_dirs, 2)
+                    n_nonlinear = size(density_qn%nonlinear_potential_dirs, 2)
                 else
-                    n_linear = size(arh%dm_dirs, 2)
-                    n_nonlinear = size(arh%dm_dirs_nonlinear, 2)
+                    n_linear = size(density_qn%dm_dirs, 2)
+                    n_nonlinear = size(density_qn%dm_dirs_nonlinear, 2)
                 end if
 
                 ! determine if the linear system keeps the entire history, for
@@ -958,63 +962,64 @@ contains
                 ! both channels together and the ARH family per channel, drops the
                 ! entries beyond the window of the trust radius and is left out without
                 ! a non-linear response
-                n_systems = merge(1_ip, n_particle, case_arh_type == "ms_sr1")
-                n_terms = merge(2_ip, 1_ip, case_arh_type == "ms_sr1")
+                n_systems = merge(1_ip, n_particle, case_qn_method == "ms_sr1")
+                n_terms = merge(2_ip, 1_ip, case_qn_method == "ms_sr1")
                 if (n_linear /= n_terms * n_particle * n_list) then
                     write(stderr, *) test_name//" failed: The linear system does "// &
-                        "not keep the entire history for "//case_arh_type//" and "// &
+                        "not keep the entire history for "//case_qn_method//" and "// &
                         case_name//"."
                     passed = .false.
                 end if
                 if ((i_case == 1 .or. i_case == 3) .and. &
                     n_nonlinear /= n_systems * n_list) then
                     write(stderr, *) test_name//" failed: The non-linear system "// &
-                        "does not keep every independent entry for "//case_arh_type// &
+                        "does not keep every independent entry for "//case_qn_method// &
                         " and "//case_name//"."
                     passed = .false.
                 else if (i_case == 2 .and. n_nonlinear /= n_systems) then
                     write(stderr, *) test_name//" failed: The non-linear system "// &
                         "does not drop the history entry beyond the window of the "// &
-                        "trust radius for "//case_arh_type//" and "//case_name//"."
+                        "trust radius for "//case_qn_method//" and "//case_name//"."
                     passed = .false.
                 else if (i_case == 4 .and. n_nonlinear /= 0) then
                     write(stderr, *) test_name//" failed: The non-linear system is "// &
-                        "not left out for "//case_arh_type//" and "//case_name//"."
+                        "not left out for "//case_qn_method//" and "//case_name//"."
                     passed = .false.
                 end if
 
                 ! determine if every quantity follows the basis of its own system
-                if (case_arh_type == "ms_sr1") then
-                    if (size(arh%a_inv, 1) /= n_linear .or. &
-                        size(arh%a_inv_comb, 1) /= n_nonlinear) then
+                if (case_qn_method == "ms_sr1") then
+                    if (size(density_qn%a_inv, 1) /= n_linear .or. &
+                        size(density_qn%a_inv_comb, 1) /= n_nonlinear) then
                         write(stderr, *) test_name//" failed: Multisecant SR1 "// &
                             "pseudoinverses do not match the potential difference "// &
                             "directions of their system for "//case_name//"."
                         passed = .false.
                     end if
-                else if (case_arh_type /= "ms_sp") then
-                    if (size(arh%linear_potential_dirs, 2) /= n_linear .or. &
-                        size(arh%nonlinear_potential_dirs, 2) /= n_nonlinear) then
+                else if (case_qn_method /= "ms_sp") then
+                    if (size(density_qn%linear_potential_dirs, 2) /= n_linear .or. &
+                        size(density_qn%nonlinear_potential_dirs, 2) /= n_nonlinear) &
+                        then
                         write(stderr, *) test_name//" failed: Potential difference "// &
                             "directions are not rebased onto the basis of the "// &
                             "density matrix difference directions of their system "// &
-                            "for "//case_arh_type//" and "//case_name//"."
+                            "for "//case_qn_method//" and "//case_name//"."
                         passed = .false.
                     end if
                 end if
-                if (case_arh_type == "ms_sp" .or. case_arh_type == "ms_psb") then
-                    if (size(arh%a_sym, 1) /= n_linear .or. &
-                        size(arh%a_sym_nonlinear, 1) /= n_nonlinear) then
+                if (case_qn_method == "ms_sp" .or. case_qn_method == "ms_psb") then
+                    if (size(density_qn%a_sym, 1) /= n_linear .or. &
+                        size(density_qn%a_sym_nonlinear, 1) /= n_nonlinear) then
                         write(stderr, *) test_name//" failed: Symmetrized A "// &
                             "matrices do not match the density matrix difference "// &
-                            "directions of their system for "//case_arh_type// &
+                            "directions of their system for "//case_qn_method// &
                             " and "//case_name//"."
                         passed = .false.
                     end if
                 end if
 
-                ! deallocate ARH object
-                deallocate(arh)
+                ! deallocate density QN object
+                deallocate(density_qn)
             end do
             deallocate(dm_list, current, lists)
         end do
@@ -1027,66 +1032,67 @@ contains
         subroutine build_from_history()
             !
             ! this subroutine hands the history, the current density matrix and the
-            ! current potentials to the ARH object, marks its model stale and builds
-            ! the model for the shell
+            ! current potentials to the density QN object, marks its model stale and
+            ! builds the model for the shell
             !
             ! history, current density matrix and current potentials
-            arh%dm_list = dm_list
-            arh%dm_current = dm_hist
+            density_qn%dm_list = dm_list
+            density_qn%dm_current = dm_hist
             if (n_particle == 1) then
-                arh%evaluate_dm_cs => mock_evaluate_dm_cs
+                density_qn%evaluate_dm_cs => mock_evaluate_dm_cs
             else
-                arh%evaluate_dm_os => mock_evaluate_dm_os
+                density_qn%evaluate_dm_os => mock_evaluate_dm_os
             end if
-            arh%v_coulomb = current(:, :, :, 1)
-            arh%v_coulomb_list = lists(:, :, :, :, 1)
-            arh%v_exchange = current(:, :, :, 2)
-            arh%v_exchange_list = lists(:, :, :, :, 2)
-            arh%v_nonlinear = current(:, :, :, n_pot)
-            arh%v_nonlinear_list = lists(:, :, :, :, n_pot)
-            arh%model_stale = .true.
+            density_qn%v_coulomb = current(:, :, :, 1)
+            density_qn%v_coulomb_list = lists(:, :, :, :, 1)
+            density_qn%v_exchange = current(:, :, :, 2)
+            density_qn%v_exchange_list = lists(:, :, :, :, 2)
+            density_qn%v_nonlinear = current(:, :, :, n_pot)
+            density_qn%v_nonlinear_list = lists(:, :, :, :, n_pot)
+            density_qn%model_stale = .true.
 
             ! build the model
             mock_requests = [integer(ip) :: ]
             if (n_particle == 1) then
-                call arh%build_hess_model_cs(error)
+                call density_qn%build_hess_model_cs(error)
             else
-                call arh%build_hess_model_os(error)
+                call density_qn%build_hess_model_os(error)
             end if
 
         end subroutine build_from_history
 
     end function check_build_hess_model
 
-    logical(c_bool) function test_arh_factory_cs() bind(C)
+    logical(c_bool) function test_density_qn_factory_cs() bind(C)
         !
-        ! this function tests the subroutine which returns the ARH orbital updating
-        ! function and objective function for the closed-shell case, which hands the
-        ! level of the solver settings' context and the closed-shell density matrix
-        ! evaluating function to the common setup
+        ! this function tests the subroutine which returns the density QN orbital
+        ! updating function and objective function for the closed-shell case, which
+        ! hands the level of the solver settings' context and the closed-shell density
+        ! matrix evaluating function to the common setup
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_arh, only: arh_factory_cs, arh_type, arh_settings_type, &
-                           arh_evaluate_dm_cs_type
+        use otr_density_qn, only: density_qn_factory_cs, density_qn_type, &
+                                  density_qn_settings_type, &
+                                  density_qn_evaluate_dm_cs_type
         use otr_mo, only: mo_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
-                              update_orbs_callback, obj_func_callback, error_arh
+                              update_orbs_callback, obj_func_callback, error_density_qn
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: setup_owning_solver_settings
-        use otr_arh_test_reference, only: operator(==)
+        use otr_density_qn_test_reference, only: operator(==)
 
         type(test_context_type), target :: context
         type(extension_solver_settings_type), target :: solver_settings
         type(solver_state_type), target :: state
         class(extension_type), allocatable, target :: basis
-        type(arh_settings_type) :: settings
-        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
-        procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), pointer :: obj_func_arh_funptr
+        type(density_qn_settings_type) :: settings
+        procedure(density_qn_evaluate_dm_cs_type), pointer :: evaluate_dm_funptr
+        procedure(update_orbs_type), pointer :: update_orbs_density_qn_funptr
+        procedure(obj_func_type), pointer :: obj_func_density_qn_funptr
         integer(ip) :: error
 
         ! assume tests pass
-        test_arh_factory_cs = .true.
+        test_density_qn_factory_cs = .true.
 
         ! set up solver settings wired with a closed-shell MO object
         allocate(mo_type :: basis)
@@ -1099,105 +1105,108 @@ contains
         call setup_settings(settings, context)
         evaluate_dm_funptr => mock_evaluate_dm_cs
 
-        ! call routine and determine if the ARH object built on the MO object holds
-        ! only the closed-shell density matrix evaluating function and if the role
-        ! callback functions are returned, the remaining setup is covered by the test
-        ! of the common setup
-        call arh_factory_cs(evaluate_dm_funptr, update_orbs_arh_funptr, &
-                            obj_func_arh_funptr, solver_settings, state, error, &
-                            settings)
+        ! call routine and determine if the density QN object built on the MO object
+        ! holds only the closed-shell density matrix evaluating function and if the
+        ! role callback functions are returned, the remaining setup is covered by the
+        ! test of the common setup
+        call density_qn_factory_cs(evaluate_dm_funptr, update_orbs_density_qn_funptr, &
+                                   obj_func_density_qn_funptr, solver_settings, state, &
+                                   error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_arh_factory_cs failed: Produced error."
-            test_arh_factory_cs = .false.
+            write(stderr, *) "test_density_qn_factory_cs failed: Produced error."
+            test_density_qn_factory_cs = .false.
         end if
-        if (.not. associated(update_orbs_arh_funptr, update_orbs_callback) .or. &
-            .not. associated(obj_func_arh_funptr, obj_func_callback)) then
-            write(stderr, *) "test_arh_factory_cs failed: Role callback functions "// &
-                "not returned."
-            test_arh_factory_cs = .false.
+        if (.not. associated(update_orbs_density_qn_funptr, update_orbs_callback) .or. &
+            .not. associated(obj_func_density_qn_funptr, obj_func_callback)) then
+            write(stderr, *) "test_density_qn_factory_cs failed: Role callback "// &
+                "functions not returned."
+            test_density_qn_factory_cs = .false.
         end if
         if (size(solver_settings%extensions) /= 2) then
-            write(stderr, *) "test_arh_factory_cs failed: Solver settings not "// &
-                "wired with an object."
-            test_arh_factory_cs = .false.
+            write(stderr, *) "test_density_qn_factory_cs failed: Solver settings "// &
+                "not wired with an object."
+            test_density_qn_factory_cs = .false.
         else
-            select type (arh => solver_settings%extensions(2)%object)
-            class is (arh_type)
+            select type (density_qn => solver_settings%extensions(2)%object)
+            class is (density_qn_type)
                 select type (mo => solver_settings%extensions(1)%object)
                 type is (mo_type)
-                    if (.not. associated(arh%orbitals, mo)) then
-                        write(stderr, *) "test_arh_factory_cs failed: ARH object "// &
-                            "not built on the orbital basis object of the solver "// &
-                            "settings."
-                        test_arh_factory_cs = .false.
+                    if (.not. associated(density_qn%orbitals, mo)) then
+                        write(stderr, *) "test_density_qn_factory_cs failed: "// &
+                            "density QN object not built on the orbital basis "// &
+                            "object of the solver settings."
+                        test_density_qn_factory_cs = .false.
                     end if
                 end select
-                if (.not. associated(arh%state, state)) then
-                    write(stderr, *) "test_arh_factory_cs failed: Record of the "// &
-                        "state not passed on."
-                    test_arh_factory_cs = .false.
+                if (.not. associated(density_qn%state, state)) then
+                    write(stderr, *) "test_density_qn_factory_cs failed: Record of "// &
+                        "the state not passed on."
+                    test_density_qn_factory_cs = .false.
                 end if
-                if (.not. (arh%settings == settings)) then
-                    write(stderr, *) "test_arh_factory_cs failed: Settings not "// &
-                        "passed on."
-                    test_arh_factory_cs = .false.
+                if (.not. (density_qn%settings == settings)) then
+                    write(stderr, *) "test_density_qn_factory_cs failed: Settings "// &
+                        "not passed on."
+                    test_density_qn_factory_cs = .false.
                 end if
-                if (.not. associated(arh%evaluate_dm_cs, mock_evaluate_dm_cs) .or. &
-                    associated(arh%evaluate_dm_os)) then
-                    write(stderr, *) "test_arh_factory_cs failed: Closed-shell "// &
-                        "density matrix evaluating function not handed over."
-                    test_arh_factory_cs = .false.
+                if (.not. associated(density_qn%evaluate_dm_cs, &
+                                     mock_evaluate_dm_cs) .or. &
+                    associated(density_qn%evaluate_dm_os)) then
+                    write(stderr, *) "test_density_qn_factory_cs failed: "// &
+                        "Closed-shell density matrix evaluating function not "// &
+                        "handed over."
+                    test_density_qn_factory_cs = .false.
                 end if
             class default
-                write(stderr, *) "test_arh_factory_cs failed: Solver settings not "// &
-                    "wired with an ARH object."
-                test_arh_factory_cs = .false.
+                write(stderr, *) "test_density_qn_factory_cs failed: Solver "// &
+                    "settings not wired with a density QN object."
+                test_density_qn_factory_cs = .false.
             end select
         end if
 
         ! call routine for solver settings no factory wired and determine if the error
         ! of the common setup is passed on
         solver_settings%context => null()
-        call arh_factory_cs(evaluate_dm_funptr, update_orbs_arh_funptr, &
-                            obj_func_arh_funptr, solver_settings, state, error, &
-                            settings)
-        if (error /= error_arh + 1) then
-            write(stderr, *) "test_arh_factory_cs failed: Error of the common "// &
-                "setup not passed on."
-            test_arh_factory_cs = .false.
+        call density_qn_factory_cs(evaluate_dm_funptr, update_orbs_density_qn_funptr, &
+                                   obj_func_density_qn_funptr, solver_settings, state, &
+                                   error, settings)
+        if (error /= error_density_qn + 1) then
+            write(stderr, *) "test_density_qn_factory_cs failed: Error of the "// &
+                "common setup not passed on."
+            test_density_qn_factory_cs = .false.
         end if
 
-    end function test_arh_factory_cs
+    end function test_density_qn_factory_cs
 
-    logical(c_bool) function test_arh_factory_os() bind(C)
+    logical(c_bool) function test_density_qn_factory_os() bind(C)
         !
-        ! this function tests the subroutine which returns the ARH orbital updating
-        ! function and objective function for the open-shell case, which hands the
-        ! level of the solver settings' context and the open-shell density matrix
+        ! this function tests the subroutine which returns the density QN orbital
+        ! updating function and objective function for the open-shell case, which hands
+        ! the level of the solver settings' context and the open-shell density matrix
         ! evaluating function to the common setup
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_arh, only: arh_factory_os, arh_type, arh_settings_type, &
-                           arh_evaluate_dm_os_type
+        use otr_density_qn, only: density_qn_factory_os, density_qn_type, &
+                                  density_qn_settings_type, &
+                                  density_qn_evaluate_dm_os_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_solver_settings_type, &
-                              update_orbs_callback, obj_func_callback, error_arh
+                              update_orbs_callback, obj_func_callback, error_density_qn
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: setup_owning_solver_settings
-        use otr_arh_test_reference, only: operator(==)
+        use otr_density_qn_test_reference, only: operator(==)
 
         type(test_context_type), target :: context
         type(extension_solver_settings_type), target :: solver_settings
         type(solver_state_type), target :: state
         class(extension_type), allocatable, target :: basis
-        type(arh_settings_type) :: settings
-        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_funptr
-        procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), pointer :: obj_func_arh_funptr
+        type(density_qn_settings_type) :: settings
+        procedure(density_qn_evaluate_dm_os_type), pointer :: evaluate_dm_funptr
+        procedure(update_orbs_type), pointer :: update_orbs_density_qn_funptr
+        procedure(obj_func_type), pointer :: obj_func_density_qn_funptr
         integer(ip) :: error
 
         ! assume tests pass
-        test_arh_factory_os = .true.
+        test_density_qn_factory_os = .true.
 
         ! set up solver settings wired with an open-shell OAO object
         allocate(oao_type :: basis)
@@ -1210,119 +1219,122 @@ contains
         call setup_settings(settings, context)
         evaluate_dm_funptr => mock_evaluate_dm_os
 
-        ! call routine and determine if the ARH object built on the OAO object holds
-        ! only the open-shell density matrix evaluating function and if the role
+        ! call routine and determine if the density QN object built on the OAO object
+        ! holds only the open-shell density matrix evaluating function and if the role
         ! callback functions are returned, the remaining setup is covered by the test
         ! of the common setup
-        call arh_factory_os(evaluate_dm_funptr, update_orbs_arh_funptr, &
-                            obj_func_arh_funptr, solver_settings, state, error, &
-                            settings)
+        call density_qn_factory_os(evaluate_dm_funptr, update_orbs_density_qn_funptr, &
+                                   obj_func_density_qn_funptr, solver_settings, state, &
+                                   error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_arh_factory_os failed: Produced error."
-            test_arh_factory_os = .false.
+            write(stderr, *) "test_density_qn_factory_os failed: Produced error."
+            test_density_qn_factory_os = .false.
         end if
-        if (.not. associated(update_orbs_arh_funptr, update_orbs_callback) .or. &
-            .not. associated(obj_func_arh_funptr, obj_func_callback)) then
-            write(stderr, *) "test_arh_factory_os failed: Role callback functions "// &
-                "not returned."
-            test_arh_factory_os = .false.
+        if (.not. associated(update_orbs_density_qn_funptr, update_orbs_callback) .or. &
+            .not. associated(obj_func_density_qn_funptr, obj_func_callback)) then
+            write(stderr, *) "test_density_qn_factory_os failed: Role callback "// &
+                "functions not returned."
+            test_density_qn_factory_os = .false.
         end if
         if (size(solver_settings%extensions) /= 2) then
-            write(stderr, *) "test_arh_factory_os failed: Solver settings not "// &
-                "wired with an object."
-            test_arh_factory_os = .false.
+            write(stderr, *) "test_density_qn_factory_os failed: Solver settings "// &
+                "not wired with an object."
+            test_density_qn_factory_os = .false.
         else
-            select type (arh => solver_settings%extensions(2)%object)
-            class is (arh_type)
+            select type (density_qn => solver_settings%extensions(2)%object)
+            class is (density_qn_type)
                 select type (oao => solver_settings%extensions(1)%object)
                 type is (oao_type)
-                    if (.not. associated(arh%orbitals, oao)) then
-                        write(stderr, *) "test_arh_factory_os failed: ARH object "// &
-                            "not built on the orbital basis object of the solver "// &
-                            "settings."
-                        test_arh_factory_os = .false.
+                    if (.not. associated(density_qn%orbitals, oao)) then
+                        write(stderr, *) "test_density_qn_factory_os failed: "// &
+                            "density QN object not built on the orbital basis "// &
+                            "object of the solver settings."
+                        test_density_qn_factory_os = .false.
                     end if
                 end select
-                if (.not. associated(arh%state, state)) then
-                    write(stderr, *) "test_arh_factory_os failed: Record of the "// &
-                        "state not passed on."
-                    test_arh_factory_os = .false.
+                if (.not. associated(density_qn%state, state)) then
+                    write(stderr, *) "test_density_qn_factory_os failed: Record of "// &
+                        "the state not passed on."
+                    test_density_qn_factory_os = .false.
                 end if
-                if (.not. (arh%settings == settings)) then
-                    write(stderr, *) "test_arh_factory_os failed: Settings not "// &
-                        "passed on."
-                    test_arh_factory_os = .false.
+                if (.not. (density_qn%settings == settings)) then
+                    write(stderr, *) "test_density_qn_factory_os failed: Settings "// &
+                        "not passed on."
+                    test_density_qn_factory_os = .false.
                 end if
-                if (.not. associated(arh%evaluate_dm_os, mock_evaluate_dm_os) .or. &
-                    associated(arh%evaluate_dm_cs)) then
-                    write(stderr, *) "test_arh_factory_os failed: Open-shell "// &
-                        "density matrix evaluating function not handed over."
-                    test_arh_factory_os = .false.
+                if (.not. associated(density_qn%evaluate_dm_os, &
+                                     mock_evaluate_dm_os) .or. &
+                    associated(density_qn%evaluate_dm_cs)) then
+                    write(stderr, *) "test_density_qn_factory_os failed: "// &
+                        "Open-shell density matrix evaluating function not handed over."
+                    test_density_qn_factory_os = .false.
                 end if
             class default
-                write(stderr, *) "test_arh_factory_os failed: Solver settings not "// &
-                    "wired with an ARH object."
-                test_arh_factory_os = .false.
+                write(stderr, *) "test_density_qn_factory_os failed: Solver "// &
+                    "settings not wired with a density QN object."
+                test_density_qn_factory_os = .false.
             end select
         end if
 
         ! call routine for solver settings no factory wired and determine if the error
         ! of the common setup is passed on
         solver_settings%context => null()
-        call arh_factory_os(evaluate_dm_funptr, update_orbs_arh_funptr, &
-                            obj_func_arh_funptr, solver_settings, state, error, &
-                            settings)
-        if (error /= error_arh + 1) then
-            write(stderr, *) "test_arh_factory_os failed: Error of the common "// &
-                "setup not passed on."
-            test_arh_factory_os = .false.
+        call density_qn_factory_os(evaluate_dm_funptr, update_orbs_density_qn_funptr, &
+                                   obj_func_density_qn_funptr, solver_settings, state, &
+                                   error, settings)
+        if (error /= error_density_qn + 1) then
+            write(stderr, *) "test_density_qn_factory_os failed: Error of the "// &
+                "common setup not passed on."
+            test_density_qn_factory_os = .false.
         end if
 
-    end function test_arh_factory_os
+    end function test_density_qn_factory_os
 
-    logical(c_bool) function test_arh_factory_common() bind(C)
+    logical(c_bool) function test_density_qn_factory_common() bind(C)
         !
-        ! this function tests the subroutine which sets up a new ARH object on the
-        ! orbital basis object of a level with the density matrix evaluating function
-        ! of the shell of its orbitals, after the sanity check of its settings, wires
-        ! the solver settings with it and the record of the state, adjusts them to the
-        ! approximate Hessian and returns its orbital updating function and objective
-        ! function
+        ! this function tests the subroutine which sets up a new density QN object on
+        ! the orbital basis object of a level with the density matrix evaluating
+        ! function of the shell of its orbitals, after the sanity check of its
+        ! settings, wires the solver settings with it and the record of the state,
+        ! adjusts them to the approximate Hessian and returns its orbital updating
+        ! function and objective function
         !
         use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
-        use otr_arh, only: arh_factory_common, arh_type, arh_mo_type, arh_oao_type, &
-                           arh_settings_type, default_arh_settings, arh_n_micro, &
-                           arh_evaluate_dm_cs_type, arh_evaluate_dm_os_type
+        use otr_density_qn, only: &
+            density_qn_factory_common, density_qn_type, density_qn_mo_type, &
+            density_qn_oao_type, density_qn_settings_type, &
+            default_density_qn_settings, density_qn_n_micro, &
+            density_qn_evaluate_dm_cs_type, density_qn_evaluate_dm_os_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use otr_common, only: extension_type, extension_level_type, &
                               extension_solver_settings_type, orbital_basis_type, &
-                              update_orbs_callback, obj_func_callback, error_arh
+                              update_orbs_callback, obj_func_callback, error_density_qn
         use otr_common_unit_tests, only: mock_extension_type, &
                                          setup_owning_solver_settings
         use otr_common_test_reference, only: same_logger_and_context
         use opentrustregion_unit_tests, only: setup_settings, setup_error_logging, &
                                               test_context_type
-        use otr_arh_test_reference, only: operator(==)
+        use otr_density_qn_test_reference, only: operator(==)
 
         type(extension_solver_settings_type), allocatable, target :: solver_settings, &
                                                                      other_settings
         type(solver_state_type), target :: state, other_state
         class(extension_type), allocatable, target :: basis
         type(extension_level_type), pointer :: level
-        type(arh_settings_type) :: settings, expected_settings
+        type(density_qn_settings_type) :: settings, expected_settings
         type(test_context_type), target :: context
-        procedure(arh_evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
-        procedure(arh_evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
-        procedure(update_orbs_type), pointer :: update_orbs_arh_funptr
-        procedure(obj_func_type), pointer :: obj_func_arh_funptr
+        procedure(density_qn_evaluate_dm_cs_type), pointer :: evaluate_dm_cs_funptr
+        procedure(density_qn_evaluate_dm_os_type), pointer :: evaluate_dm_os_funptr
+        procedure(update_orbs_type), pointer :: update_orbs_density_qn_funptr
+        procedure(obj_func_type), pointer :: obj_func_density_qn_funptr
         integer(ip) :: i_case, error
         logical :: mo_basis, right_type, built, stored
         character(len=41), parameter :: case_names(3) = &
             [character(len=41) :: "for the closed-shell case in the MO basis", &
              "for the open-shell case in the OAO basis", "without settings"]
         character(len=74), parameter :: refusal_names(7) = [ &
-            character(len=74) :: "an unknown ARH type", "solver settings no "// &
+            character(len=74) :: "an unknown QN method", "solver settings no "// &
             "factory wired", "solver settings another extension wired", "an "// &
             "open-shell density matrix evaluating function for closed-shell orbitals", &
             "a closed-shell density matrix evaluating function for open-shell "// &
@@ -1330,24 +1342,23 @@ contains
             "orbitals", "no density matrix evaluating function for open-shell orbitals"]
 
         ! assume tests pass
-        test_arh_factory_common = .true.
+        test_density_qn_factory_common = .true.
 
         ! create objects on a closed-shell MO object, on an open-shell OAO object and
-        ! for no settings, each of which has to be the ARH object of the basis of the
-        ! orbital basis object, built on it, with the
-        ! settings and the density matrix evaluating function, and to wire the solver
-        ! settings, which own it after the orbital basis object, with the record of the
-        ! state and adjust them to the approximate Hessian of its ARH type, which
-        ! settings in uppercase select, while the orbital basis object keeps its own
-        ! settings
+        ! for no settings, each of which has to be the density QN object of the basis
+        ! of the orbital basis object, built on it, with the settings and the density
+        ! matrix evaluating function, and to wire the solver settings, which own it
+        ! after the orbital basis object, with the record of the state and adjust them
+        ! to the approximate Hessian of its QN method, which settings in uppercase
+        ! select, while the orbital basis object keeps its own settings
         do i_case = 1, size(case_names)
             mo_basis = i_case /= 2
             call setup_basis(mo_basis, merge(2_ip, 1_ip, i_case == 2))
             call setup_settings(settings, context)
-            settings%arh_type = "ARH"
+            settings%qn_method = "ARH"
             expected_settings = settings
-            expected_settings%arh_type = "arh"
-            if (i_case == 3) expected_settings = default_arh_settings
+            expected_settings%qn_method = "arh"
+            if (i_case == 3) expected_settings = default_density_qn_settings
             evaluate_dm_cs_funptr => null()
             evaluate_dm_os_funptr => null()
             if (i_case == 2) then
@@ -1357,42 +1368,43 @@ contains
             end if
             level => solver_settings%extensions(1)%object%solver_level
             if (i_case == 3) then
-                call arh_factory_common(level, evaluate_dm_cs_funptr, &
-                                        evaluate_dm_os_funptr, update_orbs_arh_funptr, &
-                                        obj_func_arh_funptr, solver_settings, state, &
-                                        error)
+                call density_qn_factory_common( &
+                    level, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
+                    update_orbs_density_qn_funptr, obj_func_density_qn_funptr, &
+                    solver_settings, state, error)
             else
-                call arh_factory_common(level, evaluate_dm_cs_funptr, &
-                                        evaluate_dm_os_funptr, update_orbs_arh_funptr, &
-                                        obj_func_arh_funptr, solver_settings, state, &
-                                        error, settings)
+                call density_qn_factory_common( &
+                    level, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
+                    update_orbs_density_qn_funptr, obj_func_density_qn_funptr, &
+                    solver_settings, state, error, settings)
             end if
             if (error /= 0) then
-                write(stderr, *) "test_arh_factory_common failed: Produced error "// &
-                    trim(case_names(i_case))//"."
-                test_arh_factory_common = .false.
+                write(stderr, *) "test_density_qn_factory_common failed: Produced "// &
+                    "error "//trim(case_names(i_case))//"."
+                test_density_qn_factory_common = .false.
                 deallocate(solver_settings)
                 cycle
             end if
-            if (.not. associated(update_orbs_arh_funptr, update_orbs_callback) .or. &
-                .not. associated(obj_func_arh_funptr, obj_func_callback)) then
-                write(stderr, *) "test_arh_factory_common failed: Role callback "// &
-                    "functions not returned "//trim(case_names(i_case))//"."
-                test_arh_factory_common = .false.
+            if (.not. associated(update_orbs_density_qn_funptr, &
+                                 update_orbs_callback) .or. &
+                .not. associated(obj_func_density_qn_funptr, obj_func_callback)) then
+                write(stderr, *) "test_density_qn_factory_common failed: Role "// &
+                    "callback functions not returned "//trim(case_names(i_case))//"."
+                test_density_qn_factory_common = .false.
             end if
             if (size(solver_settings%extensions) /= 2) then
-                write(stderr, *) "test_arh_factory_common failed: Object not owned "// &
-                    "by the solver settings "//trim(case_names(i_case))//"."
-                test_arh_factory_common = .false.
+                write(stderr, *) "test_density_qn_factory_common failed: Object "// &
+                    "not owned by the solver settings "//trim(case_names(i_case))//"."
+                test_density_qn_factory_common = .false.
                 deallocate(solver_settings)
                 cycle
             end if
-            select type (arh => solver_settings%extensions(2)%object)
-            class is (arh_type)
-                select type (arh)
-                type is (arh_mo_type)
+            select type (density_qn => solver_settings%extensions(2)%object)
+            class is (density_qn_type)
+                select type (density_qn)
+                type is (density_qn_mo_type)
                     right_type = mo_basis
-                type is (arh_oao_type)
+                type is (density_qn_oao_type)
                     right_type = .not. mo_basis
                 class default
                     right_type = .false.
@@ -1400,68 +1412,71 @@ contains
                 built = .false.
                 select type (orbitals => solver_settings%extensions(1)%object)
                 class is (orbital_basis_type)
-                    built = associated(arh%orbitals, orbitals)
+                    built = associated(density_qn%orbitals, orbitals)
                     if (orbitals%settings%verbose /= 7) then
-                        write(stderr, *) "test_arh_factory_common failed: Settings "// &
-                            "of the orbital basis object changed "// &
+                        write(stderr, *) "test_density_qn_factory_common failed: "// &
+                            "Settings of the orbital basis object changed "// &
                             trim(case_names(i_case))//"."
-                        test_arh_factory_common = .false.
+                        test_density_qn_factory_common = .false.
                     end if
                 end select
                 if (.not. (right_type .and. built)) then
-                    write(stderr, *) "test_arh_factory_common failed: ARH object "// &
-                        "of the basis of the orbital basis object not built on it "// &
-                        trim(case_names(i_case))//"."
-                    test_arh_factory_common = .false.
+                    write(stderr, *) "test_density_qn_factory_common failed: "// &
+                        "density QN object of the basis of the orbital basis "// &
+                        "object not built on it "//trim(case_names(i_case))//"."
+                    test_density_qn_factory_common = .false.
                 end if
-                if (arh%error_origin /= error_arh) then
-                    write(stderr, *) "test_arh_factory_common failed: Error origin "// &
-                        "of the object not set "//trim(case_names(i_case))//"."
-                    test_arh_factory_common = .false.
+                if (density_qn%error_origin /= error_density_qn) then
+                    write(stderr, *) "test_density_qn_factory_common failed: Error "// &
+                        "origin of the object not set "//trim(case_names(i_case))//"."
+                    test_density_qn_factory_common = .false.
                 end if
                 if (i_case == 2) then
-                    stored = associated(arh%evaluate_dm_os, mock_evaluate_dm_os) .and. &
-                             .not. associated(arh%evaluate_dm_cs)
+                    stored = associated(density_qn%evaluate_dm_os, &
+                                        mock_evaluate_dm_os) .and. &
+                             .not. associated(density_qn%evaluate_dm_cs)
                 else
-                    stored = associated(arh%evaluate_dm_cs, mock_evaluate_dm_cs) .and. &
-                             .not. associated(arh%evaluate_dm_os)
+                    stored = associated(density_qn%evaluate_dm_cs, &
+                                        mock_evaluate_dm_cs) .and. &
+                             .not. associated(density_qn%evaluate_dm_os)
                 end if
-                if (.not. (stored .and. arh%settings == expected_settings .and. &
-                           same_logger_and_context(arh%settings, expected_settings))) &
-                    then
-                    write(stderr, *) "test_arh_factory_common failed: Settings or "// &
-                        "density matrix evaluating function not stored "// &
+                if (.not. (stored .and. density_qn%settings == expected_settings .and. &
+                           same_logger_and_context(density_qn%settings, &
+                                                   expected_settings))) then
+                    write(stderr, *) "test_density_qn_factory_common failed: "// &
+                        "Settings or density matrix evaluating function not stored "// &
                         trim(case_names(i_case))//"."
-                    test_arh_factory_common = .false.
+                    test_density_qn_factory_common = .false.
                 end if
-                if (.not. associated(arh%state, state) .or. &
-                    .not. associated(solver_settings%context, arh%solver_level)) then
-                    write(stderr, *) "test_arh_factory_common failed: Solver "// &
-                        "settings not wired with the object reading the record of "// &
-                        "the state "//trim(case_names(i_case))//"."
-                    test_arh_factory_common = .false.
+                if (.not. associated(density_qn%state, state) .or. .not. associated( &
+                    solver_settings%context, density_qn%solver_level)) then
+                    write(stderr, *) "test_density_qn_factory_common failed: "// &
+                        "Solver settings not wired with the object reading the "// &
+                        "record of the state "//trim(case_names(i_case))//"."
+                    test_density_qn_factory_common = .false.
                 end if
             class default
-                write(stderr, *) "test_arh_factory_common failed: Solver settings "// &
-                    "not wired with an ARH object "//trim(case_names(i_case))//"."
-                test_arh_factory_common = .false.
+                write(stderr, *) "test_density_qn_factory_common failed: Solver "// &
+                    "settings not wired with a density QN object "// &
+                    trim(case_names(i_case))//"."
+                test_density_qn_factory_common = .false.
             end select
             if (.not. solver_settings%refresh_hess .or. &
-                solver_settings%n_micro /= arh_n_micro .or. &
+                solver_settings%n_micro /= density_qn_n_micro .or. &
                 (solver_settings%hess_symm .neqv. &
-                 expected_settings%arh_type /= "arh")) then
-                write(stderr, *) "test_arh_factory_common failed: Solver settings "// &
-                    "not adjusted to the approximate Hessian "// &
+                 expected_settings%qn_method /= "arh")) then
+                write(stderr, *) "test_density_qn_factory_common failed: Solver "// &
+                    "settings not adjusted to the approximate Hessian "// &
                     trim(case_names(i_case))//"."
-                test_arh_factory_common = .false.
+                test_density_qn_factory_common = .false.
             end if
             deallocate(solver_settings)
         end do
 
-        ! create objects for an unknown ARH type, for solver settings no factory wired,
-        ! for solver settings another extension than an orbital basis wired and with
-        ! the density matrix evaluating function of the other shell or without any for
-        ! either shell of the orbitals, which have to return an error with an error
+        ! create objects for an unknown QN method, for solver settings no factory
+        ! wired, for solver settings another extension than an orbital basis wired and
+        ! with the density matrix evaluating function of the other shell or without any
+        ! for either shell of the orbitals, which have to return an error with an error
         ! message and leave the solver settings untouched
         do i_case = 1, size(refusal_names)
             call setup_basis(.true., merge(2_ip, 1_ip, i_case == 5 .or. i_case == 7))
@@ -1472,7 +1487,7 @@ contains
             evaluate_dm_os_funptr => null()
             select case (i_case)
             case (1)
-                settings%arh_type = "unknown"
+                settings%qn_method = "unknown"
             case (2)
                 level => null()
             case (3)
@@ -1486,26 +1501,26 @@ contains
             case (6, 7)
                 evaluate_dm_cs_funptr => null()
             end select
-            call arh_factory_common(level, evaluate_dm_cs_funptr, &
-                                    evaluate_dm_os_funptr, update_orbs_arh_funptr, &
-                                    obj_func_arh_funptr, solver_settings, state, &
-                                    error, settings)
-            if (error /= error_arh + 1) then
-                write(stderr, *) "test_arh_factory_common failed: No error "// &
+            call density_qn_factory_common( &
+                level, evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
+                update_orbs_density_qn_funptr, obj_func_density_qn_funptr, &
+                solver_settings, state, error, settings)
+            if (error /= error_density_qn + 1) then
+                write(stderr, *) "test_density_qn_factory_common failed: No error "// &
                     "returned for "//trim(refusal_names(i_case))//"."
-                test_arh_factory_common = .false.
+                test_density_qn_factory_common = .false.
             end if
             if (context%log_message == "") then
-                write(stderr, *) "test_arh_factory_common failed: No error message "// &
-                    "printed for "//trim(refusal_names(i_case))//"."
-                test_arh_factory_common = .false.
+                write(stderr, *) "test_density_qn_factory_common failed: No error "// &
+                    "message printed for "//trim(refusal_names(i_case))//"."
+                test_density_qn_factory_common = .false.
             end if
             if (size(solver_settings%extensions) /= 1 .or. .not. associated( &
                 solver_settings%context, &
                 solver_settings%extensions(1)%object%solver_level)) then
-                write(stderr, *) "test_arh_factory_common failed: Solver settings "// &
-                    "changed for "//trim(refusal_names(i_case))//"."
-                test_arh_factory_common = .false.
+                write(stderr, *) "test_density_qn_factory_common failed: Solver "// &
+                    "settings changed for "//trim(refusal_names(i_case))//"."
+                test_density_qn_factory_common = .false.
             end if
             deallocate(solver_settings)
         end do
@@ -1519,35 +1534,36 @@ contains
         call setup_settings(settings, context)
         evaluate_dm_cs_funptr => mock_evaluate_dm_cs
         evaluate_dm_os_funptr => null()
-        call arh_factory_common(solver_settings%extensions(1)%object%solver_level, &
-                                evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
-                                update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                solver_settings, state, error, settings)
+        call density_qn_factory_common( &
+            solver_settings%extensions(1)%object%solver_level, evaluate_dm_cs_funptr, &
+            evaluate_dm_os_funptr, update_orbs_density_qn_funptr, &
+            obj_func_density_qn_funptr, solver_settings, state, error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_arh_factory_common failed: Produced error for "// &
-                "the first of two separate solver settings."
-            test_arh_factory_common = .false.
+            write(stderr, *) "test_density_qn_factory_common failed: Produced "// &
+                "error for the first of two separate solver settings."
+            test_density_qn_factory_common = .false.
         end if
-        call arh_factory_common(other_settings%extensions(1)%object%solver_level, &
-                                evaluate_dm_cs_funptr, evaluate_dm_os_funptr, &
-                                update_orbs_arh_funptr, obj_func_arh_funptr, &
-                                other_settings, other_state, error, settings)
+        call density_qn_factory_common( &
+            other_settings%extensions(1)%object%solver_level, evaluate_dm_cs_funptr, &
+            evaluate_dm_os_funptr, update_orbs_density_qn_funptr, &
+            obj_func_density_qn_funptr, other_settings, other_state, error, settings)
         if (error /= 0) then
-            write(stderr, *) "test_arh_factory_common failed: Produced error for "// &
-                "the second of two separate solver settings."
-            test_arh_factory_common = .false.
+            write(stderr, *) "test_density_qn_factory_common failed: Produced "// &
+                "error for the second of two separate solver settings."
+            test_density_qn_factory_common = .false.
         end if
         if (size(solver_settings%extensions) /= 2 .or. &
             size(other_settings%extensions) /= 2) then
-            write(stderr, *) "test_arh_factory_common failed: Separate solver "// &
-                "settings not wired."
-            test_arh_factory_common = .false.
+            write(stderr, *) "test_density_qn_factory_common failed: Separate "// &
+                "solver settings not wired."
+            test_density_qn_factory_common = .false.
         else if (.not. associated( &
             solver_settings%extensions(2)%object%state, state) .or. .not. associated( &
                 other_settings%extensions(2)%object%state, other_state)) then
-            write(stderr, *) "test_arh_factory_common failed: Separate solver "// &
-                "settings not wired with distinct objects reading their own state."
-            test_arh_factory_common = .false.
+            write(stderr, *) "test_density_qn_factory_common failed: Separate "// &
+                "solver settings not wired with distinct objects reading their own "// &
+                "state."
+            test_density_qn_factory_common = .false.
         end if
         deallocate(solver_settings, other_settings)
 
@@ -1579,123 +1595,127 @@ contains
 
         end subroutine setup_basis
 
-    end function test_arh_factory_common
+    end function test_density_qn_factory_common
 
-    logical(c_bool) function test_arh_sanity_check() bind(C)
+    logical(c_bool) function test_density_qn_sanity_check() bind(C)
         !
-        ! this function tests the subroutine which performs a sanity check for the ARH
-        ! input parameters
+        ! this function tests the subroutine which performs a sanity check for the
+        ! density QN input parameters
         !
-        use otr_arh, only: arh_settings_type, arh_sanity_check, arh_types
+        use otr_density_qn, only: density_qn_settings_type, density_qn_sanity_check, &
+                                  qn_methods
         use opentrustregion_unit_tests, only: test_context_type, setup_error_logging
 
         type(test_context_type), target :: context
-        type(arh_settings_type) :: settings
+        type(density_qn_settings_type) :: settings
         integer(ip) :: i, error
 
         ! assume tests pass
-        test_arh_sanity_check = .true.
+        test_density_qn_sanity_check = .true.
 
         ! setup settings object which passes only error messages on
         call setup_error_logging(settings, context)
 
-        ! check if all available ARH types are accepted without a message
-        do i = 1, size(arh_types)
-            settings%arh_type = arh_types(i)
-            call arh_sanity_check(settings, error)
+        ! check if all available QN methods are accepted without a message
+        do i = 1, size(qn_methods)
+            settings%qn_method = qn_methods(i)
+            call density_qn_sanity_check(settings, error)
             if (error /= 0 .or. context%log_message /= "") then
-                write(stderr, *) "test_arh_sanity_check failed: Error thrown for "// &
-                    trim(arh_types(i))//" ARH type."
-                test_arh_sanity_check = .false.
+                write(stderr, *) "test_density_qn_sanity_check failed: Error "// &
+                    "thrown for "//trim(qn_methods(i))//" QN method."
+                test_density_qn_sanity_check = .false.
             end if
         end do
 
-        ! check if ARH type is converted to lowercase
-        settings%arh_type = "MS_PSB"
-        call arh_sanity_check(settings, error)
-        if (settings%arh_type /= "ms_psb") then
-            write(stderr, *) "test_arh_sanity_check failed: ARH type not converted "// &
-                "to lowercase."
-            test_arh_sanity_check = .false.
+        ! check if QN method is converted to lowercase
+        settings%qn_method = "MS_PSB"
+        call density_qn_sanity_check(settings, error)
+        if (settings%qn_method /= "ms_psb") then
+            write(stderr, *) "test_density_qn_sanity_check failed: QN method not "// &
+                "converted to lowercase."
+            test_density_qn_sanity_check = .false.
         end if
 
-        ! check if unknown ARH type is rejected with an error message
+        ! check if unknown QN method is rejected with an error message
         call setup_error_logging(settings, context)
-        settings%arh_type = "unknown"
-        call arh_sanity_check(settings, error)
+        settings%qn_method = "unknown"
+        call density_qn_sanity_check(settings, error)
         if (error /= 1) then
-            write(stderr, *) "test_arh_sanity_check failed: Error not thrown for "// &
-                "unknown ARH type."
-            test_arh_sanity_check = .false.
+            write(stderr, *) "test_density_qn_sanity_check failed: Error not "// &
+                "thrown for unknown QN method."
+            test_density_qn_sanity_check = .false.
         end if
         if (context%log_message == "") then
-            write(stderr, *) "test_arh_sanity_check failed: No error message "// &
-                "printed for unknown ARH type."
-            test_arh_sanity_check = .false.
+            write(stderr, *) "test_density_qn_sanity_check failed: No error "// &
+                "message printed for unknown QN method."
+            test_density_qn_sanity_check = .false.
         end if
 
-    end function test_arh_sanity_check
+    end function test_density_qn_sanity_check
 
-    logical(c_bool) function test_arh_set_solver_settings() bind(C)
+    logical(c_bool) function test_density_qn_set_solver_settings() bind(C)
         !
         ! this function tests the subroutine which requests the Hessian refresh, raises
         ! the micro iteration limit and reports the symmetry of the approximate Hessian
         ! in the solver settings
         !
-        use otr_arh, only: arh_set_solver_settings, arh_settings_type, arh_n_micro
+        use otr_density_qn, only: density_qn_set_solver_settings, &
+                                  density_qn_settings_type, density_qn_n_micro
         use opentrustregion, only: solver_settings_type
         use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
-        type(arh_settings_type) :: settings
-        integer(ip) :: i_type
-        character(len=6), parameter :: arh_types(2) = &
+        type(density_qn_settings_type) :: settings
+        integer(ip) :: i_method
+        character(len=6), parameter :: qn_methods(2) = &
             [character(len=6) :: "arh", "ms_sr1"]
 
         ! assume tests pass
-        test_arh_set_solver_settings = .true.
+        test_density_qn_set_solver_settings = .true.
 
         ! adjust settings with the reference values, without the Hessian refresh and
-        ! with the opposite symmetry, so that every adjustment shows, for ARH settings
-        ! of the standard ARH type, whose approximate Hessian is not symmetric, and of
-        ! one whose is, which apart from the Hessian refresh, the micro iteration limit
-        ! and the symmetry of the approximate Hessian have to be kept
-        do i_type = 1, size(arh_types)
-            settings%arh_type = arh_types(i_type)
+        ! with the opposite symmetry, so that every adjustment shows, for density QN
+        ! settings of the standard ARH method, whose approximate Hessian is not
+        ! symmetric, and of one whose is, which apart from the Hessian refresh, the
+        ! micro iteration limit and the symmetry of the approximate Hessian have to be
+        ! kept
+        do i_method = 1, size(qn_methods)
+            settings%qn_method = qn_methods(i_method)
             solver_settings = ref_solver_settings
             solver_settings%refresh_hess = .false.
-            solver_settings%hess_symm = i_type == 1
-            call arh_set_solver_settings(solver_settings, settings)
+            solver_settings%hess_symm = i_method == 1
+            call density_qn_set_solver_settings(solver_settings, settings)
             if (.not. solver_settings%refresh_hess) then
-                write(stderr, *) "test_arh_set_solver_settings failed: Hessian "// &
-                    "refresh not requested for ARH type "//trim(arh_types(i_type))//"."
-                test_arh_set_solver_settings = .false.
+                write(stderr, *) "test_density_qn_set_solver_settings failed: "// &
+                    "Hessian refresh not requested for QN method "// &
+                    trim(qn_methods(i_method))//"."
+                test_density_qn_set_solver_settings = .false.
             end if
-            if (solver_settings%n_micro /= arh_n_micro) then
-                write(stderr, *) "test_arh_set_solver_settings failed: Micro "// &
-                    "iteration limit not raised for ARH type "// &
-                    trim(arh_types(i_type))//"."
-                test_arh_set_solver_settings = .false.
+            if (solver_settings%n_micro /= density_qn_n_micro) then
+                write(stderr, *) "test_density_qn_set_solver_settings failed: "// &
+                    "Micro iteration limit not raised for QN method "// &
+                    trim(qn_methods(i_method))//"."
+                test_density_qn_set_solver_settings = .false.
             end if
-            if (solver_settings%hess_symm .neqv. (i_type /= 1)) then
-                write(stderr, *) "test_arh_set_solver_settings failed: Symmetry of "// &
-                    "the approximate Hessian reported wrongly for ARH type "// &
-                    trim(arh_types(i_type))//"."
-                test_arh_set_solver_settings = .false.
+            if (solver_settings%hess_symm .neqv. (i_method /= 1)) then
+                write(stderr, *) "test_density_qn_set_solver_settings failed: "// &
+                    "Symmetry of the approximate Hessian reported wrongly for QN "// &
+                    "method "//trim(qn_methods(i_method))//"."
+                test_density_qn_set_solver_settings = .false.
             end if
             solver_settings%refresh_hess = ref_solver_settings%refresh_hess
             solver_settings%n_micro = ref_solver_settings%n_micro
             solver_settings%hess_symm = ref_solver_settings%hess_symm
             if (solver_settings /= ref_solver_settings) then
-                write(stderr, *) "test_arh_set_solver_settings failed: Settings "// &
-                    "not kept for ARH type "//trim(arh_types(i_type))//"."
-                test_arh_set_solver_settings = .false.
+                write(stderr, *) "test_density_qn_set_solver_settings failed: "// &
+                    "Settings not kept for QN method "//trim(qn_methods(i_method))//"."
+                test_density_qn_set_solver_settings = .false.
             end if
         end do
 
-    end function test_arh_set_solver_settings
+    end function test_density_qn_set_solver_settings
 
-    logical(c_bool) function test_obj_func_arh() bind(C)
+    logical(c_bool) function test_obj_func_density_qn() bind(C)
         !
         ! this function tests the function which defines the energy evaluation, which
         ! also adds the evaluated point to the history, for the closed- and the
@@ -1703,13 +1723,15 @@ contains
         !
         use otr_common_test_reference, only: n_particle_ref => n_particle
 
-        test_obj_func_arh = check_obj_func_arh(1_ip, "test_obj_func_arh")
-        if (.not. check_obj_func_arh(n_particle_ref, "test_obj_func_arh")) &
-            test_obj_func_arh = .false.
+        test_obj_func_density_qn = &
+            check_obj_func_density_qn(1_ip, "test_obj_func_density_qn")
+        if (.not. check_obj_func_density_qn(n_particle_ref, &
+                                            "test_obj_func_density_qn")) &
+            test_obj_func_density_qn = .false.
 
     contains
 
-        function check_obj_func_arh(n_particle, test_name) result(passed)
+        function check_obj_func_density_qn(n_particle, test_name) result(passed)
             !
             ! this function checks the energy evaluation for the closed- or open-shell
             ! case for orbitals parameterized in the OAO basis, which also adds the
@@ -1717,7 +1739,7 @@ contains
             ! history
             !
             use test_reference, only: arm_host_context, host_context_reached
-            use otr_arh, only: arh_type
+            use otr_density_qn, only: density_qn_type
             use otr_oao, only: oao_type
             use otr_common_test_reference, only: n_ao
             use otr_common_unit_tests, only: level_context, mock_requests
@@ -1725,7 +1747,7 @@ contains
 
             type(test_context_type), target :: context
             type(oao_type), allocatable, target :: oao
-            class(arh_type), allocatable, target :: arh
+            class(density_qn_type), allocatable, target :: density_qn
             integer(ip), intent(in) :: n_particle
             character(len=*), intent(in) :: test_name
             logical :: passed
@@ -1741,13 +1763,13 @@ contains
             ! assume test passes
             passed = .true.
 
-            ! set up the OAO and ARH objects with an empty history, which is removed
-            ! for the first call
-            call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, &
-                                                  dm_oao, context)
-            call setup_empty_history(arh, n_particle)
-            call arm_host_context(arh%settings, context)
-            deallocate(arh%dm_list)
+            ! set up the OAO and density QN objects with an empty history, which is
+            ! removed for the first call
+            call setup_density_qn_and_scaled_oao_objects(density_qn, oao, basis_scale, &
+                                                         dm_ao, dm_oao, context)
+            call setup_empty_history(density_qn, n_particle)
+            call arm_host_context(density_qn%settings, context)
+            deallocate(density_qn%dm_list)
 
             ! call routine with an orbital rotation before the history exists and
             ! determine if the potentials the shell keeps are requested and nothing is
@@ -1755,7 +1777,7 @@ contains
             call random_number(kappa)
             kappa = 0.1_rp * kappa
             mock_requests = [integer(ip) :: ]
-            energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
+            energy = density_qn%obj_func(kappa, error, level_context(density_qn, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error without history."
                 passed = .false.
@@ -1770,12 +1792,12 @@ contains
                     "from density matrix evaluating function."
                 passed = .false.
             end if
-            if (allocated(arh%dm_list)) then
+            if (allocated(density_qn%dm_list)) then
                 write(stderr, *) test_name// &
                     " failed: History created by energy evaluation."
                 passed = .false.
             end if
-            if (arh%model_stale) then
+            if (density_qn%model_stale) then
                 write(stderr, *) test_name// &
                     " failed: Hessian model marked stale without history."
                 passed = .false.
@@ -1784,32 +1806,33 @@ contains
             ! call routine again with an empty history and determine if the rotated
             ! density matrix is added together with the potentials evaluated at it in
             ! the history basis, while the current density matrix is left untouched
-            allocate(arh%dm_list(n_ao, n_ao, n_particle, 0))
+            allocate(density_qn%dm_list(n_ao, n_ao, n_particle, 0))
             mock_requests = [integer(ip) :: ]
-            energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
+            energy = density_qn%obj_func(kappa, error, level_context(density_qn, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name//" failed: Produced error with history."
                 passed = .false.
-            else if (size(arh%dm_list, 4) /= 1) then
+            else if (size(density_qn%dm_list, 4) /= 1) then
                 write(stderr, *) test_name// &
                     " failed: Evaluated point not added to history."
                 passed = .false.
             else
-                if (abs(energy - basis_scale**2 * sum(arh%dm_list(:, :, :, 1))) > tol) &
-                    then
+                if (abs(energy - basis_scale**2 * &
+                        sum(density_qn%dm_list(:, :, :, 1))) > tol) then
                     write(stderr, *) test_name//" failed: Incorrect energy."
                     passed = .false.
                 end if
-                if (norm2(arh%dm_list(:, :, :, 1) - dm_oao) < tol) then
+                if (norm2(density_qn%dm_list(:, :, :, 1) - dm_oao) < tol) then
                     write(stderr, *) test_name// &
                         " failed: Incorrect density matrix history."
                     passed = .false.
                 end if
-                potentials = stacked_potentials(arh, 1_ip)
+                potentials = stacked_potentials(density_qn, 1_ip)
                 do k = 1, size(mock_potential_factors)
                     if (norm2(potentials(:, :, :, k) - basis_scale**4 * &
                               mock_potential(mock_potential_factors(k), &
-                                             arh%dm_list(:, :, :, 1))) > tol) then
+                                             density_qn%dm_list(:, :, :, 1))) > tol) &
+                        then
                         write(stderr, *) test_name// &
                             " failed: Incorrect potential history."
                         passed = .false.
@@ -1817,12 +1840,12 @@ contains
                 end do
             end if
             if (norm2(oao%dm_oao - dm_oao) > tol .or. &
-                norm2(arh%orbitals%dm_ao - basis_scale**2 * dm_oao) > tol) then
+                norm2(density_qn%orbitals%dm_ao - basis_scale**2 * dm_oao) > tol) then
                 write(stderr, *) test_name// &
                     " failed: Current density matrix changed by energy evaluation."
                 passed = .false.
             end if
-            if (.not. arh%model_stale) then
+            if (.not. density_qn%model_stale) then
                 write(stderr, *) test_name//" failed: Hessian model not marked "// &
                     "stale after adding the evaluated point to the history."
                 passed = .false.
@@ -1830,19 +1853,19 @@ contains
 
             ! call routine at the same point and determine if it is not added twice and
             ! leaves the Hessian model untouched
-            arh%model_stale = .false.
-            energy = arh%obj_func(kappa, error, level_context(arh, 1_ip))
+            density_qn%model_stale = .false.
+            energy = density_qn%obj_func(kappa, error, level_context(density_qn, 1_ip))
             if (error /= 0) then
                 write(stderr, *) test_name// &
                     " failed: Produced error for a point the history already holds."
                 passed = .false.
             end if
-            if (size(arh%dm_list, 4) /= 1) then
+            if (size(density_qn%dm_list, 4) /= 1) then
                 write(stderr, *) test_name// &
                     " failed: History extended for a point it already holds."
                 passed = .false.
             end if
-            if (arh%model_stale) then
+            if (density_qn%model_stale) then
                 write(stderr, *) test_name//" failed: Hessian model marked stale "// &
                     "for a point the history already holds."
                 passed = .false.
@@ -1851,13 +1874,14 @@ contains
             ! call routine at another point whose evaluation fails and determine if the
             ! error is passed on without adding the point to the history
             context%mock_error = 1
-            energy = arh%obj_func(2.0_rp * kappa, error, level_context(arh, 1_ip))
+            energy = density_qn%obj_func(2.0_rp * kappa, error, &
+                                         level_context(density_qn, 1_ip))
             if (error /= 1) then
                 write(stderr, *) test_name//" failed: Error of the density matrix "// &
                     "evaluating function not passed on."
                 passed = .false.
             end if
-            if (size(arh%dm_list, 4) /= 1 .or. arh%model_stale) then
+            if (size(density_qn%dm_list, 4) /= 1 .or. density_qn%model_stale) then
                 write(stderr, *) test_name// &
                     " failed: Point of a failed evaluation added to the history."
                 passed = .false.
@@ -1865,29 +1889,32 @@ contains
             context%mock_error = 0
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("obj_func_arh", context)) passed = .false.
+            if (.not. host_context_reached("obj_func_density_qn", context)) &
+                passed = .false.
 
-            ! deallocate ARH and OAO objects
-            deallocate(arh, oao)
+            ! deallocate density QN and OAO objects
+            deallocate(density_qn, oao)
 
-        end function check_obj_func_arh
+        end function check_obj_func_density_qn
 
-    end function test_obj_func_arh
+    end function test_obj_func_density_qn
 
-    logical(c_bool) function test_update_orbs_arh() bind(C)
+    logical(c_bool) function test_update_orbs_density_qn() bind(C)
         !
         ! this function tests the subroutine which defines the energy, gradient and
         ! Hessian diagonal evaluation for the closed- and the open-shell case
         !
         use otr_common_test_reference, only: n_particle_ref => n_particle
 
-        test_update_orbs_arh = check_update_orbs_arh(1_ip, "test_update_orbs_arh")
-        if (.not. check_update_orbs_arh(n_particle_ref, "test_update_orbs_arh")) &
-            test_update_orbs_arh = .false.
+        test_update_orbs_density_qn = &
+            check_update_orbs_density_qn(1_ip, "test_update_orbs_density_qn")
+        if (.not. check_update_orbs_density_qn(n_particle_ref, &
+                                               "test_update_orbs_density_qn")) &
+            test_update_orbs_density_qn = .false.
 
     contains
 
-        function check_update_orbs_arh(n_particle, test_name) result(passed)
+        function check_update_orbs_density_qn(n_particle, test_name) result(passed)
             !
             ! this function checks the energy, gradient and Hessian diagonal evaluation
             ! for the closed- or open-shell case for orbitals parameterized in the OAO
@@ -1899,7 +1926,7 @@ contains
             use test_reference, only: arm_host_context, host_context_reached
             use opentrustregion, only: hess_x_type, solver_state_type
             use otr_common, only: hess_x_callback
-            use otr_arh, only: arh_type
+            use otr_density_qn, only: density_qn_type
             use otr_oao, only: oao_type
             use otr_common_test_reference, only: n_ao
             use otr_common_unit_tests, only: level_context, mock_requests, &
@@ -1908,7 +1935,7 @@ contains
 
             type(test_context_type), target :: context
             type(oao_type), allocatable, target :: oao
-            class(arh_type), allocatable, target :: arh
+            class(density_qn_type), allocatable, target :: density_qn
             type(solver_state_type), target :: state
             integer(ip), intent(in) :: n_particle
             character(len=*), intent(in) :: test_name
@@ -1929,17 +1956,17 @@ contains
             ! assume test passes
             passed = .true.
 
-            ! set up the OAO and ARH objects
-            call setup_arh_and_scaled_oao_objects(arh, oao, basis_scale, dm_ao, &
-                                                  dm_oao, context)
-            arh%settings%arh_type = "ms_psb"
-            call arm_host_context(arh%settings, context)
+            ! set up the OAO and density QN objects
+            call setup_density_qn_and_scaled_oao_objects(density_qn, oao, basis_scale, &
+                                                         dm_ao, dm_oao, context)
+            density_qn%settings%qn_method = "ms_psb"
+            call arm_host_context(density_qn%settings, context)
             if (n_particle == 1) then
-                arh%evaluate_dm_cs => mock_evaluate_dm_cs
+                density_qn%evaluate_dm_cs => mock_evaluate_dm_cs
             else
-                arh%evaluate_dm_os => mock_evaluate_dm_os
+                density_qn%evaluate_dm_os => mock_evaluate_dm_os
             end if
-            n_param = arh%orbitals%n_param
+            n_param = density_qn%orbitals%n_param
             allocate(kappa(n_param), grad(n_param), h_diag(n_param), potentials_saved( &
                 n_ao, n_ao, n_particle, size(mock_potential_factors), 2))
 
@@ -1948,8 +1975,8 @@ contains
                 ! call routine without an orbital rotation for an uninitialized object
                 kappa = 0.0_rp
                 mock_requests = [integer(ip) :: ]
-                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     level_context(arh, 1_ip))
+                call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                            error, level_context(density_qn, 1_ip))
                 if (error /= 0) then
                     write(stderr, *) test_name//" failed: Produced error."
                     passed = .false.
@@ -1964,7 +1991,7 @@ contains
                     write(stderr, *) test_name//" failed: Incorrect energy."
                     passed = .false.
                 end if
-                potentials = stacked_potentials(arh, 0_ip)
+                potentials = stacked_potentials(density_qn, 0_ip)
                 do k = 1, size(mock_potential_factors)
                     if (norm2(potentials(:, :, :, k) - basis_scale**2 * &
                               mock_potential(mock_potential_factors(k), dm_ao)) > tol) &
@@ -1989,11 +2016,11 @@ contains
 
                 ! determine if the gradient, Hessian diagonal and Hessian linear
                 ! transformation are returned
-                if (norm2(grad - arh%orbitals%grad) > tol) then
+                if (norm2(grad - density_qn%orbitals%grad) > tol) then
                     write(stderr, *) test_name//" failed: Gradient not returned."
                     passed = .false.
                 end if
-                if (norm2(h_diag - arh%orbitals%h_diag) > tol) then
+                if (norm2(h_diag - density_qn%orbitals%h_diag) > tol) then
                     write(stderr, *) test_name// &
                         " failed: Hessian diagonal not returned."
                     passed = .false.
@@ -2006,12 +2033,12 @@ contains
 
                 ! determine if the history is initialized empty and the approximate
                 ! Hessian model is assembled from it
-                if (size(arh%dm_list, 4) /= 0) then
+                if (size(density_qn%dm_list, 4) /= 0) then
                     write(stderr, *) test_name// &
                         " failed: Density matrix history not initialized empty."
                     passed = .false.
                 end if
-                if (.not. allocated(arh%dm_dirs)) then
+                if (.not. allocated(density_qn%dm_dirs)) then
                     write(stderr, *) test_name//" failed: Approximate Hessian "// &
                         "model not assembled for the initial point."
                     passed = .false.
@@ -2020,7 +2047,7 @@ contains
                 ! determine if a call without an orbital rotation, which takes no step,
                 ! leaves the ratio of the step to its size in the trust-region metric
                 ! unchanged
-                if (abs(arh%step_norm_ratio - 1.0_rp) > tol) then
+                if (abs(density_qn%step_norm_ratio - 1.0_rp) > tol) then
                     write(stderr, *) test_name//" failed: Ratio of the step to its "// &
                         "size in the trust-region metric changed without a step."
                     passed = .false.
@@ -2031,8 +2058,8 @@ contains
                 ! vanishing energy, without rebuilding the static part of the Hessian
                 oao%energy = 0.0_rp
                 oao%hess_eigen_stale = .false.
-                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     level_context(arh, 1_ip))
+                call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                            error, level_context(density_qn, 1_ip))
                 if (error /= 0) then
                     write(stderr, *) test_name// &
                         " failed: Produced error for an initialized object."
@@ -2043,7 +2070,7 @@ contains
                         " failed: Quantities recomputed without an orbital rotation."
                     passed = .false.
                 end if
-                if (size(arh%dm_list, 4) /= 0) then
+                if (size(density_qn%dm_list, 4) /= 0) then
                     write(stderr, *) test_name// &
                         " failed: History extended without an orbital rotation."
                     passed = .false.
@@ -2059,14 +2086,16 @@ contains
                 ! which the history has to retain with the latest first, by steps whose
                 ! size in the trust-region metric the state holds
                 kappa = 0.1_rp
-                arh%state => state
+                density_qn%state => state
                 state%step_size = norm2(kappa) / metric_ratio
                 do k = 2, 1, -1
                     dm_saved(:, :, :, k) = oao%dm_oao
-                    potentials_saved(:, :, :, :, k) = stacked_potentials(arh, 0_ip)
-                    arh%model_stale = k == 1
-                    call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
-                                         error, level_context(arh, 1_ip))
+                    potentials_saved(:, :, :, :, k) = &
+                        stacked_potentials(density_qn, 0_ip)
+                    density_qn%model_stale = k == 1
+                    call density_qn%update_orbs(kappa, func, grad, h_diag, &
+                                                hess_x_funptr, error, &
+                                                level_context(density_qn, 1_ip))
                     if (error /= 0) then
                         write(stderr, *) test_name// &
                             " failed: Produced error for an orbital rotation."
@@ -2074,20 +2103,20 @@ contains
                         exit checks
                     end if
                 end do
-                if (size(arh%dm_list, 4) /= 2) then
+                if (size(density_qn%dm_list, 4) /= 2) then
                     write(stderr, *) test_name// &
                         " failed: History not extended to two entries."
                     passed = .false.
                     exit checks
                 end if
                 do k = 1, 2
-                    if (norm2(arh%dm_list(:, :, :, k) - dm_saved(:, :, :, k)) > tol) &
-                        then
+                    if (norm2(density_qn%dm_list(:, :, :, k) - dm_saved(:, :, :, k)) > &
+                        tol) then
                         write(stderr, *) test_name// &
                             " failed: Incorrect density matrix history."
                         passed = .false.
                     end if
-                    if (norm2(stacked_potentials(arh, k) - &
+                    if (norm2(stacked_potentials(density_qn, k) - &
                               potentials_saved(:, :, :, :, k)) > tol) then
                         write(stderr, *) test_name// &
                             " failed: Incorrect potential history."
@@ -2097,7 +2126,7 @@ contains
 
                 ! determine if the ratio of the step to its size in the trust-region
                 ! metric is recorded
-                if (abs(arh%step_norm_ratio - metric_ratio) > tol) then
+                if (abs(density_qn%step_norm_ratio - metric_ratio) > tol) then
                     write(stderr, *) test_name//" failed: Ratio of the step to its "// &
                         "size in the trust-region metric not recorded."
                     passed = .false.
@@ -2105,11 +2134,12 @@ contains
 
                 ! determine if the approximate Hessian model is assembled from the
                 ! history extended by the point the orbitals were rotated away from
-                if (arh%model_stale .or. .not. allocated(arh%dm_dirs)) then
+                if (density_qn%model_stale .or. .not. allocated(density_qn%dm_dirs)) &
+                    then
                     write(stderr, *) test_name// &
                         " failed: Approximate Hessian model not assembled."
                     passed = .false.
-                else if (size(arh%dm_dirs, 2) /= 2 * n_particle) then
+                else if (size(density_qn%dm_dirs, 2) /= 2 * n_particle) then
                     write(stderr, *) test_name//" failed: Approximate Hessian "// &
                         "model not assembled from the extended history."
                     passed = .false.
@@ -2118,14 +2148,14 @@ contains
                 ! determine if a rotation starting from a density matrix which the
                 ! history already holds, as after the energy evaluation of an accepted
                 ! trial point, does not add that density matrix a second time
-                arh%dm_list(:, :, :, 1) = oao%dm_oao
-                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     level_context(arh, 1_ip))
+                density_qn%dm_list(:, :, :, 1) = oao%dm_oao
+                call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                            error, level_context(density_qn, 1_ip))
                 if (error /= 0) then
                     write(stderr, *) test_name//" failed: Produced error for a "// &
                         "density matrix already held in the history."
                     passed = .false.
-                else if (size(arh%dm_list, 4) /= 2) then
+                else if (size(density_qn%dm_list, 4) /= 2) then
                     write(stderr, *) test_name//" failed: History extended for a "// &
                         "density matrix it already holds."
                     passed = .false.
@@ -2136,34 +2166,34 @@ contains
                 ! as not evaluated, so that a following call without an orbital
                 ! rotation evaluates it without adding it to the history
                 context%mock_error = 1
-                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     level_context(arh, 1_ip))
+                call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                            error, level_context(density_qn, 1_ip))
                 if (error /= 1) then
                     write(stderr, *) test_name//" failed: Error of the density "// &
                         "matrix evaluating function not passed on."
                     passed = .false.
                 end if
-                if (.not. arh%evaluation_stale) then
+                if (.not. density_qn%evaluation_stale) then
                     write(stderr, *) test_name//" failed: Evaluation not marked "// &
                         "stale after a failed evaluation."
                     passed = .false.
                 end if
                 context%mock_error = 0
-                n_list = size(arh%dm_list, 4, kind=ip)
+                n_list = size(density_qn%dm_list, 4, kind=ip)
                 kappa = 0.0_rp
-                call arh%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                     level_context(arh, 1_ip))
+                call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                            error, level_context(density_qn, 1_ip))
                 if (error /= 0) then
                     write(stderr, *) test_name// &
                         " failed: Produced error after a failed evaluation."
                     passed = .false.
                 end if
-                if (arh%evaluation_stale) then
+                if (density_qn%evaluation_stale) then
                     write(stderr, *) test_name//" failed: Evaluation still marked "// &
                         "stale after a failed evaluation was recovered."
                     passed = .false.
                 end if
-                if (size(arh%dm_list, 4) /= n_list) then
+                if (size(density_qn%dm_list, 4) /= n_list) then
                     write(stderr, *) test_name//" failed: History extended by a "// &
                         "density matrix which has not been evaluated."
                     passed = .false.
@@ -2178,14 +2208,15 @@ contains
             end block checks
 
             ! check that the host context reached the callback functions unchanged
-            if (.not. host_context_reached("update_orbs_arh", context)) passed = .false.
+            if (.not. host_context_reached("update_orbs_density_qn", context)) &
+                passed = .false.
 
-            ! deallocate ARH and OAO objects
-            deallocate(arh, oao)
+            ! deallocate density QN and OAO objects
+            deallocate(density_qn, oao)
 
-        end function check_update_orbs_arh
+        end function check_update_orbs_density_qn
 
-    end function test_update_orbs_arh
+    end function test_update_orbs_density_qn
 
     logical(c_bool) function test_build_hess_model_cs() bind(C)
         !
@@ -2218,7 +2249,7 @@ contains
         !
         use otr_mo, only: mo_type
 
-        type(recording_arh_type) :: arh
+        type(recording_density_qn_type) :: density_qn
         type(mo_type), target :: mo
         integer(ip) :: i_case, error
         character(len=2), parameter :: expected_shells(3) = ["  ", "cs", "os"]
@@ -2232,14 +2263,14 @@ contains
         ! call routine for a model which is not stale and for stale models of orbitals
         ! of either shell, whose builders fail, and determine if only the builder of the
         ! shell is called and its error passed on
-        arh%orbitals => mo
+        density_qn%orbitals => mo
         do i_case = 1, size(case_names)
-            arh%built_shell = ""
-            arh%error = 1
-            arh%model_stale = i_case /= 1
+            density_qn%built_shell = ""
+            density_qn%error = 1
+            density_qn%model_stale = i_case /= 1
             mo%n_particle = merge(1_ip, 2_ip, i_case == 2)
-            call arh%rebuild_stale_hess_model(error)
-            if (arh%built_shell /= expected_shells(i_case)) then
+            call density_qn%rebuild_stale_hess_model(error)
+            if (density_qn%built_shell /= expected_shells(i_case)) then
                 write(stderr, *) "test_rebuild_stale_hess_model failed: Wrong "// &
                     "model builder called "//trim(case_names(i_case))//"."
                 test_rebuild_stale_hess_model = .false.
@@ -2253,14 +2284,14 @@ contains
 
     end function test_rebuild_stale_hess_model
 
-    logical(c_bool) function test_hess_x_arh() bind(C)
+    logical(c_bool) function test_hess_x_density_qn() bind(C)
         !
         ! this function tests the subroutine which defines the Hessian linear
         ! transformation on the basis of augmented Roothaan-Hall and related methods,
         ! which adds the low-rank part to the static part of the orbital basis
         !
         use otr_common_unit_tests, only: level_context
-        use otr_arh, only: arh_type
+        use otr_density_qn, only: density_qn_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
@@ -2273,7 +2304,7 @@ contains
         integer(ip), parameter :: n_dirs = 2
 
         type(mo_type), allocatable, target :: mo
-        class(arh_type), allocatable, target :: arh
+        class(density_qn_type), allocatable, target :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
         real(rp), allocatable :: x(:), hess_x(:), expected_hess_x(:)
@@ -2281,15 +2312,16 @@ contains
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
-        test_hess_x_arh = .true.
+        test_hess_x_density_qn = .true.
 
-        ! set up the ARH object in the MO basis with random Fock matrix blocks of the
-        ! differently occupied spin channels
+        ! set up the density QN object in the MO basis with random Fock matrix blocks
+        ! of the differently occupied spin channels
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-        call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, n_occ, context)
+        call setup_density_qn_and_mo_objects(density_qn, mo, mo_coeff, ao_overlap, &
+                                             n_occ, context)
         call setup_random_mo_channels(mo, n_occ, n_mo)
-        n_param = arh%orbitals%n_param
+        n_param = density_qn%orbitals%n_param
         allocate(x(n_param), hess_x(n_param))
         call random_number(x)
 
@@ -2301,64 +2333,66 @@ contains
             expected_hess_x = ref_hess_x_static_mo(x, mo%mo_channels)
             if (i_case == 1) then
                 case_name = "with low-rank part"
-                allocate(arh%expansion_dirs(n_param, n_dirs), &
-                         arh%projection_dirs(n_param, n_dirs), &
-                         arh%coupling_matrix(n_dirs, n_dirs))
-                call random_number(arh%expansion_dirs)
-                call random_number(arh%projection_dirs)
-                call random_number(arh%coupling_matrix)
-                expected_hess_x = expected_hess_x + matmul(arh%expansion_dirs, matmul( &
-                    arh%coupling_matrix, matmul(transpose(arh%projection_dirs), x)))
+                allocate(density_qn%expansion_dirs(n_param, n_dirs), &
+                         density_qn%projection_dirs(n_param, n_dirs), &
+                         density_qn%coupling_matrix(n_dirs, n_dirs))
+                call random_number(density_qn%expansion_dirs)
+                call random_number(density_qn%projection_dirs)
+                call random_number(density_qn%coupling_matrix)
+                expected_hess_x = expected_hess_x + matmul( &
+                    density_qn%expansion_dirs, &
+                    matmul(density_qn%coupling_matrix, &
+                           matmul(transpose(density_qn%projection_dirs), x)))
             else if (i_case == 2) then
                 case_name = "for stale model"
-                call setup_empty_history(arh, n_particle)
-                arh%model_stale = .true.
+                call setup_empty_history(density_qn, n_particle)
+                density_qn%model_stale = .true.
             else
                 case_name = "without low-rank part"
             end if
-            call arh%hess_x(x, hess_x, error, level_context(arh, 1_ip))
+            call density_qn%hess_x(x, hess_x, error, level_context(density_qn, 1_ip))
             if (error /= 0) then
-                write(stderr, *) "test_hess_x_arh failed: Produced error "// &
+                write(stderr, *) "test_hess_x_density_qn failed: Produced error "// &
                     case_name//"."
-                test_hess_x_arh = .false.
+                test_hess_x_density_qn = .false.
             end if
             if (norm2(hess_x - expected_hess_x) > tol) then
-                write(stderr, *) "test_hess_x_arh failed: Incorrect Hessian linear "// &
-                    "transformation "//case_name//"."
-                test_hess_x_arh = .false.
+                write(stderr, *) "test_hess_x_density_qn failed: Incorrect Hessian "// &
+                    "linear transformation "//case_name//"."
+                test_hess_x_density_qn = .false.
             end if
-            if (arh%model_stale) then
-                write(stderr, *) "test_hess_x_arh failed: Hessian model not "// &
+            if (density_qn%model_stale) then
+                write(stderr, *) "test_hess_x_density_qn failed: Hessian model not "// &
                     "rebuilt "//case_name//"."
-                test_hess_x_arh = .false.
+                test_hess_x_density_qn = .false.
             end if
         end do
 
-        ! deallocate ARH and MO objects
-        deallocate(arh, mo)
+        ! deallocate density QN and MO objects
+        deallocate(density_qn, mo)
 
-    end function test_hess_x_arh
+    end function test_hess_x_density_qn
 
-    logical(c_bool) function test_inv_hess_x_arh() bind(C)
+    logical(c_bool) function test_inv_hess_x_density_qn() bind(C)
         !
         ! this function tests the exact, optionally level-shifted inverse of the
         ! approximate Hessian in both the closed- and the open-shell case and for both
         ! orbital bases
         !
-        use otr_common, only: error_arh
+        use otr_common, only: error_density_qn
         use otr_common_test_reference, only: n_ao, n_occ, n_particle_ref => n_particle
         use otr_mo_test_reference, only: n_mo
         use otr_mo_unit_tests, only: generate_random_ao_overlap, &
                                      generate_random_mo_coeff, &
                                      setup_random_mo_channels, ref_hess_x_static_mo
-        use otr_arh, only: arh_type
+        use otr_density_qn, only: density_qn_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_error_logging, &
                                               identity_matrix
 
         type(test_context_type), target :: context
-        class(arh_type), allocatable, target :: arh
+        class(density_qn_type), allocatable, target :: density_qn
         type(mo_type), allocatable, target :: mo
         type(oao_type), allocatable, target :: oao
         real(rp), target :: bracket_mo_coeff(n_ao, n_mo, n_particle_ref)
@@ -2367,29 +2401,29 @@ contains
         integer(ip) :: i_basis, n_particle, inv_error, i_channel
 
         ! assume tests pass
-        test_inv_hess_x_arh = .true.
+        test_inv_hess_x_density_qn = .true.
 
         ! the inverse only depends on the low-rank factors and the orbital basis, not
-        ! on the ARH type which assembled them, so every basis and shell is checked
+        ! on the QN method which assembled them, so every basis and shell is checked
         ! once
         do i_basis = 1, 2
             do n_particle = 1, n_particle_ref
-                if (.not. check_inv_hess_x_arh_case(i_basis == 1)) &
-                    test_inv_hess_x_arh = .false.
+                if (.not. check_inv_hess_x_density_qn_case(i_basis == 1)) &
+                    test_inv_hess_x_density_qn = .false.
             end do
         end do
 
-        ! set up the ARH object in the MO basis with an up-to-date eigendecomposition
-        ! in the MO basis itself, whose eigenvalue pairs, the open-shell differences 2
-        ! (e_v - e_o), are all 2, and a low-rank part along the first parameter with a
-        ! coupling of -2, for which the matrix I + C P^T D^-1 E of the Woodbury
-        ! identity vanishes, and determine if the inverse returns an error with an
-        ! error message
+        ! set up the density QN object in the MO basis with an up-to-date
+        ! eigendecomposition in the MO basis itself, whose eigenvalue pairs, the
+        ! open-shell differences 2 (e_v - e_o), are all 2, and a low-rank part along
+        ! the first parameter with a coupling of -2, for which the matrix I + C P^T
+        ! D^-1 E of the Woodbury identity vanishes, and determine if the inverse
+        ! returns an error with an error message
         bracket_overlap = generate_random_ao_overlap(n_ao)
         bracket_mo_coeff = &
             generate_random_mo_coeff(bracket_overlap, n_mo, n_particle_ref)
-        call setup_arh_and_mo_objects(arh, mo, bracket_mo_coeff, bracket_overlap, &
-                                      n_occ, context)
+        call setup_density_qn_and_mo_objects(density_qn, mo, bracket_mo_coeff, &
+                                             bracket_overlap, n_occ, context)
         do i_channel = 1, mo%n_particle
             associate (channel => mo%mo_channels(i_channel))
                 channel%occ_eigvecs = identity_matrix(channel%n_occ)
@@ -2399,36 +2433,37 @@ contains
             end associate
         end do
         mo%hess_eigen_stale = .false.
-        call setup_error_logging(arh%settings, context)
-        allocate(arh%expansion_dirs(mo%n_param, 1), arh%coupling_matrix(1, 1))
-        arh%expansion_dirs = 0.0_rp
-        arh%expansion_dirs(1, 1) = 1.0_rp
-        arh%projection_dirs = arh%expansion_dirs
-        arh%coupling_matrix = -2.0_rp
-        arh%error_origin = error_arh
+        call setup_error_logging(density_qn%settings, context)
+        allocate(density_qn%expansion_dirs(mo%n_param, 1), &
+                 density_qn%coupling_matrix(1, 1))
+        density_qn%expansion_dirs = 0.0_rp
+        density_qn%expansion_dirs(1, 1) = 1.0_rp
+        density_qn%projection_dirs = density_qn%expansion_dirs
+        density_qn%coupling_matrix = -2.0_rp
+        density_qn%error_origin = error_density_qn
         allocate(x(mo%n_param), inv_x(mo%n_param))
         call random_number(x)
-        call arh%inv_hess_x(x, inv_x, inv_error)
-        if (inv_error /= error_arh + 1) then
-            write(stderr, *) "test_inv_hess_x_arh failed: No error returned for a "// &
-                "singular approximate Hessian."
-            test_inv_hess_x_arh = .false.
+        call density_qn%inv_hess_x(x, inv_x, inv_error)
+        if (inv_error /= error_density_qn + 1) then
+            write(stderr, *) "test_inv_hess_x_density_qn failed: No error returned "// &
+                "for a singular approximate Hessian."
+            test_inv_hess_x_density_qn = .false.
         end if
         if (context%log_message == "") then
-            write(stderr, *) "test_inv_hess_x_arh failed: No error message printed "// &
-                "for a singular approximate Hessian."
-            test_inv_hess_x_arh = .false.
+            write(stderr, *) "test_inv_hess_x_density_qn failed: No error message "// &
+                "printed for a singular approximate Hessian."
+            test_inv_hess_x_density_qn = .false.
         end if
-        deallocate(arh, mo)
+        deallocate(density_qn, mo)
 
     contains
 
-        subroutine check_inv_hess_x_arh(hess, vector, mu, case_name, passed)
+        subroutine check_inv_hess_x_density_qn(hess, vector, mu, case_name, passed)
             !
-            ! this subroutine checks the exact-inverse of the ARH Woodbury
-            ! preconditioner against a reference Hessian by applying the reference
-            ! (B - mu*I) to the preconditioned vector which has to recover the vector,
-            ! both with and without the level shift
+            ! this subroutine checks the exact-inverse of the density QN Woodbury
+            ! preconditioner against a reference Hessian by applying the reference (B -
+            ! mu*I) to the preconditioned vector which has to recover the vector, both
+            ! with and without the level shift
             !
             real(rp), intent(in) :: hess(:, :), vector(:), mu
             character(len=*), intent(in) :: case_name
@@ -2441,40 +2476,40 @@ contains
 
             ! shifted entry point: applying the reference (B - mu*I) to the
             ! preconditioned vector has to recover the vector
-            call arh%inv_hess_x(vector, actual, error, mu)
+            call density_qn%inv_hess_x(vector, actual, error, mu)
             if (error /= 0) then
-                write(stderr, *) "test_inv_hess_x_arh failed: Shifted inverse "// &
-                    "produced error for the "//case_name//" case."
+                write(stderr, *) "test_inv_hess_x_density_qn failed: Shifted "// &
+                    "inverse produced error for the "//case_name//" case."
                 passed = .false.
             end if
             if (norm2(matmul(hess, actual) - mu * actual - vector) > &
                 tol * (1.0_rp + norm2(hess) * norm2(actual))) then
-                write(stderr, *) "test_inv_hess_x_arh failed: Shifted inverse is "// &
-                    "not inverse of shifted reference Hessian for the "//case_name// &
-                    " case."
+                write(stderr, *) "test_inv_hess_x_density_qn failed: Shifted "// &
+                    "inverse is not inverse of shifted reference Hessian for the "// &
+                    case_name//" case."
                 passed = .false.
             end if
 
             ! the unshifted entry point has to reproduce the same round trip against the
             ! reference Hessian itself, without a level shift
-            call arh%inv_hess_x(vector, actual, error)
+            call density_qn%inv_hess_x(vector, actual, error)
             if (error /= 0) then
-                write(stderr, *) "test_inv_hess_x_arh failed: Unshifted inverse "// &
-                    "produced error for the "//case_name//" case."
+                write(stderr, *) "test_inv_hess_x_density_qn failed: Unshifted "// &
+                    "inverse produced error for the "//case_name//" case."
                 passed = .false.
             end if
             if (norm2(matmul(hess, actual) - vector) > &
                 tol * (1.0_rp + norm2(hess) * norm2(actual))) then
-                write(stderr, *) "test_inv_hess_x_arh failed: Inverse is not "// &
-                    "inverse of reference Hessian for the "//case_name//" case."
+                write(stderr, *) "test_inv_hess_x_density_qn failed: Inverse is "// &
+                    "not inverse of reference Hessian for the "//case_name//" case."
                 passed = .false.
             end if
 
-        end subroutine check_inv_hess_x_arh
+        end subroutine check_inv_hess_x_density_qn
 
-        function check_inv_hess_x_arh_case(mo_basis) result(passed)
+        function check_inv_hess_x_density_qn_case(mo_basis) result(passed)
             !
-            ! this function performs the exact-inverse check of the ARH Woodbury
+            ! this function performs the exact-inverse check of the density QN Woodbury
             ! preconditioner for one orbital basis and the current shell with random
             ! expansion and projection directions and a random coupling matrix, and for
             ! a stale model on an empty history, which has to be rebuilt without
@@ -2485,7 +2520,7 @@ contains
             use opentrustregion_unit_tests, only: identity_matrix, setup_settings
             use otr_oao_unit_tests, only: ref_unpack_asymm, ref_hess_x_oao, &
                                           generate_random_nonredundant_vector
-            use otr_arh, only: arh_oao_type
+            use otr_density_qn, only: density_qn_oao_type
 
             logical, intent(in) :: mo_basis
             logical :: passed
@@ -2516,8 +2551,8 @@ contains
             if (mo_basis) then
                 ao_overlap = generate_random_ao_overlap(n_ao)
                 mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
-                call setup_arh_and_mo_objects(arh, mo, mo_coeff, ao_overlap, &
-                                              n_occ(:n_particle), context)
+                call setup_density_qn_and_mo_objects( &
+                    density_qn, mo, mo_coeff, ao_overlap, n_occ(:n_particle), context)
                 call setup_random_mo_channels(mo, n_occ(:n_particle), n_mo)
                 do k = 1, n_particle
                     associate (channel => mo%mo_channels(k))
@@ -2539,7 +2574,7 @@ contains
                 end do
 
                 ! set up the OAO object, whose eigendecomposition of the static part
-                ! the inverse refreshes, and the ARH object in the OAO basis
+                ! the inverse refreshes, and the density QN object in the OAO basis
                 allocate(oao)
                 call setup_settings(oao%settings, context)
                 oao%n_ao = n_ao
@@ -2549,22 +2584,22 @@ contains
                 oao%fock_oo = fock_oo
                 oao%fock_vv = fock_vv
                 oao%hess_eigen_stale = .true.
-                allocate(arh, source=arh_oao_type(oao))
-                call setup_settings(arh%settings, context)
+                allocate(density_qn, source=density_qn_oao_type(oao))
+                call setup_settings(density_qn%settings, context)
 
                 ! cache a wrong eigendecomposition and wrong directions rotated into
                 ! its eigenbasis, which have to be refreshed since the static part is
                 ! marked as changed
                 allocate(oao%hess_eigvecs(n_ao, n_ao, n_particle), &
                          oao%hess_eigvals(n_ao, n_particle), &
-                         arh%rotated_expansion_dirs(oao%n_param, n_dirs), &
-                         arh%rotated_projection_dirs(oao%n_param, n_dirs))
+                         density_qn%rotated_expansion_dirs(oao%n_param, n_dirs), &
+                         density_qn%rotated_projection_dirs(oao%n_param, n_dirs))
                 oao%hess_eigvecs = 0.0_rp
                 oao%hess_eigvals = 1.0_rp
-                arh%rotated_expansion_dirs = 0.0_rp
-                arh%rotated_projection_dirs = 0.0_rp
+                density_qn%rotated_expansion_dirs = 0.0_rp
+                density_qn%rotated_projection_dirs = 0.0_rp
             end if
-            n_param = arh%orbitals%n_param
+            n_param = density_qn%orbitals%n_param
 
             ! build the dense static part
             allocate(static_hess(n_param, n_param), e_i(n_param))
@@ -2593,163 +2628,166 @@ contains
                         n_param, n_particle, n_ao, dm_oao)
                 end if
             end do
-            arh%expansion_dirs = dirs(:, :n_dirs)
-            arh%projection_dirs = dirs(:, n_dirs + 1:2 * n_dirs)
+            density_qn%expansion_dirs = dirs(:, :n_dirs)
+            density_qn%projection_dirs = dirs(:, n_dirs + 1:2 * n_dirs)
 
             ! random, and hence non-symmetric, coupling matrix, so that a transposed
             ! coupling matrix would not go unnoticed
             call random_number(coupling)
-            arh%coupling_matrix = low_rank_scale * (coupling - 0.5_rp)
+            density_qn%coupling_matrix = low_rank_scale * (coupling - 0.5_rp)
 
             ! check inverse against the dense approximate Hessian
-            hess = static_hess + matmul(arh%expansion_dirs, matmul( &
-                arh%coupling_matrix, transpose(arh%projection_dirs)))
-            call check_inv_hess_x_arh(hess, dirs(:, 2 * n_dirs + 1), mu, case_name, &
-                                      passed)
-            if (.not. (allocated(arh%rotated_expansion_dirs) .and. &
-                       allocated(arh%rotated_projection_dirs))) then
-                write(stderr, *) "test_inv_hess_x_arh failed: Directions rotated "// &
-                    "into the eigenbasis not kept for the "//case_name//" case."
+            hess = static_hess + matmul(density_qn%expansion_dirs, matmul( &
+                density_qn%coupling_matrix, transpose(density_qn%projection_dirs)))
+            call check_inv_hess_x_density_qn(hess, dirs(:, 2 * n_dirs + 1), mu, &
+                                             case_name, passed)
+            if (.not. (allocated(density_qn%rotated_expansion_dirs) .and. &
+                       allocated(density_qn%rotated_projection_dirs))) then
+                write(stderr, *) "test_inv_hess_x_density_qn failed: Directions "// &
+                    "rotated into the eigenbasis not kept for the "//case_name//" case."
                 passed = .false.
             end if
 
             ! mark the model stale on an empty history and determine if it is rebuilt
             ! before it is inverted, which discards the low-rank part and leaves the
             ! inverse of the static part
-            call setup_empty_history(arh, n_particle)
-            arh%model_stale = .true.
-            call check_inv_hess_x_arh(static_hess, dirs(:, 2 * n_dirs + 1), mu, &
-                                      "stale-model "//case_name, passed)
-            if (arh%model_stale .or. allocated(arh%coupling_matrix)) then
-                write(stderr, *) "test_inv_hess_x_arh failed: Stale Hessian model "// &
-                    "not rebuilt before it is inverted for the "//case_name//" case."
+            call setup_empty_history(density_qn, n_particle)
+            density_qn%model_stale = .true.
+            call check_inv_hess_x_density_qn(static_hess, dirs(:, 2 * n_dirs + 1), mu, &
+                                             "stale-model "//case_name, passed)
+            if (density_qn%model_stale .or. allocated(density_qn%coupling_matrix)) then
+                write(stderr, *) "test_inv_hess_x_density_qn failed: Stale Hessian "// &
+                    "model not rebuilt before it is inverted for the "//case_name// &
+                    " case."
                 passed = .false.
             end if
 
-            ! deallocate ARH and orbital objects
-            deallocate(arh)
+            ! deallocate density QN and orbital objects
+            deallocate(density_qn)
             if (allocated(mo)) deallocate(mo)
             if (allocated(oao)) deallocate(oao)
 
-        end function check_inv_hess_x_arh_case
+        end function check_inv_hess_x_density_qn_case
 
-    end function test_inv_hess_x_arh
+    end function test_inv_hess_x_density_qn
 
-    logical(c_bool) function test_precond_arh() bind(C)
+    logical(c_bool) function test_precond_density_qn() bind(C)
         !
         ! this function tests the subroutine which defines the level-shifted
-        ! preconditioner of the ARH approximate Hessian, which hands the residual and
-        ! the level shift to the inverse of the approximate Hessian and passes on what
-        ! it returns
+        ! preconditioner of the density QN approximate Hessian, which hands the
+        ! residual and the level shift to the inverse of the approximate Hessian and
+        ! passes on what it returns
         !
         use otr_common_unit_tests, only: level_context
         use otr_mo_test_reference, only: n_param
 
         real(rp), parameter :: mu = 0.3_rp
 
-        type(recording_arh_type), target :: arh
+        type(recording_density_qn_type), target :: density_qn
         real(rp) :: residual(n_param), precond_residual(n_param)
         integer(ip) :: error
 
         ! assume tests pass
-        test_precond_arh = .true.
+        test_precond_density_qn = .true.
 
         ! call routine for an inverse which fails and determine if the residual and the
         ! level shift are handed to it and its result and error are passed on
         call random_number(residual)
-        arh%error = 1
-        call arh%precond(residual, mu, precond_residual, error, &
-                         level_context(arh, 1_ip))
-        if (.not. allocated(arh%received)) then
-            write(stderr, *) "test_precond_arh failed: Inverse not called."
-            test_precond_arh = .false.
-        else if (any(shape(arh%received) /= [n_param])) then
-            write(stderr, *) "test_precond_arh failed: Residual not handed to the "// &
-                "inverse."
-            test_precond_arh = .false.
-        else if (norm2(arh%received - residual) > tol) then
-            write(stderr, *) "test_precond_arh failed: Residual not handed to the "// &
-                "inverse."
-            test_precond_arh = .false.
+        density_qn%error = 1
+        call density_qn%precond(residual, mu, precond_residual, error, &
+                                level_context(density_qn, 1_ip))
+        if (.not. allocated(density_qn%received)) then
+            write(stderr, *) "test_precond_density_qn failed: Inverse not called."
+            test_precond_density_qn = .false.
+        else if (any(shape(density_qn%received) /= [n_param])) then
+            write(stderr, *) "test_precond_density_qn failed: Residual not handed "// &
+                "to the inverse."
+            test_precond_density_qn = .false.
+        else if (norm2(density_qn%received - residual) > tol) then
+            write(stderr, *) "test_precond_density_qn failed: Residual not handed "// &
+                "to the inverse."
+            test_precond_density_qn = .false.
         end if
-        if (.not. arh%level_shift_received .or. &
-            abs(arh%received_level_shift - mu) > tol) then
-            write(stderr, *) "test_precond_arh failed: Level shift not handed to "// &
-                "the inverse."
-            test_precond_arh = .false.
+        if (.not. density_qn%level_shift_received .or. &
+            abs(density_qn%received_level_shift - mu) > tol) then
+            write(stderr, *) "test_precond_density_qn failed: Level shift not "// &
+                "handed to the inverse."
+            test_precond_density_qn = .false.
         end if
         if (norm2(precond_residual - 3.0_rp * residual) > tol) then
-            write(stderr, *) "test_precond_arh failed: Result of the inverse not "// &
-                "passed on."
-            test_precond_arh = .false.
+            write(stderr, *) "test_precond_density_qn failed: Result of the "// &
+                "inverse not passed on."
+            test_precond_density_qn = .false.
         end if
         if (error /= 1) then
-            write(stderr, *) "test_precond_arh failed: Error of the inverse not "// &
-                "passed on."
-            test_precond_arh = .false.
+            write(stderr, *) "test_precond_density_qn failed: Error of the inverse "// &
+                "not passed on."
+            test_precond_density_qn = .false.
         end if
 
-    end function test_precond_arh
+    end function test_precond_density_qn
 
-    logical(c_bool) function test_precond_pd_arh() bind(C)
+    logical(c_bool) function test_precond_pd_density_qn() bind(C)
         !
         ! this function tests the subroutine which defines the positive-definite
-        ! preconditioner of the ARH approximate Hessian, which hands the residual and
-        ! the context to the one of the orbital basis and passes on what it returns
+        ! preconditioner of the density QN approximate Hessian, which hands the
+        ! residual and the context to the one of the orbital basis and passes on what
+        ! it returns
         !
         use otr_common_unit_tests, only: level_context
         use otr_mo_test_reference, only: n_param
 
-        type(recording_arh_type), target :: arh
+        type(recording_density_qn_type), target :: density_qn
         type(recording_basis_type), target :: basis
         class(*), pointer :: context
         real(rp) :: residual(n_param), precond_residual(n_param)
         integer(ip) :: error
 
         ! assume tests pass
-        test_precond_pd_arh = .true.
+        test_precond_pd_density_qn = .true.
 
-        ! point the ARH object at a recording orbital basis whose preconditioner fails
-        arh%orbitals => basis
+        ! point the density QN object at a recording orbital basis whose preconditioner
+        ! fails
+        density_qn%orbitals => basis
         basis%error = 1
-        context => level_context(arh, 1_ip)
+        context => level_context(density_qn, 1_ip)
         call random_number(residual)
 
         ! call routine and determine if the residual and the context are handed to the
         ! orbital basis and its result and error are passed on
-        call arh%precond_pd(residual, precond_residual, error, context)
+        call density_qn%precond_pd(residual, precond_residual, error, context)
         if (.not. allocated(basis%received)) then
-            write(stderr, *) "test_precond_pd_arh failed: Preconditioner of the "// &
-                "orbital basis not called."
-            test_precond_pd_arh = .false.
+            write(stderr, *) "test_precond_pd_density_qn failed: Preconditioner of "// &
+                "the orbital basis not called."
+            test_precond_pd_density_qn = .false.
         else if (any(shape(basis%received) /= [n_param])) then
-            write(stderr, *) "test_precond_pd_arh failed: Residual not handed to "// &
-                "the orbital basis."
-            test_precond_pd_arh = .false.
+            write(stderr, *) "test_precond_pd_density_qn failed: Residual not "// &
+                "handed to the orbital basis."
+            test_precond_pd_density_qn = .false.
         else if (norm2(basis%received - residual) > tol) then
-            write(stderr, *) "test_precond_pd_arh failed: Residual not handed to "// &
-                "the orbital basis."
-            test_precond_pd_arh = .false.
+            write(stderr, *) "test_precond_pd_density_qn failed: Residual not "// &
+                "handed to the orbital basis."
+            test_precond_pd_density_qn = .false.
         end if
         if (.not. associated(basis%received_context, context)) then
-            write(stderr, *) "test_precond_pd_arh failed: Context not handed to "// &
-                "the orbital basis."
-            test_precond_pd_arh = .false.
+            write(stderr, *) "test_precond_pd_density_qn failed: Context not "// &
+                "handed to the orbital basis."
+            test_precond_pd_density_qn = .false.
         end if
         if (norm2(precond_residual - 3.0_rp * residual) > tol) then
-            write(stderr, *) "test_precond_pd_arh failed: Result of the orbital "// &
-                "basis not passed on."
-            test_precond_pd_arh = .false.
+            write(stderr, *) "test_precond_pd_density_qn failed: Result of the "// &
+                "orbital basis not passed on."
+            test_precond_pd_density_qn = .false.
         end if
         if (error /= 1) then
-            write(stderr, *) "test_precond_pd_arh failed: Error of the orbital "// &
-                "basis not passed on."
-            test_precond_pd_arh = .false.
+            write(stderr, *) "test_precond_pd_density_qn failed: Error of the "// &
+                "orbital basis not passed on."
+            test_precond_pd_density_qn = .false.
         end if
 
-    end function test_precond_pd_arh
+    end function test_precond_pd_density_qn
 
-    logical(c_bool) function test_get_extra_trial_vectors_arh() bind(C)
+    logical(c_bool) function test_get_extra_trial_vectors_density_qn() bind(C)
         !
         ! this function tests the subroutine which returns the extra trial vectors of
         ! the orbital basis for the solver's initial trial space, which hands the
@@ -2760,109 +2798,110 @@ contains
 
         integer(ip), parameter :: n_extra = 2
 
-        type(recording_arh_type), target :: arh
+        type(recording_density_qn_type), target :: density_qn
         type(recording_basis_type), target :: basis
         class(*), pointer :: context
         real(rp) :: trial_vectors(n_param, n_extra)
         integer(ip) :: error
 
         ! assume tests pass
-        test_get_extra_trial_vectors_arh = .true.
+        test_get_extra_trial_vectors_density_qn = .true.
 
-        ! point the ARH object at a recording orbital basis whose extra trial vector
-        ! function fails
-        arh%orbitals => basis
+        ! point the density QN object at a recording orbital basis whose extra trial
+        ! vector function fails
+        density_qn%orbitals => basis
         basis%error = 1
-        context => level_context(arh, 1_ip)
+        context => level_context(density_qn, 1_ip)
 
         ! call routine and determine if the context is handed to the orbital basis and
         ! its trial vectors and error are passed on
         trial_vectors = 0.0_rp
-        call arh%get_extra_trial_vectors(trial_vectors, error, context)
+        call density_qn%get_extra_trial_vectors(trial_vectors, error, context)
         if (.not. associated(basis%received_context, context)) then
-            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Context not "// &
-                "handed to the orbital basis."
-            test_get_extra_trial_vectors_arh = .false.
+            write(stderr, *) "test_get_extra_trial_vectors_density_qn failed: "// &
+                "Context not handed to the orbital basis."
+            test_get_extra_trial_vectors_density_qn = .false.
         end if
         if (any(abs(trial_vectors - 3.0_rp) > tol)) then
-            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Trial "// &
-                "vectors of the orbital basis not passed on."
-            test_get_extra_trial_vectors_arh = .false.
+            write(stderr, *) "test_get_extra_trial_vectors_density_qn failed: "// &
+                "Trial vectors of the orbital basis not passed on."
+            test_get_extra_trial_vectors_density_qn = .false.
         end if
         if (error /= 1) then
-            write(stderr, *) "test_get_extra_trial_vectors_arh failed: Error of "// &
-                "the orbital basis not passed on."
-            test_get_extra_trial_vectors_arh = .false.
+            write(stderr, *) "test_get_extra_trial_vectors_density_qn failed: "// &
+                "Error of the orbital basis not passed on."
+            test_get_extra_trial_vectors_density_qn = .false.
         end if
 
-    end function test_get_extra_trial_vectors_arh
+    end function test_get_extra_trial_vectors_density_qn
 
-    logical(c_bool) function test_project_arh_oao() bind(C)
+    logical(c_bool) function test_project_density_qn_oao() bind(C)
         !
         ! this function tests the subroutine which applies the projection of the
         ! orbitals in the OAO basis, which hands the vector and the context to the
         ! projection of the orbital basis and passes on what it returns
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_common_unit_tests, only: level_context
         use otr_oao_test_reference, only: n_param
 
-        type(arh_oao_type), target :: arh
+        type(density_qn_oao_type), target :: density_qn
         type(recording_basis_type), target :: basis
         class(*), pointer :: context
         real(rp) :: vector(n_param), original(n_param)
         integer(ip) :: error
 
         ! assume tests pass
-        test_project_arh_oao = .true.
+        test_project_density_qn_oao = .true.
 
-        ! point the ARH object at a recording orbital basis whose projection fails
-        arh%orbitals => basis
+        ! point the density QN object at a recording orbital basis whose projection
+        ! fails
+        density_qn%orbitals => basis
         basis%error = 1
-        context => level_context(arh, 1_ip)
+        context => level_context(density_qn, 1_ip)
         call random_number(vector)
         original = vector
 
         ! call routine and determine if the vector and the context are handed to the
         ! orbital basis and its projected vector and error are passed on
-        call arh%project(vector, error, context)
+        call density_qn%project(vector, error, context)
         if (.not. allocated(basis%received)) then
-            write(stderr, *) "test_project_arh_oao failed: Projection of the "// &
-                "orbital basis not called."
-            test_project_arh_oao = .false.
+            write(stderr, *) "test_project_density_qn_oao failed: Projection of "// &
+                "the orbital basis not called."
+            test_project_density_qn_oao = .false.
         else if (any(shape(basis%received) /= [n_param])) then
-            write(stderr, *) "test_project_arh_oao failed: Vector not handed to "// &
-                "the orbital basis."
-            test_project_arh_oao = .false.
+            write(stderr, *) "test_project_density_qn_oao failed: Vector not "// &
+                "handed to the orbital basis."
+            test_project_density_qn_oao = .false.
         else if (norm2(basis%received - original) > tol) then
-            write(stderr, *) "test_project_arh_oao failed: Vector not handed to "// &
-                "the orbital basis."
-            test_project_arh_oao = .false.
+            write(stderr, *) "test_project_density_qn_oao failed: Vector not "// &
+                "handed to the orbital basis."
+            test_project_density_qn_oao = .false.
         end if
         if (.not. associated(basis%received_context, context)) then
-            write(stderr, *) "test_project_arh_oao failed: Context not handed to "// &
-                "the orbital basis."
-            test_project_arh_oao = .false.
+            write(stderr, *) "test_project_density_qn_oao failed: Context not "// &
+                "handed to the orbital basis."
+            test_project_density_qn_oao = .false.
         end if
         if (norm2(vector - 3.0_rp * original) > tol) then
-            write(stderr, *) "test_project_arh_oao failed: Projected vector of the "// &
-                "orbital basis not passed on."
-            test_project_arh_oao = .false.
+            write(stderr, *) "test_project_density_qn_oao failed: Projected vector "// &
+                "of the orbital basis not passed on."
+            test_project_density_qn_oao = .false.
         end if
         if (error /= 1) then
-            write(stderr, *) "test_project_arh_oao failed: Error of the orbital "// &
-                "basis not passed on."
-            test_project_arh_oao = .false.
+            write(stderr, *) "test_project_density_qn_oao failed: Error of the "// &
+                "orbital basis not passed on."
+            test_project_density_qn_oao = .false.
         end if
 
-    end function test_project_arh_oao
+    end function test_project_density_qn_oao
 
-    logical(c_bool) function test_construct_arh_mo() bind(C)
+    logical(c_bool) function test_construct_density_qn_mo() bind(C)
         !
-        ! this function tests the function which returns the ARH object for the MO
-        ! basis pointing to an MO object and its quantities
+        ! this function tests the function which returns the density QN object for the
+        ! MO basis pointing to an MO object and its quantities
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
@@ -2870,12 +2909,12 @@ contains
                                      generate_random_mo_coeff, setup_mo_object
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
 
         ! assume tests pass
-        test_construct_arh_mo = .true.
+        test_construct_density_qn_mo = .true.
 
         ! set up the MO object
         ao_overlap = generate_random_ao_overlap(n_ao)
@@ -2883,80 +2922,83 @@ contains
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
 
         ! call routine and determine if the quantities of the MO object are associated
-        arh = arh_mo_type(mo)
-        if (.not. associated(arh%orbitals, mo)) then
-            write(stderr, *) "test_construct_arh_mo failed: Orbitals not associated."
-            test_construct_arh_mo = .false.
-        end if
-        if (.not. associated(arh%mo_coeff, mo_coeff)) then
-            write(stderr, *) "test_construct_arh_mo failed: MO coefficients not "// &
+        density_qn = density_qn_mo_type(mo)
+        if (.not. associated(density_qn%orbitals, mo)) then
+            write(stderr, *) "test_construct_density_qn_mo failed: Orbitals not "// &
                 "associated."
-            test_construct_arh_mo = .false.
+            test_construct_density_qn_mo = .false.
         end if
-        if (.not. associated(arh%ao_overlap, mo%ao_overlap)) then
-            write(stderr, *) "test_construct_arh_mo failed: AO overlap matrix not "// &
-                "associated."
-            test_construct_arh_mo = .false.
+        if (.not. associated(density_qn%mo_coeff, mo_coeff)) then
+            write(stderr, *) "test_construct_density_qn_mo failed: MO coefficients "// &
+                "not associated."
+            test_construct_density_qn_mo = .false.
         end if
-        if (.not. associated(arh%mo_channels, mo%mo_channels)) then
-            write(stderr, *) "test_construct_arh_mo failed: Particle channels not "// &
-                "associated."
-            test_construct_arh_mo = .false.
+        if (.not. associated(density_qn%ao_overlap, mo%ao_overlap)) then
+            write(stderr, *) "test_construct_density_qn_mo failed: AO overlap "// &
+                "matrix not associated."
+            test_construct_density_qn_mo = .false.
+        end if
+        if (.not. associated(density_qn%mo_channels, mo%mo_channels)) then
+            write(stderr, *) "test_construct_density_qn_mo failed: Particle "// &
+                "channels not associated."
+            test_construct_density_qn_mo = .false.
         end if
 
         ! determine if the number of parameters is taken over and the roles the object
         ! performs itself are set, without a projection
-        if (arh%n_param /= mo%n_param) then
-            write(stderr, *) "test_construct_arh_mo failed: Number of parameters "// &
-                "not taken over."
-            test_construct_arh_mo = .false.
+        if (density_qn%n_param /= mo%n_param) then
+            write(stderr, *) "test_construct_density_qn_mo failed: Number of "// &
+                "parameters not taken over."
+            test_construct_density_qn_mo = .false.
         end if
-        if (.not. all([ &
-            arh%provides%update_orbs, arh%provides%obj_func, arh%provides%hess_x, &
-            arh%provides%precond, arh%provides%precond_pd, &
-            arh%provides%get_extra_trial_vectors]) .or. arh%provides%project) then
-            write(stderr, *) "test_construct_arh_mo failed: Roles the object "// &
-                "performs itself set wrongly."
-            test_construct_arh_mo = .false.
+        if (.not. all([density_qn%provides%update_orbs, density_qn%provides%obj_func, &
+                       density_qn%provides%hess_x, density_qn%provides%precond, &
+                       density_qn%provides%precond_pd, &
+                       density_qn%provides%get_extra_trial_vectors]) .or. &
+            density_qn%provides%project) then
+            write(stderr, *) "test_construct_density_qn_mo failed: Roles the "// &
+                "object performs itself set wrongly."
+            test_construct_density_qn_mo = .false.
         end if
 
         ! call routine for an MO object without MO coefficients, overlap matrix and
         ! particle channels and determine if only the orbitals are associated
         deallocate(mo)
         allocate(mo)
-        arh = arh_mo_type(mo)
-        if (.not. associated(arh%orbitals, mo)) then
-            write(stderr, *) "test_construct_arh_mo failed: Orbitals not "// &
+        density_qn = density_qn_mo_type(mo)
+        if (.not. associated(density_qn%orbitals, mo)) then
+            write(stderr, *) "test_construct_density_qn_mo failed: Orbitals not "// &
                 "associated for an empty MO object."
-            test_construct_arh_mo = .false.
+            test_construct_density_qn_mo = .false.
         end if
-        if (associated(arh%mo_coeff) .or. associated(arh%ao_overlap) .or. &
-            associated(arh%mo_channels)) then
-            write(stderr, *) "test_construct_arh_mo failed: Missing quantities "// &
-                "associated for an empty MO object."
-            test_construct_arh_mo = .false.
+        if (associated(density_qn%mo_coeff) .or. &
+            associated(density_qn%ao_overlap) .or. associated(density_qn%mo_channels)) &
+            then
+            write(stderr, *) "test_construct_density_qn_mo failed: Missing "// &
+                "quantities associated for an empty MO object."
+            test_construct_density_qn_mo = .false.
         end if
 
         ! deallocate MO object
         deallocate(mo)
 
-    end function test_construct_arh_mo
+    end function test_construct_density_qn_mo
 
-    logical(c_bool) function test_construct_arh_oao() bind(C)
+    logical(c_bool) function test_construct_density_qn_oao() bind(C)
         !
-        ! this function tests the function which returns the ARH object for the OAO
-        ! basis pointing to an OAO object and its quantities
+        ! this function tests the function which returns the density QN object for the
+        ! OAO basis pointing to an OAO object and its quantities
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
 
         ! assume tests pass
-        test_construct_arh_oao = .true.
+        test_construct_density_qn_oao = .true.
 
         ! set up an OAO object whose basis-specific quantities are allocated except for
         ! the Fock matrix blocks
@@ -2966,57 +3008,58 @@ contains
 
         ! call routine and determine if the allocated quantities are associated and the
         ! others are not
-        arh = arh_oao_type(oao)
-        if (.not. associated(arh%orbitals, oao)) then
-            write(stderr, *) "test_construct_arh_oao failed: Orbitals not associated."
-            test_construct_arh_oao = .false.
+        density_qn = density_qn_oao_type(oao)
+        if (.not. associated(density_qn%orbitals, oao)) then
+            write(stderr, *) "test_construct_density_qn_oao failed: Orbitals not "// &
+                "associated."
+            test_construct_density_qn_oao = .false.
         end if
-        if (.not. associated(arh%s_inv_sqrt, oao%s_inv_sqrt)) then
-            write(stderr, *) "test_construct_arh_oao failed: Inverse square root "// &
-                "of the overlap matrix not associated."
-            test_construct_arh_oao = .false.
+        if (.not. associated(density_qn%s_inv_sqrt, oao%s_inv_sqrt)) then
+            write(stderr, *) "test_construct_density_qn_oao failed: Inverse square "// &
+                "root of the overlap matrix not associated."
+            test_construct_density_qn_oao = .false.
         end if
-        if (.not. associated(arh%dm_oao, oao%dm_oao)) then
-            write(stderr, *) "test_construct_arh_oao failed: Density matrix in the "// &
-                "OAO basis not associated."
-            test_construct_arh_oao = .false.
+        if (.not. associated(density_qn%dm_oao, oao%dm_oao)) then
+            write(stderr, *) "test_construct_density_qn_oao failed: Density matrix "// &
+                "in the OAO basis not associated."
+            test_construct_density_qn_oao = .false.
         end if
-        if (associated(arh%fock_oo) .or. associated(arh%fock_vv)) then
-            write(stderr, *) "test_construct_arh_oao failed: Unallocated Fock "// &
-                "matrix blocks associated."
-            test_construct_arh_oao = .false.
+        if (associated(density_qn%fock_oo) .or. associated(density_qn%fock_vv)) then
+            write(stderr, *) "test_construct_density_qn_oao failed: Unallocated "// &
+                "Fock matrix blocks associated."
+            test_construct_density_qn_oao = .false.
         end if
 
         ! determine if the number of parameters is taken over and the roles the object
         ! performs itself are set, including the projection
-        if (arh%n_param /= n_param) then
-            write(stderr, *) "test_construct_arh_oao failed: Number of parameters "// &
-                "not taken over."
-            test_construct_arh_oao = .false.
+        if (density_qn%n_param /= n_param) then
+            write(stderr, *) "test_construct_density_qn_oao failed: Number of "// &
+                "parameters not taken over."
+            test_construct_density_qn_oao = .false.
         end if
-        if (.not. all([arh%provides%update_orbs, arh%provides%obj_func, &
-                       arh%provides%hess_x, arh%provides%precond, &
-                       arh%provides%precond_pd, arh%provides%project, &
-                       arh%provides%get_extra_trial_vectors])) then
-            write(stderr, *) "test_construct_arh_oao failed: Roles the object "// &
-                "performs itself not set."
-            test_construct_arh_oao = .false.
+        if (.not. all([density_qn%provides%update_orbs, density_qn%provides%obj_func, &
+                       density_qn%provides%hess_x, density_qn%provides%precond, &
+                       density_qn%provides%precond_pd, density_qn%provides%project, &
+                       density_qn%provides%get_extra_trial_vectors])) then
+            write(stderr, *) "test_construct_density_qn_oao failed: Roles the "// &
+                "object performs itself not set."
+            test_construct_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
         deallocate(oao)
 
-    end function test_construct_arh_oao
+    end function test_construct_density_qn_oao
 
-    logical(c_bool) function test_rotate_trial_arh_mo() bind(C)
+    logical(c_bool) function test_rotate_trial_density_qn_mo() bind(C)
         !
         ! this function tests the subroutine which returns the density matrix rotated
         ! by an orbital rotation in the AO basis and in the history basis, S D S, for
         ! the MO basis without moving the current orbitals
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_arh
-        use otr_arh, only: arh_mo_type
+        use otr_common, only: error_density_qn
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo, n_param
@@ -3027,7 +3070,7 @@ contains
 
         type(test_context_type), target :: context
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), mo_coeff_before(n_ao, n_mo, n_particle), &
                     expected(n_ao, n_mo, n_particle), kappa(n_param), &
@@ -3036,16 +3079,16 @@ contains
         integer(ip) :: error, k
 
         ! assume tests pass
-        test_rotate_trial_arh_mo = .true.
+        test_rotate_trial_density_qn_mo = .true.
 
         ! set up the MO object with random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         mo_coeff_before = mo_coeff
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
-        arh = arh_mo_type(mo)
-        arh%error_origin = error_arh
-        call setup_settings(arh%settings, context)
+        density_qn = density_qn_mo_type(mo)
+        density_qn%error_origin = error_density_qn
+        call setup_settings(density_qn%settings, context)
 
         ! call routine and determine if the density matrix of the independently rotated
         ! orbitals is returned in the AO basis and multiplied by the AO overlap matrix
@@ -3053,57 +3096,57 @@ contains
         call random_number(kappa)
         kappa = 0.2_rp * (kappa - 0.5_rp)
         expected = ref_rotate_mo_coeff(kappa, mo_coeff, mo%mo_channels)
-        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        call density_qn%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
         if (error /= 0) then
-            write(stderr, *) "test_rotate_trial_arh_mo failed: Produced error."
-            test_rotate_trial_arh_mo = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_mo failed: Produced error."
+            test_rotate_trial_density_qn_mo = .false.
         end if
         do k = 1, n_particle
             expected_dm = matmul(expected(:, :n_occ(k), k), &
                                  transpose(expected(:, :n_occ(k), k)))
             if (norm2(rot_dm_ao(:, :, k) - expected_dm) > tol) then
-                write(stderr, *) "test_rotate_trial_arh_mo failed: Incorrect "// &
-                    "rotated density matrix in the AO basis."
-                test_rotate_trial_arh_mo = .false.
+                write(stderr, *) "test_rotate_trial_density_qn_mo failed: "// &
+                    "Incorrect rotated density matrix in the AO basis."
+                test_rotate_trial_density_qn_mo = .false.
             end if
             if (norm2(rot_dm_hist(:, :, k) - &
                       matmul(ao_overlap, matmul(expected_dm, ao_overlap))) > tol) then
-                write(stderr, *) "test_rotate_trial_arh_mo failed: Incorrect "// &
-                    "rotated density matrix in the history basis."
-                test_rotate_trial_arh_mo = .false.
+                write(stderr, *) "test_rotate_trial_density_qn_mo failed: "// &
+                    "Incorrect rotated density matrix in the history basis."
+                test_rotate_trial_density_qn_mo = .false.
             end if
         end do
         if (norm2(mo_coeff - mo_coeff_before) > tol) then
-            write(stderr, *) "test_rotate_trial_arh_mo failed: Current MO "// &
+            write(stderr, *) "test_rotate_trial_density_qn_mo failed: Current MO "// &
                 "coefficients changed."
-            test_rotate_trial_arh_mo = .false.
+            test_rotate_trial_density_qn_mo = .false.
         end if
 
         ! call routine with a rotation that is not finite, which the matrix exponential
         ! refuses, and determine if its error is returned with the origin of the object
         kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
-        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
-        if (error /= error_arh + 1) then
-            write(stderr, *) "test_rotate_trial_arh_mo failed: Error for a "// &
+        call density_qn%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        if (error /= error_density_qn + 1) then
+            write(stderr, *) "test_rotate_trial_density_qn_mo failed: Error for a "// &
                 "rotation that is not finite not returned with the origin of the "// &
                 "object."
-            test_rotate_trial_arh_mo = .false.
+            test_rotate_trial_density_qn_mo = .false.
         end if
 
         ! deallocate MO object
         deallocate(mo)
 
-    end function test_rotate_trial_arh_mo
+    end function test_rotate_trial_density_qn_mo
 
-    logical(c_bool) function test_rotate_trial_arh_oao() bind(C)
+    logical(c_bool) function test_rotate_trial_density_qn_oao() bind(C)
         !
         ! this function tests the subroutine which returns the density matrix rotated
         ! by an orbital rotation in the AO and OAO basis without moving the current
         ! orbitals
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-        use otr_common, only: error_arh
-        use otr_arh, only: arh_oao_type
+        use otr_common, only: error_density_qn
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ
         use otr_common_unit_tests, only: generate_random_density_matrix
@@ -3115,7 +3158,7 @@ contains
         real(rp), parameter :: basis_scale = 1.5_rp, angle = 0.3_rp
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         real(rp), target :: dm_ao(n_ao, n_ao, 1)
         real(rp) :: dm_oao(n_ao, n_ao, 1), kappa(n_param_oao), &
                     rot_dm_ao(n_ao, n_ao, 1), rot_dm_hist(n_ao, n_ao, 1), &
@@ -3123,7 +3166,7 @@ contains
         integer(ip) :: error
 
         ! assume tests pass
-        test_rotate_trial_arh_oao = .true.
+        test_rotate_trial_density_qn_oao = .true.
 
         ! set up the OAO object with an AO basis whose overlap has the inverse square
         ! root c I, so that the density matrix in the AO basis is c^2 times the one in
@@ -3138,44 +3181,44 @@ contains
         dm_ao = basis_scale**2 * dm_oao
         oao%dm_ao => dm_ao
         oao%dm_oao = dm_oao
-        arh = arh_oao_type(oao)
-        arh%error_origin = error_arh
-        call setup_settings(arh%settings, context)
+        density_qn = density_qn_oao_type(oao)
+        density_qn%error_origin = error_density_qn
+        call setup_settings(density_qn%settings, context)
 
         ! call routine and determine if the density matrix is rotated consistently in
         ! both bases while the current density matrix is left untouched
         call random_number(kappa)
         kappa = 0.2_rp * kappa
-        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        call density_qn%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
         if (error /= 0) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Produced error."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Produced error."
+            test_rotate_trial_density_qn_oao = .false.
         end if
         if (norm2(rot_dm_hist - dm_oao) < tol) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Density matrix not "// &
-                "rotated."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Density "// &
+                "matrix not rotated."
+            test_rotate_trial_density_qn_oao = .false.
         end if
         if (norm2(rot_dm_ao - basis_scale**2 * rot_dm_hist) > tol) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Density matrix not "// &
-                "rotated consistently in the AO and OAO basis."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Density "// &
+                "matrix not rotated consistently in the AO and OAO basis."
+            test_rotate_trial_density_qn_oao = .false.
         end if
         if (norm2(matmul(rot_dm_hist(:, :, 1), rot_dm_hist(:, :, 1)) - &
                   rot_dm_hist(:, :, 1)) > tol) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Rotated density "// &
-                "matrix not idempotent."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Rotated "// &
+                "density matrix not idempotent."
+            test_rotate_trial_density_qn_oao = .false.
         end if
         if (norm2(oao%dm_oao - dm_oao) > tol) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Current density "// &
-                "matrix in the OAO basis moved."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Current "// &
+                "density matrix in the OAO basis moved."
+            test_rotate_trial_density_qn_oao = .false.
         end if
         if (norm2(dm_ao - basis_scale**2 * dm_oao) > tol) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Current density "// &
-                "matrix in the AO basis moved."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Current "// &
+                "density matrix in the AO basis moved."
+            test_rotate_trial_density_qn_oao = .false.
         end if
 
         ! call routine with a rotation of the first pair of orbitals, whose rotation
@@ -3187,41 +3230,41 @@ contains
         rotation = identity_matrix(n_ao)
         rotation(1:2, 1:2) = reshape([cos(angle), -sin(angle), &
                                       sin(angle), cos(angle)], [2, 2])
-        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        call density_qn%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
         if (error /= 0) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Produced error for "// &
-                "a plane rotation."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Produced "// &
+                "error for a plane rotation."
+            test_rotate_trial_density_qn_oao = .false.
         end if
         if (norm2(rot_dm_hist(:, :, 1) - matmul( &
             transpose(rotation), matmul(dm_oao(:, :, 1), rotation))) > tol) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Incorrect density "// &
-                "matrix for a plane rotation."
-            test_rotate_trial_arh_oao = .false.
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Incorrect "// &
+                "density matrix for a plane rotation."
+            test_rotate_trial_density_qn_oao = .false.
         end if
 
         ! call routine with a rotation that is not finite, which the matrix exponential
         ! refuses, and determine if its error is returned with the origin of the object
         kappa(1) = ieee_value(1.0_rp, ieee_quiet_nan)
-        call arh%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
-        if (error /= error_arh + 1) then
-            write(stderr, *) "test_rotate_trial_arh_oao failed: Error for a "// &
+        call density_qn%rotate_trial(kappa, rot_dm_ao, rot_dm_hist, error)
+        if (error /= error_density_qn + 1) then
+            write(stderr, *) "test_rotate_trial_density_qn_oao failed: Error for a "// &
                 "rotation that is not finite not returned with the origin of the "// &
                 "object."
-            test_rotate_trial_arh_oao = .false.
+            test_rotate_trial_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
         deallocate(oao)
 
-    end function test_rotate_trial_arh_oao
+    end function test_rotate_trial_density_qn_oao
 
-    logical(c_bool) function test_history_dm_arh_mo() bind(C)
+    logical(c_bool) function test_history_dm_density_qn_mo() bind(C)
         !
         ! this function tests the function which returns the current density matrix in
         ! the history basis for the MO basis
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
@@ -3229,76 +3272,77 @@ contains
                                      generate_random_mo_coeff, setup_mo_object
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), dm(n_ao, n_ao, n_particle)
         integer(ip) :: k
 
         ! assume tests pass
-        test_history_dm_arh_mo = .true.
+        test_history_dm_density_qn_mo = .true.
 
         ! set up the MO object with random orthonormal MO coefficients
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
-        arh = arh_mo_type(mo)
+        density_qn = density_qn_mo_type(mo)
 
         ! call routine and determine if the density matrix multiplied by the AO overlap
         ! matrix from both sides is returned
-        dm = arh%history_dm()
+        dm = density_qn%history_dm()
         do k = 1, n_particle
             if (norm2(dm(:, :, k) - matmul(ao_overlap, matmul(mo%dm_ao(:, :, k), &
                                                               ao_overlap))) > tol) then
-                write(stderr, *) "test_history_dm_arh_mo failed: Incorrect density "// &
-                    "matrix."
-                test_history_dm_arh_mo = .false.
+                write(stderr, *) "test_history_dm_density_qn_mo failed: Incorrect "// &
+                    "density matrix."
+                test_history_dm_density_qn_mo = .false.
             end if
         end do
 
         ! deallocate MO object
         deallocate(mo)
 
-    end function test_history_dm_arh_mo
+    end function test_history_dm_density_qn_mo
 
-    logical(c_bool) function test_history_dm_arh_oao() bind(C)
+    logical(c_bool) function test_history_dm_density_qn_oao() bind(C)
         !
         ! this function tests the function which returns the current density matrix in
         ! the history basis for the OAO basis
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_particle
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         real(rp) :: dm_oao(n_ao, n_ao, n_particle)
 
         ! assume tests pass
-        test_history_dm_arh_oao = .true.
+        test_history_dm_density_qn_oao = .true.
 
         ! set up the OAO object with a random density matrix
         call random_number(dm_oao)
         allocate(oao)
         oao%dm_oao = dm_oao
-        arh = arh_oao_type(oao)
+        density_qn = density_qn_oao_type(oao)
 
         ! call routine and determine if the density matrix in the OAO basis is returned
-        if (norm2(arh%history_dm() - dm_oao) > tol) then
-            write(stderr, *) "test_history_dm_arh_oao failed: Incorrect density matrix."
-            test_history_dm_arh_oao = .false.
+        if (norm2(density_qn%history_dm() - dm_oao) > tol) then
+            write(stderr, *) "test_history_dm_density_qn_oao failed: Incorrect "// &
+                "density matrix."
+            test_history_dm_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
         deallocate(oao)
 
-    end function test_history_dm_arh_oao
+    end function test_history_dm_density_qn_oao
 
-    logical(c_bool) function test_to_history_basis_arh_mo() bind(C)
+    logical(c_bool) function test_to_history_basis_density_qn_mo() bind(C)
         !
         ! this function tests the function which transforms a potential from the AO
         ! basis to the history basis for the MO basis
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, n_particle
@@ -3307,53 +3351,54 @@ contains
                                      generate_random_mo_coeff, setup_mo_object
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao), matrix(n_ao, n_ao, n_particle)
         integer(ip) :: k
 
         ! assume tests pass
-        test_to_history_basis_arh_mo = .true.
+        test_to_history_basis_density_qn_mo = .true.
 
         ! set up the MO object with random orthonormal MO coefficients and generate
         ! random potentials
         ao_overlap = generate_random_ao_overlap(n_ao)
         mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
         call setup_mo_object(mo, mo_coeff, ao_overlap, n_occ)
-        arh = arh_mo_type(mo)
+        density_qn = density_qn_mo_type(mo)
         do k = 1, n_particle
             matrix(:, :, k) = generate_random_symm_matrix(n_ao)
         end do
 
         ! call routine and determine if the potentials are kept in the AO basis
-        if (norm2(arh%to_history_basis(matrix) - matrix) > tol) then
-            write(stderr, *) "test_to_history_basis_arh_mo failed: Incorrect potential."
-            test_to_history_basis_arh_mo = .false.
+        if (norm2(density_qn%to_history_basis(matrix) - matrix) > tol) then
+            write(stderr, *) "test_to_history_basis_density_qn_mo failed: "// &
+                "Incorrect potential."
+            test_to_history_basis_density_qn_mo = .false.
         end if
 
         ! deallocate MO object
         deallocate(mo)
 
-    end function test_to_history_basis_arh_mo
+    end function test_to_history_basis_density_qn_mo
 
-    logical(c_bool) function test_to_history_basis_arh_oao() bind(C)
+    logical(c_bool) function test_to_history_basis_density_qn_oao() bind(C)
         !
         ! this function tests the function which transforms a potential from the AO
         ! basis to the history basis for the OAO basis
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_particle
         use opentrustregion_unit_tests, only: generate_random_symm_matrix
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         real(rp) :: s_inv_sqrt(n_ao, n_ao), matrix(n_ao, n_ao, n_particle), &
                     expected(n_ao, n_ao, n_particle)
         integer(ip) :: k
 
         ! assume tests pass
-        test_to_history_basis_arh_oao = .true.
+        test_to_history_basis_density_qn_oao = .true.
 
         ! set up the OAO object with a random inverse square root of the overlap matrix
         ! and independently transform random potentials
@@ -3364,28 +3409,28 @@ contains
         end do
         allocate(oao)
         oao%s_inv_sqrt = s_inv_sqrt
-        arh = arh_oao_type(oao)
+        density_qn = density_qn_oao_type(oao)
 
         ! call routine and determine if the potentials are transformed with the inverse
         ! square root of the overlap matrix
-        if (norm2(arh%to_history_basis(matrix) - expected) > tol) then
-            write(stderr, *) "test_to_history_basis_arh_oao failed: Incorrect "// &
-                "potential."
-            test_to_history_basis_arh_oao = .false.
+        if (norm2(density_qn%to_history_basis(matrix) - expected) > tol) then
+            write(stderr, *) "test_to_history_basis_density_qn_oao failed: "// &
+                "Incorrect potential."
+            test_to_history_basis_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
         deallocate(oao)
 
-    end function test_to_history_basis_arh_oao
+    end function test_to_history_basis_density_qn_oao
 
-    logical(c_bool) function test_history_columns_arh_mo() bind(C)
+    logical(c_bool) function test_history_columns_density_qn_mo() bind(C)
         !
         ! this function tests the subroutine which expresses a history of difference
         ! matrices as history columns and as packed columns in the non-redundant
         ! parameter space for the MO basis
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
                                          case_irreps, case_names
@@ -3398,7 +3443,7 @@ contains
         integer(ip), parameter :: n_list = 2
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         real(rp) :: ao_overlap(n_ao, n_ao)
         real(rp), allocatable :: diff(:, :, :, :), diff_mo(:, :, :), cols(:, :), &
@@ -3409,7 +3454,7 @@ contains
         character(len=:), allocatable :: case_name
 
         ! assume tests pass
-        test_history_columns_arh_mo = .true.
+        test_history_columns_density_qn_mo = .true.
 
         ! loop over every occupation case: the history columns are the full difference
         ! matrices in the current MO basis and the packed columns the entries of their
@@ -3422,7 +3467,7 @@ contains
             mo_coeff = generate_random_mo_coeff(ao_overlap, n_mo, n_particle)
             call setup_mo_object(mo, mo_coeff(:, :, :n_part), ao_overlap, n_occ, &
                                  case_irreps(:, :n_part, i_case))
-            arh = arh_mo_type(mo)
+            density_qn = density_qn_mo_type(mo)
             allocate(diff(n_ao, n_ao, n_part, n_list), diff_mo(n_mo, n_mo, n_part), &
                      expected_cols(n_part * n_mo**2, n_list), &
                      expected_packed(mo%n_param, n_list))
@@ -3444,37 +3489,39 @@ contains
             end do
 
             ! call routine and determine if both sets of columns are correct
-            call arh%history_columns(diff, cols, packed)
+            call density_qn%history_columns(diff, cols, packed)
             if (any(shape(cols) /= shape(expected_cols))) then
-                write(stderr, *) "test_history_columns_arh_mo failed: Incorrect "// &
-                    "dimensions of history columns in the "//case_name//" case."
-                test_history_columns_arh_mo = .false.
+                write(stderr, *) "test_history_columns_density_qn_mo failed: "// &
+                    "Incorrect dimensions of history columns in the "//case_name// &
+                    " case."
+                test_history_columns_density_qn_mo = .false.
             else if (norm2(cols - expected_cols) > tol) then
-                write(stderr, *) "test_history_columns_arh_mo failed: Incorrect "// &
-                    "history columns in the "//case_name//" case."
-                test_history_columns_arh_mo = .false.
+                write(stderr, *) "test_history_columns_density_qn_mo failed: "// &
+                    "Incorrect history columns in the "//case_name//" case."
+                test_history_columns_density_qn_mo = .false.
             end if
             if (any(shape(packed) /= shape(expected_packed))) then
-                write(stderr, *) "test_history_columns_arh_mo failed: Incorrect "// &
-                    "dimensions of packed columns in the "//case_name//" case."
-                test_history_columns_arh_mo = .false.
+                write(stderr, *) "test_history_columns_density_qn_mo failed: "// &
+                    "Incorrect dimensions of packed columns in the "//case_name// &
+                    " case."
+                test_history_columns_density_qn_mo = .false.
             else if (norm2(packed - expected_packed) > tol) then
-                write(stderr, *) "test_history_columns_arh_mo failed: Incorrect "// &
-                    "packed columns in the "//case_name//" case."
-                test_history_columns_arh_mo = .false.
+                write(stderr, *) "test_history_columns_density_qn_mo failed: "// &
+                    "Incorrect packed columns in the "//case_name//" case."
+                test_history_columns_density_qn_mo = .false.
             end if
             deallocate(diff, diff_mo, expected_cols, expected_packed, mo)
         end do
 
-    end function test_history_columns_arh_mo
+    end function test_history_columns_density_qn_mo
 
-    logical(c_bool) function test_history_columns_arh_oao() bind(C)
+    logical(c_bool) function test_history_columns_density_qn_oao() bind(C)
         !
         ! this function tests the subroutine which expresses a history of difference
         ! matrices as history columns and as packed columns in the non-redundant
         ! parameter space for the OAO basis
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_oao_test_reference, only: n_param
         use otr_common_test_reference, only: n_ao, n_particle, n_occ
@@ -3484,13 +3531,13 @@ contains
         integer(ip), parameter :: n_list = 2
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         real(rp) :: dm_oao(n_ao, n_ao, n_particle), diff(n_ao, n_ao, n_particle, n_list)
         real(rp), allocatable :: cols(:, :), packed(:, :)
         integer(ip) :: j, k
 
         ! assume tests pass
-        test_history_columns_arh_oao = .true.
+        test_history_columns_density_qn_oao = .true.
 
         ! set up the OAO object with a random density matrix, which the packed columns
         ! are projected with, and generate random history entries
@@ -3505,30 +3552,30 @@ contains
         oao%n_particle = n_particle
         oao%n_param = n_param
         oao%dm_oao = dm_oao
-        arh = arh_oao_type(oao)
+        density_qn = density_qn_oao_type(oao)
 
         ! call routine and determine if the history columns are the flattened
         ! difference matrices and the packed columns their independently reproduced
         ! projections
-        call arh%history_columns(diff, cols, packed)
+        call density_qn%history_columns(diff, cols, packed)
         if (size(cols, 1) /= n_ao * n_ao * n_particle .or. size(cols, 2) /= n_list) then
-            write(stderr, *) "test_history_columns_arh_oao failed: Incorrect "// &
-                "dimensions of history columns."
-            test_history_columns_arh_oao = .false.
+            write(stderr, *) "test_history_columns_density_qn_oao failed: "// &
+                "Incorrect dimensions of history columns."
+            test_history_columns_density_qn_oao = .false.
         else if ( &
             norm2(cols - reshape(diff, [n_ao * n_ao * n_particle, n_list])) > tol) then
-            write(stderr, *) "test_history_columns_arh_oao failed: History columns "// &
-                "are not the flattened difference matrices."
-            test_history_columns_arh_oao = .false.
+            write(stderr, *) "test_history_columns_density_qn_oao failed: History "// &
+                "columns are not the flattened difference matrices."
+            test_history_columns_density_qn_oao = .false.
         end if
         if (size(packed, 1) /= n_param .or. size(packed, 2) /= n_list) then
-            write(stderr, *) "test_history_columns_arh_oao failed: Incorrect "// &
-                "dimensions of packed columns."
-            test_history_columns_arh_oao = .false.
+            write(stderr, *) "test_history_columns_density_qn_oao failed: "// &
+                "Incorrect dimensions of packed columns."
+            test_history_columns_density_qn_oao = .false.
         else if (norm2(packed - ref_packed_columns(diff)) > tol) then
-            write(stderr, *) "test_history_columns_arh_oao failed: Packed columns "// &
-                "are not the projected and packed difference matrices."
-            test_history_columns_arh_oao = .false.
+            write(stderr, *) "test_history_columns_density_qn_oao failed: Packed "// &
+                "columns are not the projected and packed difference matrices."
+            test_history_columns_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
@@ -3556,203 +3603,207 @@ contains
 
         end function ref_packed_columns
 
-    end function test_history_columns_arh_oao
+    end function test_history_columns_density_qn_oao
 
-    logical(c_bool) function test_history_channel_rows_arh_mo() bind(C)
+    logical(c_bool) function test_history_channel_rows_density_qn_mo() bind(C)
         !
         ! this function tests the function which returns the rows every particle
         ! channel occupies in a history column for the MO basis
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_particle
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), target :: mo_coeff(n_ao, n_mo, n_particle)
         integer(ip), allocatable :: rows(:, :)
         integer(ip) :: k
 
         ! assume tests pass
-        test_history_channel_rows_arh_mo = .true.
+        test_history_channel_rows_density_qn_mo = .true.
 
         ! set up the MO object with the number of particle channels and the MO
         ! coefficients, whose shape is all the routine reads of them
         allocate(mo)
         mo%n_particle = n_particle
         mo%mo_coeff => mo_coeff
-        arh = arh_mo_type(mo)
+        density_qn = density_qn_mo_type(mo)
 
         ! call routine and determine if every channel holds the full difference matrix
         ! in the MO basis
-        rows = arh%history_channel_rows()
+        rows = density_qn%history_channel_rows()
         if (any(shape(rows) /= [2_ip, n_particle])) then
-            write(stderr, *) "test_history_channel_rows_arh_mo failed: Incorrect "// &
-                "dimensions."
-            test_history_channel_rows_arh_mo = .false.
+            write(stderr, *) "test_history_channel_rows_density_qn_mo failed: "// &
+                "Incorrect dimensions."
+            test_history_channel_rows_density_qn_mo = .false.
         else if (any( &
             rows /= reshape([([(k - 1) * n_mo**2 + 1, k * n_mo**2], k=1, n_particle)], &
                             [2_ip, n_particle]))) then
-            write(stderr, *) "test_history_channel_rows_arh_mo failed: Incorrect rows."
-            test_history_channel_rows_arh_mo = .false.
+            write(stderr, *) "test_history_channel_rows_density_qn_mo failed: "// &
+                "Incorrect rows."
+            test_history_channel_rows_density_qn_mo = .false.
         end if
 
         ! deallocate MO object
         deallocate(mo)
 
-    end function test_history_channel_rows_arh_mo
+    end function test_history_channel_rows_density_qn_mo
 
-    logical(c_bool) function test_history_channel_rows_arh_oao() bind(C)
+    logical(c_bool) function test_history_channel_rows_density_qn_oao() bind(C)
         !
         ! this function tests the function which returns the rows every particle
         ! channel occupies in a history column for the OAO basis
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_particle
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         integer(ip), allocatable :: rows(:, :)
         integer(ip) :: j
 
         ! assume tests pass
-        test_history_channel_rows_arh_oao = .true.
+        test_history_channel_rows_density_qn_oao = .true.
 
         ! set up the OAO object with the dimensions the routine reads
         allocate(oao)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
-        arh = arh_oao_type(oao)
+        density_qn = density_qn_oao_type(oao)
 
         ! call routine and determine if every channel holds a full difference matrix
-        rows = arh%history_channel_rows()
+        rows = density_qn%history_channel_rows()
         if (any(shape(rows) /= [2_ip, n_particle])) then
-            write(stderr, *) "test_history_channel_rows_arh_oao failed: Incorrect "// &
-                "dimensions."
-            test_history_channel_rows_arh_oao = .false.
+            write(stderr, *) "test_history_channel_rows_density_qn_oao failed: "// &
+                "Incorrect dimensions."
+            test_history_channel_rows_density_qn_oao = .false.
         else if (any(rows /= &
                      reshape([((j - 1) * n_ao**2 + 1, j * n_ao**2, j=1, n_particle)], &
                              [2_ip, n_particle]))) then
-            write(stderr, *) "test_history_channel_rows_arh_oao failed: Incorrect rows."
-            test_history_channel_rows_arh_oao = .false.
+            write(stderr, *) "test_history_channel_rows_density_qn_oao failed: "// &
+                "Incorrect rows."
+            test_history_channel_rows_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
         deallocate(oao)
 
-    end function test_history_channel_rows_arh_oao
+    end function test_history_channel_rows_density_qn_oao
 
-    logical(c_bool) function test_packed_channel_rows_arh_mo() bind(C)
+    logical(c_bool) function test_packed_channel_rows_density_qn_mo() bind(C)
         !
         ! this function tests the function which returns the rows every particle
         ! channel occupies in a packed column for the MO basis
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: case_irreps, case_names
         use otr_common_test_reference, only: n_occ
         use otr_mo_unit_tests, only: setup_minimal_mo_object
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         integer(ip), allocatable :: rows(:, :)
         integer(ip) :: n1, n2, i_sym
 
         ! assume tests pass
-        test_packed_channel_rows_arh_mo = .true.
+        test_packed_channel_rows_density_qn_mo = .true.
 
         ! set up the MO object with the differently occupied spin channels of the
         ! open-shell occupation case with symmetry, whose parameters are all the
         ! routine reads
         i_sym = findloc(case_names, "open-shell with symmetry", dim=1, kind=ip)
         call setup_minimal_mo_object(mo, n_occ, case_irreps(:, :, i_sym))
-        arh = arh_mo_type(mo)
+        density_qn = density_qn_mo_type(mo)
 
         ! call routine and determine if every channel holds its occupied-virtual
         ! rotations between orbitals of the same irrep, whose number differs between
         ! the spin channels
         n1 = count(mo%mo_channels(1)%param_mask, kind=ip)
         n2 = count(mo%mo_channels(2)%param_mask, kind=ip)
-        rows = arh%packed_channel_rows()
+        rows = density_qn%packed_channel_rows()
         if (any(shape(rows) /= [2, 2])) then
-            write(stderr, *) "test_packed_channel_rows_arh_mo failed: Incorrect "// &
-                "dimensions."
-            test_packed_channel_rows_arh_mo = .false.
+            write(stderr, *) "test_packed_channel_rows_density_qn_mo failed: "// &
+                "Incorrect dimensions."
+            test_packed_channel_rows_density_qn_mo = .false.
         else if (any(rows /= reshape([1_ip, n1, &
                                       n1 + 1_ip, n1 + n2], [2, 2]))) then
-            write(stderr, *) "test_packed_channel_rows_arh_mo failed: Incorrect rows."
-            test_packed_channel_rows_arh_mo = .false.
+            write(stderr, *) "test_packed_channel_rows_density_qn_mo failed: "// &
+                "Incorrect rows."
+            test_packed_channel_rows_density_qn_mo = .false.
         end if
 
         ! deallocate MO object
         deallocate(mo)
 
-    end function test_packed_channel_rows_arh_mo
+    end function test_packed_channel_rows_density_qn_mo
 
-    logical(c_bool) function test_packed_channel_rows_arh_oao() bind(C)
+    logical(c_bool) function test_packed_channel_rows_density_qn_oao() bind(C)
         !
         ! this function tests the function which returns the rows every particle
         ! channel occupies in a packed column for the OAO basis
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_particle
 
         integer(ip), parameter :: n_channel = n_ao * (n_ao - 1) / 2
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         integer(ip), allocatable :: rows(:, :)
         integer(ip) :: j
 
         ! assume tests pass
-        test_packed_channel_rows_arh_oao = .true.
+        test_packed_channel_rows_density_qn_oao = .true.
 
         ! set up the OAO object with the dimensions the routine reads
         allocate(oao)
         oao%n_ao = n_ao
         oao%n_particle = n_particle
-        arh = arh_oao_type(oao)
+        density_qn = density_qn_oao_type(oao)
 
         ! call routine and determine if every channel holds the antisymmetric
         ! parameters of that channel
-        rows = arh%packed_channel_rows()
+        rows = density_qn%packed_channel_rows()
         if (any(shape(rows) /= [2_ip, n_particle])) then
-            write(stderr, *) "test_packed_channel_rows_arh_oao failed: Incorrect "// &
-                "dimensions."
-            test_packed_channel_rows_arh_oao = .false.
+            write(stderr, *) "test_packed_channel_rows_density_qn_oao failed: "// &
+                "Incorrect dimensions."
+            test_packed_channel_rows_density_qn_oao = .false.
         else if (any(rows /= reshape( &
             [((j - 1) * n_channel + 1, j * n_channel, j=1, n_particle)], &
             [2_ip, n_particle]))) then
-            write(stderr, *) "test_packed_channel_rows_arh_oao failed: Incorrect rows."
-            test_packed_channel_rows_arh_oao = .false.
+            write(stderr, *) "test_packed_channel_rows_density_qn_oao failed: "// &
+                "Incorrect rows."
+            test_packed_channel_rows_density_qn_oao = .false.
         end if
 
         ! deallocate OAO object
         deallocate(oao)
 
-    end function test_packed_channel_rows_arh_oao
+    end function test_packed_channel_rows_density_qn_oao
 
-    logical(c_bool) function test_hess_x_static_arh_mo() bind(C)
+    logical(c_bool) function test_hess_x_static_density_qn_mo() bind(C)
         !
         ! this function tests the function which applies the static part of the Hessian
         ! to a trial vector for the MO basis, which applies the one of the MO object
         !
-        use otr_arh, only: arh_mo_type
+        use otr_density_qn, only: density_qn_mo_type
         use otr_mo, only: mo_type
         use otr_common_test_reference, only: n_occ
         use otr_mo_unit_tests, only: setup_minimal_mo_object
         use opentrustregion_unit_tests, only: identity_matrix
 
         type(mo_type), allocatable, target :: mo
-        type(arh_mo_type) :: arh
+        type(density_qn_mo_type) :: density_qn
         real(rp), allocatable :: x(:)
         integer(ip) :: k
 
         ! assume tests pass
-        test_hess_x_static_arh_mo = .true.
+        test_hess_x_static_density_qn_mo = .true.
 
         ! set up the MO object with vanishing occupied-occupied and unit
         ! virtual-virtual blocks of the Fock matrix, so that the static part of the
@@ -3764,25 +3815,26 @@ contains
                 channel%fock_vv = identity_matrix(channel%n_virt)
             end associate
         end do
-        arh = arh_mo_type(mo)
+        density_qn = density_qn_mo_type(mo)
         allocate(x(mo%n_param))
         call random_number(x)
 
         ! call routine and determine if the trial vector is doubled
-        if (norm2(arh%hess_x_static(x) - 2.0_rp * x) > tol) then
-            write(stderr, *) "test_hess_x_static_arh_mo failed: Incorrect static part."
-            test_hess_x_static_arh_mo = .false.
+        if (norm2(density_qn%hess_x_static(x) - 2.0_rp * x) > tol) then
+            write(stderr, *) "test_hess_x_static_density_qn_mo failed: Incorrect "// &
+                "static part."
+            test_hess_x_static_density_qn_mo = .false.
         end if
         deallocate(mo)
 
-    end function test_hess_x_static_arh_mo
+    end function test_hess_x_static_density_qn_mo
 
-    logical(c_bool) function test_hess_x_static_arh_oao() bind(C)
+    logical(c_bool) function test_hess_x_static_density_qn_oao() bind(C)
         !
         ! this function tests the function which applies the static part of the Hessian
         ! to a trial vector for the OAO basis, for the closed- and the open-shell case
         !
-        use otr_arh, only: arh_oao_type
+        use otr_density_qn, only: density_qn_oao_type
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao, n_occ, &
                                              n_particle_ref => n_particle, shell_names
@@ -3790,13 +3842,13 @@ contains
                                       generate_random_nonredundant_vector
 
         type(oao_type), allocatable, target :: oao
-        type(arh_oao_type) :: arh
+        type(density_qn_oao_type) :: density_qn
         real(rp), allocatable :: dm_oao(:, :, :), fock_oo(:, :, :), fock_vv(:, :, :), &
                                  x(:), response(:, :, :)
         integer(ip) :: n_particle, n_param
 
         ! assume tests pass
-        test_hess_x_static_arh_oao = .true.
+        test_hess_x_static_density_qn_oao = .true.
 
         ! loop over the closed-shell and the open-shell case, whose static parts are
         ! scaled differently
@@ -3814,25 +3866,26 @@ contains
             oao%dm_oao = dm_oao
             oao%fock_oo = fock_oo
             oao%fock_vv = fock_vv
-            arh = arh_oao_type(oao)
+            density_qn = density_qn_oao_type(oao)
 
             ! call routine and determine if the static part matches the independently
             ! assembled one
             x = generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
             response = 0.0_rp
-            if (norm2(arh%hess_x_static(x) - &
+            if (norm2(density_qn%hess_x_static(x) - &
                       ref_hess_x_oao(ref_unpack_asymm(x, n_particle, n_ao), response, &
                                      dm_oao, fock_oo, fock_vv, n_param)) > tol) then
-                write(stderr, *) "test_hess_x_static_arh_oao failed: Incorrect "// &
-                    "static part for the "//trim(shell_names(n_particle))//" case."
-                test_hess_x_static_arh_oao = .false.
+                write(stderr, *) "test_hess_x_static_density_qn_oao failed: "// &
+                    "Incorrect static part for the "//trim(shell_names(n_particle))// &
+                    " case."
+                test_hess_x_static_density_qn_oao = .false.
             end if
 
             ! deallocate OAO object and arrays of the shell
             deallocate(oao, dm_oao, fock_oo, fock_vv, response)
         end do
 
-    end function test_hess_x_static_arh_oao
+    end function test_hess_x_static_density_qn_oao
 
     logical(c_bool) function test_cache_channel_split_dirs() bind(C)
         !
@@ -3842,7 +3895,7 @@ contains
         ! a given (map, chol) pair; undoing the rebasing by right-multiplying by chol
         ! again must reproduce the gathered, reordered raw split columns exactly
         !
-        use otr_arh, only: cache_channel_split_dirs
+        use otr_density_qn, only: cache_channel_split_dirs
         use otr_common_test_reference, only: n_particle
 
         integer(ip), parameter :: n_list = 2, n_col = n_particle * n_list, &
@@ -3899,7 +3952,7 @@ contains
         ! pair; undoing the rebasing by right-multiplying by chol again must reproduce
         ! the gathered, reordered raw combined columns exactly
         !
-        use otr_arh, only: cache_combined_channel_dirs
+        use otr_density_qn, only: cache_combined_channel_dirs
         use otr_common_test_reference, only: n_particle
 
         integer(ip), parameter :: n_list = 2, n_col = n_particle * n_list, &
@@ -3953,7 +4006,7 @@ contains
         ! this function tests the subroutine which assembles the low-rank part of the
         ! approximate Hessian
         !
-        use otr_arh, only: arh_type, arh_oao_type, arh_types
+        use otr_density_qn, only: density_qn_type, density_qn_oao_type, qn_methods
         use otr_oao, only: oao_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -3966,14 +4019,14 @@ contains
                                   pot_nl = 2 * n_diff + n_diff_nl
 
         type(oao_type), allocatable, target :: oao
-        class(arh_type), allocatable, target :: arh
+        class(density_qn_type), allocatable, target :: density_qn
         real(rp) :: density(n_param, n_diff), density_nl(n_param, n_diff_nl), &
                     linear(n_param, n_diff), nonlinear(n_param, n_diff_nl), &
                     a_sym(n_diff, n_diff), a_sym_nl(n_diff_nl, n_diff_nl), &
                     a_inv(n_diff, n_diff), a_inv_comb(n_diff_nl, n_diff_nl), scale
         real(rp), allocatable :: expansion(:, :), projection(:, :), coupling(:, :)
-        integer(ip) :: i_type, n_particle
-        character(len=:), allocatable :: case_arh_type, case_name
+        integer(ip) :: i_method, n_particle
+        character(len=:), allocatable :: case_qn_method, case_name
 
         ! assume tests pass
         test_get_low_rank_hess_factors = .true.
@@ -3989,33 +4042,33 @@ contains
         a_inv = generate_random_symm_matrix(n_diff)
         a_inv_comb = generate_random_symm_matrix(n_diff_nl)
 
-        ! set up the ARH object with the cached quantities the assembly requires
+        ! set up the density QN object with the cached quantities the assembly requires
         allocate(oao)
         oao%n_param = n_param
-        allocate(arh, source=arh_oao_type(oao))
-        call setup_settings(arh%settings, context)
-        arh%dm_dirs = density
-        arh%dm_dirs_nonlinear = density_nl
-        arh%linear_potential_dirs = linear
-        arh%nonlinear_potential_dirs = nonlinear
-        arh%a_sym = a_sym
-        arh%a_sym_nonlinear = a_sym_nl
-        arh%a_inv = a_inv
-        arh%a_inv_comb = a_inv_comb
+        allocate(density_qn, source=density_qn_oao_type(oao))
+        call setup_settings(density_qn%settings, context)
+        density_qn%dm_dirs = density
+        density_qn%dm_dirs_nonlinear = density_nl
+        density_qn%linear_potential_dirs = linear
+        density_qn%nonlinear_potential_dirs = nonlinear
+        density_qn%a_sym = a_sym
+        density_qn%a_sym_nonlinear = a_sym_nl
+        density_qn%a_inv = a_inv
+        density_qn%a_inv_comb = a_inv_comb
 
-        ! call routine for every ARH type and both shells, whose coupling matrices
+        ! call routine for every QN method and both shells, whose coupling matrices
         ! differ by a factor of two, and for an empty history, and determine if the
         ! factors match
-        do i_type = 1, size(arh_types)
-            case_arh_type = trim(arh_types(i_type))
+        do i_method = 1, size(qn_methods)
+            case_qn_method = trim(qn_methods(i_method))
             do n_particle = 1, n_particle_ref
-                case_name = case_arh_type//" in the "//trim(shell_names(n_particle))// &
-                            " case"
+                case_name = case_qn_method//" in the "// &
+                            trim(shell_names(n_particle))//" case"
                 scale = merge(8.0_rp, 4.0_rp, n_particle == 1)
 
                 ! the expected factors: every system (linear and non-linear) has its
                 ! own block of directions, which no coupling mixes across systems
-                select case (case_arh_type)
+                select case (case_qn_method)
                 ! multisecant SR1 couples the potential difference histories of each
                 ! system through its own pseudoinverse
                 case ("ms_sr1")
@@ -4036,11 +4089,11 @@ contains
                     expansion = reshape([density, linear, density_nl, nonlinear], &
                                         [n_param, 2 * n_both])
                     projection = expansion
-                    coupling = merge(0.5_rp, 1.0_rp, case_arh_type == "symm_arh") * &
+                    coupling = merge(0.5_rp, 1.0_rp, case_qn_method == "symm_arh") * &
                                scale * block_diagonal_matrix( &
                                    cshift(identity_matrix(2 * n_diff), n_diff), &
                                    cshift(identity_matrix(2 * n_diff_nl), n_diff_nl))
-                    if (case_arh_type == "ms_psb") then
+                    if (case_qn_method == "ms_psb") then
                         coupling(:n_diff, :n_diff) = -scale * a_sym
                         coupling(dm_nl + 1:pot_nl, dm_nl + 1:pot_nl) = -scale * a_sym_nl
                     end if
@@ -4056,41 +4109,42 @@ contains
                 ! static part, and determine if the factors match and these are
                 ! discarded
                 oao%n_particle = n_particle
-                arh%settings%arh_type = case_arh_type
-                arh%rotated_expansion_dirs = density
-                arh%rotated_projection_dirs = density
-                call arh%get_low_rank_hess_factors()
-                if (allocated(arh%rotated_expansion_dirs) .or. &
-                    allocated(arh%rotated_projection_dirs)) then
+                density_qn%settings%qn_method = case_qn_method
+                density_qn%rotated_expansion_dirs = density
+                density_qn%rotated_projection_dirs = density
+                call density_qn%get_low_rank_hess_factors()
+                if (allocated(density_qn%rotated_expansion_dirs) .or. &
+                    allocated(density_qn%rotated_projection_dirs)) then
                     write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                         "Rotated directions of the previous factors not discarded "// &
                         "for "//case_name//"."
                     test_get_low_rank_hess_factors = .false.
                 end if
-                if (.not. (allocated(arh%expansion_dirs) .and. &
-                           allocated(arh%projection_dirs) .and. &
-                           allocated(arh%coupling_matrix))) then
+                if (.not. (allocated(density_qn%expansion_dirs) .and. &
+                           allocated(density_qn%projection_dirs) .and. &
+                           allocated(density_qn%coupling_matrix))) then
                     write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                         "Factors not assembled for "//case_name//"."
                     test_get_low_rank_hess_factors = .false.
-                else if (any(shape(arh%expansion_dirs) /= shape(expansion)) .or. &
-                         any(shape(arh%projection_dirs) /= shape(projection)) .or. &
-                         any(shape(arh%coupling_matrix) /= shape(coupling))) then
+                else if ( &
+                    any(shape(density_qn%expansion_dirs) /= shape(expansion)) .or. &
+                    any(shape(density_qn%projection_dirs) /= shape(projection)) .or. &
+                    any(shape(density_qn%coupling_matrix) /= shape(coupling))) then
                     write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                         "Incorrect dimensions of the factors for "//case_name//"."
                     test_get_low_rank_hess_factors = .false.
                 else
-                    if (norm2(arh%expansion_dirs - expansion) > tol) then
+                    if (norm2(density_qn%expansion_dirs - expansion) > tol) then
                         write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                             "Incorrect expansion directions for "//case_name//"."
                         test_get_low_rank_hess_factors = .false.
                     end if
-                    if (norm2(arh%projection_dirs - projection) > tol) then
+                    if (norm2(density_qn%projection_dirs - projection) > tol) then
                         write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                             "Incorrect projection directions for "//case_name//"."
                         test_get_low_rank_hess_factors = .false.
                     end if
-                    if (norm2(arh%coupling_matrix - coupling) > tol) then
+                    if (norm2(density_qn%coupling_matrix - coupling) > tol) then
                         write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                             "Incorrect coupling matrix for "//case_name//"."
                         test_get_low_rank_hess_factors = .false.
@@ -4098,26 +4152,27 @@ contains
                 end if
             end do
 
-            ! an empty history has to leave every factor of the type unallocated
-            arh%dm_dirs = density(:, :0)
-            arh%dm_dirs_nonlinear = density_nl(:, :0)
-            arh%linear_potential_dirs = linear(:, :0)
-            arh%nonlinear_potential_dirs = nonlinear(:, :0)
-            call arh%get_low_rank_hess_factors()
-            if (allocated(arh%expansion_dirs) .or. allocated(arh%projection_dirs) .or. &
-                allocated(arh%coupling_matrix)) then
+            ! an empty history has to leave every factor of the method unallocated
+            density_qn%dm_dirs = density(:, :0)
+            density_qn%dm_dirs_nonlinear = density_nl(:, :0)
+            density_qn%linear_potential_dirs = linear(:, :0)
+            density_qn%nonlinear_potential_dirs = nonlinear(:, :0)
+            call density_qn%get_low_rank_hess_factors()
+            if (allocated(density_qn%expansion_dirs) .or. &
+                allocated(density_qn%projection_dirs) .or. &
+                allocated(density_qn%coupling_matrix)) then
                 write(stderr, *) "test_get_low_rank_hess_factors failed: Factors "// &
-                    "were assembled for an empty history for "//case_arh_type//"."
+                    "were assembled for an empty history for "//case_qn_method//"."
                 test_get_low_rank_hess_factors = .false.
             end if
-            arh%dm_dirs = density
-            arh%dm_dirs_nonlinear = density_nl
-            arh%linear_potential_dirs = linear
-            arh%nonlinear_potential_dirs = nonlinear
+            density_qn%dm_dirs = density
+            density_qn%dm_dirs_nonlinear = density_nl
+            density_qn%linear_potential_dirs = linear
+            density_qn%nonlinear_potential_dirs = nonlinear
         end do
 
-        ! deallocate ARH and OAO objects
-        deallocate(arh, oao)
+        ! deallocate density QN and OAO objects
+        deallocate(density_qn, oao)
 
     contains
 
@@ -4141,7 +4196,7 @@ contains
         ! this function tests the subroutine which constructs A = S^T Y for a single
         ! part of a coupled potential-difference response and symmetrizes it
         !
-        use otr_arh, only: build_a_part
+        use otr_density_qn, only: build_a_part
 
         integer(ip), parameter :: n_diff = 3, n_rows = 7
         real(rp) :: dm_cols(n_rows, n_diff), v_cols(n_rows, n_diff), &
@@ -4179,7 +4234,7 @@ contains
         ! right-multiplying by chol again must reproduce the gathered, reordered raw
         ! symmetrized matrix exactly
         !
-        use otr_arh, only: build_a_transformed
+        use otr_density_qn, only: build_a_transformed
 
         integer(ip), parameter :: n_diff = 3, n_rows = 7
 
@@ -4225,7 +4280,7 @@ contains
         ! matrix, whose diagonal blocks hold the symmetrized same-spin contributions
         ! and whose off-diagonal blocks hold the cross-symmetrized opposite-spin ones
         !
-        use otr_arh, only: build_a_block_linear_os
+        use otr_density_qn, only: build_a_block_linear_os
         use otr_common_test_reference, only: n_particle
 
         integer(ip), parameter :: n_diff = 3, n_col = n_particle * n_diff, &
@@ -4304,7 +4359,7 @@ contains
         ! response has no opposite-spin counterpart, so the off-diagonal blocks must
         ! vanish and only the symmetrized per-channel diagonal blocks survive
         !
-        use otr_arh, only: build_a_block_nonlinear_os
+        use otr_density_qn, only: build_a_block_nonlinear_os
         use otr_common_test_reference, only: n_particle
 
         integer(ip), parameter :: n_diff = 3, n_col = n_particle * n_diff, &
@@ -4363,7 +4418,7 @@ contains
         ! this function tests the subroutine which cross-symmetrizes two related
         ! off-diagonal blocks of a larger matrix
         !
-        use otr_arh, only: cross_symmetrize
+        use otr_density_qn, only: cross_symmetrize
 
         integer(ip), parameter :: n_rows = 2, n_cols = 3
 
@@ -4407,7 +4462,7 @@ contains
         ! this function tests the function which returns hard-truncated pseudoinverse
         ! eigenvalues
         !
-        use otr_arh, only: truncated_eigval_inv
+        use otr_density_qn, only: truncated_eigval_inv
 
         real(rp) :: eig_vals(5), eig_vals_inv(5), expected(5)
 
@@ -4435,11 +4490,11 @@ contains
     logical(c_bool) function test_history_window() bind(C)
         !
         ! this function tests the function which returns the longest step the
-        ! non-linear system of an ARH object may use, from the trust radius the record
-        ! of the solver state holds
+        ! non-linear system of a density QN object may use, from the trust radius the
+        ! record of the solver state holds
         !
         use opentrustregion, only: solver_state_type
-        use otr_arh, only: arh_type, history_window_factor
+        use otr_density_qn, only: density_qn_type, history_window_factor
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao
         use opentrustregion_unit_tests, only: test_context_type
@@ -4448,7 +4503,7 @@ contains
 
         type(test_context_type), target :: context
         type(oao_type), allocatable, target :: oao
-        class(arh_type), allocatable, target :: arh
+        class(density_qn_type), allocatable, target :: density_qn
         type(solver_state_type), target :: state
         real(rp), target :: dm_ao(n_ao, n_ao, 1)
         real(rp) :: dm_oao(n_ao, n_ao, 1)
@@ -4456,19 +4511,20 @@ contains
         ! assume tests pass
         test_history_window = .true.
 
-        ! set up the OAO and ARH objects
-        call setup_arh_and_scaled_oao_objects(arh, oao, 1.0_rp, dm_ao, dm_oao, context)
+        ! set up the OAO and density QN objects
+        call setup_density_qn_and_scaled_oao_objects(density_qn, oao, 1.0_rp, dm_ao, &
+                                                     dm_oao, context)
 
         ! without a state, the whole history is used
-        if (arh%history_window() < huge(1.0_rp)) then
+        if (density_qn%history_window() < huge(1.0_rp)) then
             write(stderr, *) "test_history_window failed: The history is "// &
                 "restricted without a state."
             test_history_window = .false.
         end if
 
         ! before the solver sets a trust radius, the whole history is used
-        arh%state => state
-        if (arh%history_window() < huge(1.0_rp)) then
+        density_qn%state => state
+        if (density_qn%history_window() < huge(1.0_rp)) then
             write(stderr, *) "test_history_window failed: The history is "// &
                 "restricted before the solver set a trust radius."
             test_history_window = .false.
@@ -4476,7 +4532,7 @@ contains
 
         ! the trust radius is converted into a distance between density matrices
         state%trust_radius = trust_radius
-        if (abs(arh%history_window() - &
+        if (abs(density_qn%history_window() - &
                 history_window_factor * sqrt(2.0_rp) * trust_radius) > tol) then
             write(stderr, *) "test_history_window failed: Incorrect window for a "// &
                 "spherical trust region."
@@ -4485,16 +4541,16 @@ contains
 
         ! and into a step length with the ratio of the last step to its size in the
         ! trust-region metric
-        arh%step_norm_ratio = metric_ratio
-        if (abs(arh%history_window() - history_window_factor * sqrt(2.0_rp) * &
+        density_qn%step_norm_ratio = metric_ratio
+        if (abs(density_qn%history_window() - history_window_factor * sqrt(2.0_rp) * &
                 metric_ratio * trust_radius) > tol) then
             write(stderr, *) "test_history_window failed: Incorrect window for a "// &
                 "trust region in another metric."
             test_history_window = .false.
         end if
 
-        ! deallocate ARH and OAO objects
-        deallocate(arh, oao)
+        ! deallocate density QN and OAO objects
+        deallocate(density_qn, oao)
 
     end function test_history_window
 
@@ -4503,7 +4559,7 @@ contains
         ! this function tests the function which decides, from step length, which
         ! history entries the non-linear multisecant system is allowed to use
         !
-        use otr_arh, only: history_step_mask
+        use otr_density_qn, only: history_step_mask
 
         integer(ip), parameter :: n_rows = 4, n_diff = 3, n_rows_os = 8, n_diff_os = 2
         real(rp), parameter :: max_step = 5.0_rp
@@ -4687,7 +4743,7 @@ contains
             ! factor has to reproduce the Gram matrix of the accepted columns, which
             ! pins it since it is upper triangular with a positive diagonal
             !
-            use otr_arh, only: factorize_history
+            use otr_density_qn, only: factorize_history
 
             character(len=*), intent(in) :: case_name
             real(rp), intent(in) :: history_cols(:, :)
@@ -4734,7 +4790,7 @@ contains
         ! factor: selecting, reordering and right-dividing by the factor should be
         ! exactly undone by right-multiplying by the factor again
         !
-        use otr_arh, only: rebase_dirs
+        use otr_density_qn, only: rebase_dirs
 
         integer(ip), parameter :: n_param = 3, n_dm = 3, n_accepted = 2
 
@@ -4772,7 +4828,7 @@ contains
         ! A -> R^-T (P A P^T) R^-1: undoing it by left- and right-multiplying by the
         ! same factor must reproduce the gathered, reordered original matrix exactly
         !
-        use otr_arh, only: congruence_transform
+        use otr_density_qn, only: congruence_transform
         use opentrustregion_unit_tests, only: generate_random_symm_matrix
 
         integer(ip), parameter :: n_dm = 3, n_accepted = 2
@@ -4816,7 +4872,7 @@ contains
         ! factor and concatenated, offset index map from two independent per-channel
         ! history factorizations
         !
-        use otr_arh, only: combine_channels
+        use otr_density_qn, only: combine_channels
 
         integer(ip), parameter :: n1 = 2, n2 = 1, n_offset = 5
 
@@ -4862,7 +4918,7 @@ contains
         ! this function tests the subroutine which computes the pseudoinverse
         ! multisecant SR1 matrix of one part of the response
         !
-        use otr_arh, only: get_ms_a_inv, arh_settings_type
+        use otr_density_qn, only: get_ms_a_inv, density_qn_settings_type
         use otr_common_test_reference, only: n_ao
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
@@ -4874,7 +4930,7 @@ contains
         real(rp), allocatable :: a_inv(:, :), expected(:, :), a_tilde(:, :), &
                                  y_gram(:, :)
         integer(ip) :: map(n_accepted), error
-        type(arh_settings_type) :: settings
+        type(density_qn_settings_type) :: settings
 
         ! assume tests pass
         test_get_ms_a_inv = .true.
@@ -4951,7 +5007,7 @@ contains
         ! fulfill the secant condition of the linear kernel on the history, which only
         ! holds if both terms are assembled from the responses of their own kernel
         !
-        use otr_arh, only: get_ms_a_inv_jk_cs, arh_settings_type
+        use otr_density_qn, only: get_ms_a_inv_jk_cs, density_qn_settings_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
@@ -4963,7 +5019,7 @@ contains
                     v_coulomb_cols(n_rows, n_diff), v_exchange_cols(n_rows, n_diff)
         real(rp), allocatable :: a_inv(:, :), dirs(:, :), orth(:, :)
         integer(ip) :: map(n_diff), i, error
-        type(arh_settings_type) :: settings
+        type(density_qn_settings_type) :: settings
 
         ! assume tests pass
         test_get_ms_a_inv_jk_cs = .true.
@@ -5036,7 +5092,7 @@ contains
         ! which only holds if both terms are assembled from the responses of their own
         ! kernel and channels
         !
-        use otr_arh, only: get_ms_a_inv_jk_os, arh_settings_type
+        use otr_density_qn, only: get_ms_a_inv_jk_os, density_qn_settings_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
@@ -5051,7 +5107,7 @@ contains
                     v_coulomb_beta_cols(n_flat, n_diff), v_exchange_cols(n_flat, n_diff)
         real(rp), allocatable :: a_inv(:, :), dirs(:, :), orth(:, :)
         integer(ip) :: rows(2, 2), map(2 * n_diff), i, error
-        type(arh_settings_type) :: settings
+        type(density_qn_settings_type) :: settings
 
         ! assume tests pass
         test_get_ms_a_inv_jk_os = .true.
@@ -5156,7 +5212,7 @@ contains
         ! noise against the Coulomb A and negative eigenvalues not inverted, and an
         ! empty history
         !
-        use otr_arh, only: get_ms_jk_inv, arh_settings_type
+        use otr_density_qn, only: get_ms_jk_inv, density_qn_settings_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
 
         type(test_context_type), target :: context
@@ -5169,7 +5225,7 @@ contains
         real(rp), allocatable :: a_inv(:, :), dirs(:, :), expected(:, :), &
                                  a_tilde_coulomb(:, :), a_tilde_exchange(:, :)
         integer(ip) :: map(n_accepted), error
-        type(arh_settings_type) :: settings
+        type(density_qn_settings_type) :: settings
 
         ! assume tests pass
         test_get_ms_jk_inv = .true.
@@ -5303,7 +5359,7 @@ contains
         ! this function tests the function which returns the Gram matrix of the
         ! response history rebased into the orthonormalized S-basis
         !
-        use otr_arh, only: response_gram
+        use otr_density_qn, only: response_gram
 
         integer(ip), parameter :: n_dm = 3, n_accepted = 2, n_rows = 7
         integer(ip) :: map(n_accepted)
@@ -5341,7 +5397,7 @@ contains
         ! this function tests the subroutine which discards history directions failing
         ! the multisecant SR1 skipping criterion
         !
-        use otr_arh, only: apply_ms_sr1_skip, ms_sr1_skip_thresh
+        use otr_density_qn, only: apply_ms_sr1_skip, ms_sr1_skip_thresh
         use opentrustregion_unit_tests, only: identity_matrix
 
         integer(ip), parameter :: n = 4
@@ -5406,7 +5462,7 @@ contains
         ! this function tests the function which reconstructs a dense symmetric matrix
         ! from its eigenvectors and inverted eigenvalues
         !
-        use otr_arh, only: spectral_to_dense
+        use otr_density_qn, only: spectral_to_dense
         use otr_common_unit_tests, only: generate_random_orthogonal_matrix
 
         integer(ip), parameter :: n = 3
@@ -5453,12 +5509,12 @@ contains
         ! held in the history
         !
         use opentrustregion, only: numerical_zero
-        use otr_arh, only: arh_type, arh_oao_type
+        use otr_density_qn, only: density_qn_type, density_qn_oao_type
         use otr_common_test_reference, only: n_ao, n_particle
 
         real(rp), parameter :: scale = 1e6_rp
 
-        class(arh_type), allocatable :: arh
+        class(density_qn_type), allocatable :: density_qn
         real(rp) :: dm(n_ao, n_ao, n_particle), other(n_ao, n_ao, n_particle)
 
         ! assume tests pass
@@ -5470,8 +5526,8 @@ contains
         other = other + 1.0_rp
 
         ! determine if no density is reported before the history exists
-        allocate(arh_oao_type :: arh)
-        if (arh%density_in_history(dm)) then
+        allocate(density_qn_oao_type :: density_qn)
+        if (density_qn%density_in_history(dm)) then
             write(stderr, *) "test_density_in_history failed: Density matrix "// &
                 "reported without a history."
             test_density_in_history = .false.
@@ -5480,20 +5536,20 @@ contains
         ! determine if a density is found in a history holding it besides another one,
         ! also when it differs by much less than numerical zero relative to its size,
         ! but not when it differs by much more
-        allocate(arh%dm_list(n_ao, n_ao, n_particle, 2))
-        arh%dm_list(:, :, :, 1) = other
-        arh%dm_list(:, :, :, 2) = dm
-        if (.not. arh%density_in_history(dm)) then
+        allocate(density_qn%dm_list(n_ao, n_ao, n_particle, 2))
+        density_qn%dm_list(:, :, :, 1) = other
+        density_qn%dm_list(:, :, :, 2) = dm
+        if (.not. density_qn%density_in_history(dm)) then
             write(stderr, *) "test_density_in_history failed: Density matrix held "// &
                 "in history not found."
             test_density_in_history = .false.
         end if
-        if (.not. arh%density_in_history(dm + 0.1_rp * numerical_zero)) then
+        if (.not. density_qn%density_in_history(dm + 0.1_rp * numerical_zero)) then
             write(stderr, *) "test_density_in_history failed: Density matrix "// &
                 "differing by much less than numerical zero not found."
             test_density_in_history = .false.
         end if
-        if (arh%density_in_history(dm + 10.0_rp * numerical_zero)) then
+        if (density_qn%density_in_history(dm + 10.0_rp * numerical_zero)) then
             write(stderr, *) "test_density_in_history failed: Density matrix "// &
                 "differing by much more than numerical zero found."
             test_density_in_history = .false.
@@ -5502,21 +5558,22 @@ contains
         ! determine if the comparison is relative to the size of the density, where the
         ! densities are scaled after perturbing them so that the differences scale with
         ! them instead of vanishing in their precision
-        arh%dm_list(:, :, :, 2) = scale * dm
-        if (.not. arh%density_in_history(scale * (dm + 0.1_rp * numerical_zero))) then
+        density_qn%dm_list(:, :, :, 2) = scale * dm
+        if (.not. density_qn%density_in_history(scale * &
+                                                (dm + 0.1_rp * numerical_zero))) then
             write(stderr, *) "test_density_in_history failed: Large density matrix "// &
                 "differing by much less than numerical zero relative to its size "// &
                 "not found."
             test_density_in_history = .false.
         end if
-        if (arh%density_in_history(scale * (dm + 10.0_rp * numerical_zero))) then
+        if (density_qn%density_in_history(scale * (dm + 10.0_rp * numerical_zero))) then
             write(stderr, *) "test_density_in_history failed: Large density matrix "// &
                 "differing by much more than numerical zero relative to its size found."
             test_density_in_history = .false.
         end if
 
-        ! deallocate ARH object
-        deallocate(arh)
+        ! deallocate density QN object
+        deallocate(density_qn)
 
     end function test_density_in_history
 
@@ -5524,7 +5581,7 @@ contains
         !
         ! this function tests the subroutine which prepends an array to a list of arrays
         !
-        use otr_arh, only: prepend
+        use otr_density_qn, only: prepend
 
         real(rp), allocatable :: list(:, :, :, :)
         real(rp) :: new_array(2, 1, 1), new_arrays(2, 1, 1, 2), expected(2, 1, 1, 3)
@@ -5578,4 +5635,4 @@ contains
 
     end function test_prepend
 
-end module otr_arh_unit_tests
+end module otr_density_qn_unit_tests

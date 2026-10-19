@@ -138,12 +138,13 @@ def oao_factory(
     ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
 
     # collector for exceptions raised inside the callback functions the object calls,
-    # which the solver adopts from the returned functions and the ARH factory shares
+    # which the solver adopts from the returned functions and the density QN factory
+    # shares
     exception = {}
 
     # define interfaces for callback functions, whose arguments the C interface cannot
-    # check, without a density matrix evaluating function for an object only the ARH
-    # factory builds on
+    # check, without a density matrix evaluating function for an object only the
+    # density QN factory builds on
     evaluate_dm_interface = evaluate_dm_interface_type()
     if evaluate_dm is not None:
         check_callback_arguments(
@@ -195,8 +196,8 @@ def oao_factory(
 
     # the owner of the OAO object, which the solver settings keep alive, keeps alive
     # what the object calls and the density matrix it updates in place and holds the
-    # dimensions of the orbitals for the ARH factory, and the returned functions are
-    # called with the context the factory has written into the solver settings,
+    # dimensions of the orbitals for the density QN factory, and the returned functions
+    # are called with the context the factory has written into the solver settings,
     # through which they reach the object, and keep the solver settings alive
     OrbitalOwner(
         extension.value,

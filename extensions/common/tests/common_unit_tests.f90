@@ -2750,7 +2750,7 @@ contains
 
             ! store the density matrices of the particle channels of the case, set the
             ! mock density matrix evaluating function and mark the response as stale as
-            ! ARH would after moving the density on its own
+            ! density QN would after moving the density on its own
             basis%n_particle = i_shell
             basis%dm_ao => dm_ao(:, :, :i_shell)
             if (i_shell == 1) then

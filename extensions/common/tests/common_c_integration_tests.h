@@ -7,9 +7,10 @@
 /* Code the C integration tests of the extensions share: the field checks of their
  * layout tests, the warning of the orbital basis factories without a density matrix
  * evaluating function and the toy model, whose solves through the factories of the
- * orbital bases and ARH show that what crosses their C interfaces arrives, together
- * with what they share with the core's integration tests through c_integration_tests.h.
- * It calls no factory, since it is built with every extension. */
+ * orbital bases and density QN show that what crosses their C interfaces arrives,
+ * together with what they share with the core's integration tests through
+ * c_integration_tests.h. It calls no factory, since it is built with every extension.
+ */
 
 #ifndef COMMON_C_INTEGRATION_TESTS_H
 #define COMMON_C_INTEGRATION_TESTS_H
@@ -70,7 +71,7 @@ typedef struct {
 #define TOY_MAX_LOG 1024
 
 /* host of the callback functions of the toy model, whose address is the host context
- * of the settings of an orbital basis or ARH, which counts their calls, records
+ * of the settings of an orbital basis or density QN, which counts their calls, records
  * whether the record of the state was current in them and collects the messages of the
  * logging function */
 typedef struct {
@@ -85,9 +86,9 @@ typedef struct {
 } toy_host;
 
 /* one solve of the toy model through the factory of an orbital basis and optionally
- * ARH, with the solver settings and state, the hosts of the callback functions of both
- * objects, the returned functions and objects and the orbitals the orbital basis
- * moves, MO coefficients or density matrices, with the ones it started from */
+ * density QN, with the solver settings and state, the hosts of the callback functions
+ * of both objects, the returned functions and objects and the orbitals the orbital
+ * basis moves, MO coefficients or density matrices, with the ones it started from */
 typedef struct {
   bool mo_basis;
   c_int n_particle;
@@ -96,11 +97,11 @@ typedef struct {
   solver_settings_type settings;
   solver_state_type state;
   toy_host host;
-  toy_host arh_host;
+  toy_host density_qn_host;
   update_orbs_fp update_orbs;
   obj_func_fp obj_func;
   void *extension;
-  void *arh_extension;
+  void *density_qn_extension;
   c_real orbitals[TOY_MAX_SIZE];
   c_real start_orbitals[TOY_MAX_SIZE];
 } toy_run;
@@ -117,22 +118,22 @@ bool toy_model_load(const char *test_name);
 void toy_run_init(toy_run *run, bool mo_basis, c_int n_particle);
 
 /* the closed- or open-shell density matrix evaluating functions of the orbital bases
- * and ARH, which have to receive a host of the current run as their context */
+ * and density QN, which have to receive a host of the current run as their context */
 c_int toy_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
                       get_response_fp *get_response, void *context);
-c_int toy_arh_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
-                          c_real *v_coulomb, c_real *v_exchange, c_real *v_nonlinear,
-                          void *context);
+c_int toy_density_qn_evaluate_dm(const c_real *dm, c_real *energy, c_real *fock,
+                                 c_real *v_coulomb, c_real *v_exchange,
+                                 c_real *v_nonlinear, void *context);
 
-/* the logging function of the settings of an orbital basis or ARH, which appends the
- * messages to the log of the host it receives as its context if it is one of the
- * current run */
+/* the logging function of the settings of an orbital basis or density QN, which
+ * appends the messages to the log of the host it receives as its context if it is one
+ * of the current run */
 void toy_logger(const char *message, void *context);
 
 /* solve the prepared run and check that the solve converged, that the callback
  * functions received the hosts of the run as their context and the current record of
- * the state, that the exact Hessian of the orbital basis and, with ARH, its density
- * matrix evaluating function were used and that the orbitals moved and stayed
+ * the state, that the exact Hessian of the orbital basis and, with density QN, its
+ * density matrix evaluating function were used and that the orbitals moved and stayed
  * orthonormal */
 bool toy_run_solve(toy_run *run, const char *test_name, const char *case_name);
 

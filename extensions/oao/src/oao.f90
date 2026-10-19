@@ -62,7 +62,7 @@ contains
         ! place, so it has to outlive the calculation; without a density matrix
         ! evaluating function, the orbital updating function, objective function and
         ! Hessian linear transformation of the object return an error when called, so
-        ! that only the ARH factory can build on it
+        ! that only the density QN factory can build on it
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :)
         real(rp), intent(in) :: ao_overlap(:, :)
@@ -102,7 +102,7 @@ contains
         ! place, so it has to outlive the calculation; without a density matrix
         ! evaluating function, the orbital updating function, objective function and
         ! Hessian linear transformation of the object return an error when called, so
-        ! that only the ARH factory can build on it
+        ! that only the density QN factory can build on it
         !
         real(rp), intent(inout), target, contiguous :: dm_ao(:, :, :)
         real(rp), intent(in) :: ao_overlap(:, :)
