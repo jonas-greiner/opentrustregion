@@ -1630,7 +1630,9 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n, lwork, info, i
-        real(rp), allocatable :: eigvals_re(:), eigvals_im(:), work(:), temp(:, :)
+        real(rp), allocatable :: eigvals_re(:), eigvals_im(:), work(:), temp(:, :), &
+                                 left_re(:)
+        real(rp) :: overlap_re, overlap_im, overlap_sq
         character(len=300) :: msg
         real(rp), external :: ddot
         external :: dgeev
@@ -1675,10 +1677,33 @@ contains
         eigvals%im = eigvals_im
         deallocate(eigvals_re, eigvals_im)
 
-        ! scale left eigenvectors such that biorthonormality is fulfilled
-        do i = 1, n
-            left_eigvecs(:, i) = left_eigvecs(:, i) / ddot( &
-                n, left_eigvecs(:, i), 1_ip, right_eigvecs(:, i), 1_ip)
+        ! scale left eigenvectors such that biorthonormality is fulfilled; dgeev stores
+        ! the eigenvectors of a complex conjugate pair as the real and imaginary parts
+        ! of one complex eigenvector in two consecutive columns, which are scaled
+        ! together
+        i = 1
+        do while (i <= n)
+            if (eigvals(i)%im == 0.0_rp) then
+                left_eigvecs(:, i) = left_eigvecs(:, i) / ddot( &
+                    n, left_eigvecs(:, i), 1_ip, right_eigvecs(:, i), 1_ip)
+                i = i + 1
+            else
+                ! scale u = l_i + i l_(i+1) such that its overlap u^H v with
+                ! v = r_i + i r_(i+1) is one
+                overlap_re = &
+                    ddot(n, left_eigvecs(:, i), 1_ip, right_eigvecs(:, i), 1_ip) + &
+                    ddot(n, left_eigvecs(:, i + 1), 1_ip, right_eigvecs(:, i + 1), 1_ip)
+                overlap_im = &
+                    ddot(n, left_eigvecs(:, i), 1_ip, right_eigvecs(:, i + 1), 1_ip) - &
+                    ddot(n, left_eigvecs(:, i + 1), 1_ip, right_eigvecs(:, i), 1_ip)
+                overlap_sq = overlap_re**2 + overlap_im**2
+                left_re = left_eigvecs(:, i)
+                left_eigvecs(:, i) = (overlap_re * left_re - &
+                                      overlap_im * left_eigvecs(:, i + 1)) / overlap_sq
+                left_eigvecs(:, i + 1) = (overlap_im * left_re + overlap_re * &
+                                          left_eigvecs(:, i + 1)) / overlap_sq
+                i = i + 2
+            end if
         end do
 
     end subroutine general_mat_diag

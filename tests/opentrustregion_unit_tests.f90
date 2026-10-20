@@ -2327,6 +2327,7 @@ contains
 
         integer(ip) :: n, lwork, info, i
         real(rp), allocatable :: work(:), temp(:, :)
+        complex(rp), allocatable :: left(:)
         external :: dgeev
 
         n = size(matrix, 1)
@@ -2346,10 +2347,22 @@ contains
                    right_eigvecs, n, work, lwork, info)
         deallocate(work, temp)
 
-        ! scale left eigenvectors to biorthonormality
-        do i = 1, n
-            left_eigvecs(:, i) = left_eigvecs(:, i) / &
-                                 dot_product(left_eigvecs(:, i), right_eigvecs(:, i))
+        ! scale left eigenvectors to biorthonormality, the two columns holding the real
+        ! and imaginary parts of a complex eigenvector together
+        i = 1
+        do while (i <= n)
+            if (eigvals_im(i) == 0.0_rp) then
+                left_eigvecs(:, i) = left_eigvecs(:, i) / dot_product( &
+                    left_eigvecs(:, i), right_eigvecs(:, i))
+                i = i + 1
+            else
+                left = cmplx(left_eigvecs(:, i), left_eigvecs(:, i + 1), kind=rp)
+                left = left / conjg(dot_product( &
+                    left, cmplx(right_eigvecs(:, i), right_eigvecs(:, i + 1), kind=rp)))
+                left_eigvecs(:, i) = real(left)
+                left_eigvecs(:, i + 1) = aimag(left)
+                i = i + 2
+            end if
         end do
 
     end subroutine ref_general_mat_diag
@@ -4955,7 +4968,8 @@ contains
                     left_eigvecs(n_param, n_param), eigval_diag(n_param, n_param), &
                     rotation(2, 2), rotation_right_eigvecs(2, 2), &
                     rotation_left_eigvecs(2, 2)
-        complex(rp) :: eigvals(n_param), rotation_eigvals(2)
+        complex(rp) :: eigvals(n_param), rotation_eigvals(2), right_eigvec(2), &
+                       left_eigvec(2)
         integer(ip) :: error, i
         type(test_context_type), target :: context
 
@@ -5004,10 +5018,15 @@ contains
         end if
 
         ! diagonalize a scaled rotation, whose eigenvalues are a complex conjugate pair
-        ! with the cosine as real and the sine as imaginary part, and determine whether
-        ! both parts are returned
-        rotation = reshape([0.6_rp, 0.8_rp, &
-                            -0.8_rp, 0.6_rp], [2, 2])
+        ! with the cosine as real and the sine as imaginary part, sheared by a
+        ! similarity transformation, which keeps the eigenvalues but lets the left and
+        ! right eigenvectors differ, and determine whether both parts are returned
+        rotation = matmul(matmul(reshape([1.0_rp, 0.0_rp, &
+                                          0.5_rp, 1.0_rp], [2, 2]), &
+                                 reshape([0.6_rp, 0.8_rp, &
+                                          -0.8_rp, 0.6_rp], [2, 2])), &
+                          reshape([1.0_rp, 0.0_rp, &
+                                   -0.5_rp, 1.0_rp], [2, 2]))
         call general_mat_diag(rotation, rotation_eigvals, rotation_right_eigvecs, &
                               rotation_left_eigvecs, settings, error)
         if (error /= 0) then
@@ -5020,6 +5039,31 @@ contains
             abs(sum(rotation_eigvals%im)) > tol) then
             write(stderr, *) "test_general_mat_diag failed: Incorrect complex "// &
                 "eigenvalues."
+            test_general_mat_diag = .false.
+        end if
+
+        ! determine whether the complex left and right eigenvectors of the first
+        ! eigenvalue, whose real and imaginary parts are stored in consecutive columns,
+        ! are eigenvectors and biorthonormal, comparing such that a NaN fails
+        right_eigvec = cmplx(rotation_right_eigvecs(:, 1), &
+                             rotation_right_eigvecs(:, 2), kind=rp)
+        left_eigvec = cmplx(rotation_left_eigvecs(:, 1), rotation_left_eigvecs(:, 2), &
+                            kind=rp)
+        if (.not. abs(dot_product(left_eigvec, right_eigvec) - 1.0_rp) <= tol) then
+            write(stderr, *) "test_general_mat_diag failed: Left and right "// &
+                "eigenvectors of complex eigenvalue are not biorthonormal."
+            test_general_mat_diag = .false.
+        end if
+        if (.not. all(abs(matmul(rotation, right_eigvec) - &
+                          rotation_eigvals(1) * right_eigvec) <= tol)) then
+            write(stderr, *) "test_general_mat_diag failed: Incorrect right "// &
+                "eigenvector for complex eigenvalue."
+            test_general_mat_diag = .false.
+        end if
+        if (.not. all(abs(matmul(conjg(left_eigvec), rotation) - &
+                          rotation_eigvals(1) * conjg(left_eigvec)) <= tol)) then
+            write(stderr, *) "test_general_mat_diag failed: Incorrect left "// &
+                "eigenvector for complex eigenvalue."
             test_general_mat_diag = .false.
         end if
 
