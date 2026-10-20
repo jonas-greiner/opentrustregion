@@ -93,7 +93,9 @@ module opentrustregion
             "fully converge. The resulting trial vectors are still used.", &
         lin_dep_trial_vector_warning_msg = &
             "Provided trial vector is linearly dependent and is being removed.", &
-        minres_max_iter_warning_msg = "MINRES: The iteration limit was reached.", &
+        minres_max_iter_warning_msg = "MINRES: The iteration limit was reached. "// &
+                                      "The approximate solution of the last "// &
+                                      "iteration is used.", &
         function_unchanged_warning_msg = "No further improvement of cost function "// &
                                          "possible. Convergence criterion is not "// &
                                          "fulfilled but calculation should be "// &
@@ -2695,12 +2697,8 @@ contains
                 call settings%log("MINRES: x has converged to an eigenvector.", &
                                   verbosity_debug)
                 exit
-            ! check if maximum number of iterations has been reached
-            else if (iteration == max_iterations) then
-                call settings%log(minres_max_iter_warning_msg, verbosity_warning)
-                exit
-            ! these tests ensure convergence is still achieved when r_tol
-            ! approaches machine precision
+            ! these tests ensure convergence is still achieved when r_tol approaches
+            ! machine precision
             else if (1.0_rp + rel_residual <= 1.0_rp) then
                 call settings%log("MINRES: A solution to Ax = b was found, given "// &
                                   "provided tolerance.", verbosity_debug)
@@ -2708,6 +2706,11 @@ contains
             else if (1.0_rp + rel_ls_residual <= 1.0_rp) then
                 call settings%log("MINRES: A least-squares solution was found, "// &
                                   "given provided tolerance.", verbosity_debug)
+                exit
+            ! check if maximum number of iterations has been reached, after the tests
+            ! for convergence, so that an iteration which also converges does not warn
+            else if (iteration == max_iterations) then
+                call settings%log(minres_max_iter_warning_msg, verbosity_warning)
                 exit
             end if
 

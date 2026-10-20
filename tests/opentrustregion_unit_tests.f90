@@ -6794,7 +6794,7 @@ contains
         integer(ip), parameter :: n_large = 50
         real(rp), dimension(n_large) :: large_rhs, large_solution, large_vector, &
                                         large_hess_vector, large_residual
-        integer(ip) :: error, i, n_hess_x
+        integer(ip) :: error, i, n_hess_x, n_iter
         type(hartmann6d_context_type), target :: context
         type(quadratic_context_type), target :: quadratic_context
 
@@ -6944,6 +6944,19 @@ contains
                 "iteration limit is reached."
             test_minres = .false.
         end if
+        corr_vector = matmul(context%hess, rhs) - mu * rhs
+        corr_vector = corr_vector - dot_product(corr_vector, solution) * solution
+        if (any(abs(vector + dot_product(rhs, corr_vector) / &
+                    dot_product(corr_vector, corr_vector) * rhs) > tol)) then
+            write(stderr, *) "test_minres failed: Returned solution is not the "// &
+                "iterate of the single iteration when iteration limit is reached."
+            test_minres = .false.
+        end if
+        if (any(abs(hess_vector - matmul(context%hess, vector)) > tol)) then
+            write(stderr, *) "test_minres failed: Returned Hessian linear "// &
+                "transformation wrong when iteration limit is reached."
+            test_minres = .false.
+        end if
 
         ! run minimum residual method from an initial guess for a vanishing right hand
         ! side and check that the solution and its Hessian linear transformation vanish
@@ -6969,7 +6982,8 @@ contains
 
         ! solve the correction equation for a diagonal Hessian with a vanishing
         ! tolerance, which only the tests for tolerances below machine precision can
-        ! satisfy, and check that it is solved without reaching the iteration limit
+        ! satisfy, and check that it is solved without reaching the iteration limit,
+        ! which only prints a warning
         context%hess = 0.0_rp
         do i = 1, n_param
             context%hess(i, i) = real(i, kind=rp)
@@ -6979,11 +6993,19 @@ contains
         mu = context%hess(1, 1)
         call random_number(rhs)
         rhs(1) = 0.0_rp
+        call setup_error_logging(settings, context)
+        settings%verbose = verbosity_warning
+        n_hess_x = 0
         call minres(-rhs, hess_x_funptr, solution, mu, 0.0_rp, vector, hess_vector, &
                     settings, n_hess_x, error)
         if (error /= 0) then
             write(stderr, *) "test_minres failed: Produced error for vanishing "// &
                 "tolerance."
+            test_minres = .false.
+        end if
+        if (index(context%log_message, minres_max_iter_warning_msg) /= 0) then
+            write(stderr, *) "test_minres failed: Iteration limit reached for "// &
+                "vanishing tolerance."
             test_minres = .false.
         end if
         corr_vector = vector - dot_product(vector, solution) * solution
@@ -6992,6 +7014,25 @@ contains
         if (sum(abs(corr_vector + rhs)) > tol) then
             write(stderr, *) "test_minres failed: Returned solution does not solve "// &
                 "Jacobi-Davidson correction equation for vanishing tolerance."
+            test_minres = .false.
+        end if
+
+        ! solve the same correction equation with the iteration limit set to the
+        ! number of iterations it took, one Hessian linear transformation each, and
+        ! check that converging in the last allowed iteration does not print the
+        ! warning for the iteration limit
+        context%log_message = ""
+        n_iter = n_hess_x
+        call minres(-rhs, hess_x_funptr, solution, mu, 0.0_rp, vector, hess_vector, &
+                    settings, n_hess_x, error, max_iter=n_iter)
+        if (error /= 0) then
+            write(stderr, *) "test_minres failed: Produced error for convergence "// &
+                "in last allowed iteration."
+            test_minres = .false.
+        end if
+        if (index(context%log_message, minres_max_iter_warning_msg) /= 0) then
+            write(stderr, *) "test_minres failed: Iteration limit reached for "// &
+                "convergence in last allowed iteration."
             test_minres = .false.
         end if
 
