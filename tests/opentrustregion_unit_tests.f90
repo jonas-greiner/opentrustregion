@@ -6031,9 +6031,34 @@ contains
             end if
         end do
 
+        ! a warm start for a single parameter starts from the full space, which spans
+        ! the requested block, so that its eigenvector, the only unit vector, leads the
+        ! trial space
+        settings%get_extra_trial_vectors => null()
+        settings%approx_hess_x => approx_hess_x_fun
+        settings%n_extra_trial_vectors = 1
+        settings%n_random_trial_vectors = 1
+        call get_stability_trial_space(h_diag(:1), red_space_basis, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_stability_trial_space failed: Produced "// &
+                "error for warm start for a single parameter."
+            test_get_stability_trial_space = .false.
+        else if (any(shape(red_space_basis) /= [1, 1])) then
+            write(stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors for warm start for a single parameter."
+            test_get_stability_trial_space = .false.
+        else if (abs(abs(red_space_basis(1, 1)) - 1.0_rp) > tol) then
+            write(stderr, *) "test_get_stability_trial_space failed: Trial vector "// &
+                "not normalized for warm start for a single parameter."
+            test_get_stability_trial_space = .false.
+        end if
+
         ! with no random trial vectors requested either, dropping every extra trial
         ! vector leaves nothing to start the Davidson iterations from, which returns an
         ! error and prints an error message
+        settings%get_extra_trial_vectors => mock_vanishing_extra_trial_vectors
+        settings%approx_hess_x => null()
+        settings%n_extra_trial_vectors = 2
         settings%n_random_trial_vectors = 0
         call setup_error_logging(settings, context)
         call get_stability_trial_space(h_diag, red_space_basis, settings, error)
@@ -9616,10 +9641,11 @@ contains
         ! rejects
         character(len=*), parameter :: mixed_case_diag_solvers(2) = &
             [character(len=15) :: "Davidson", "Jacobi-Davidson"]
-        character(len=*), parameter :: error_case_names(5) = &
+        character(len=*), parameter :: error_case_names(6) = &
             [character(len=55) :: "vanishing number of parameters", &
              "extra trial vector function without extra trial vectors", &
-             "vanishing number of trial vectors", "unknown diagonalization solver", &
+             "vanishing number of trial vectors", "no random and a negative number "// &
+             "of extra trial vectors", "unknown diagonalization solver", &
              "non-symmetric Hessian with Jacobi-Davidson solver"]
         type(stability_settings_type) :: settings
         integer(ip) :: error, i_solver, i_case, n_param
@@ -9682,8 +9708,11 @@ contains
                 settings%n_extra_trial_vectors = 0
                 settings%n_random_trial_vectors = 0
             case (4)
-                settings%diag_solver = "unknown"
+                settings%n_extra_trial_vectors = -1
+                settings%n_random_trial_vectors = 0
             case (5)
+                settings%diag_solver = "unknown"
+            case (6)
                 settings%diag_solver = "jacobi-davidson"
                 settings%hess_symm = .false.
             end select

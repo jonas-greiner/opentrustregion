@@ -2135,9 +2135,11 @@ contains
                 ! extract the lowest approximate Hessian eigenvectors starting from a
                 ! random space slightly larger than the requested block since the
                 ! lowest eigenvectors emerge more reliably when a few extra directions
-                ! are carried along
+                ! are carried along, at most the full space, in which the eigenpairs
+                ! are exact, and never smaller than the block, whose eigenpairs would
+                ! otherwise not all be determined
                 allocate(start_space(n_param, min(n_extra + approx_hess_trial_extra, &
-                                                  n_param - 1)), eigvals(n_extra))
+                                                  n_param)), eigvals(n_extra))
                 call generate_random_trial_vectors( &
                     start_space, size(start_space, 2, kind=ip), settings, error)
                 call add_error_origin(error, error_stability_check, settings)
@@ -3870,8 +3872,9 @@ contains
             return
         end if
 
-        ! check that the trial space is not empty
-        if (settings%n_extra_trial_vectors == 0 .and. &
+        ! check that the trial space is not empty, also for a negative number of extra
+        ! trial vectors, which requests none
+        if (settings%n_extra_trial_vectors <= 0 .and. &
             settings%n_random_trial_vectors == 0) then
             call settings%log("Vanishing number of trial vectors for stability "// &
                               "check.", verbosity_error, .true.)
