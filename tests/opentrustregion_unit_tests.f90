@@ -4418,7 +4418,8 @@ contains
         !
         ! this function tests the minimum residual method subroutine
         !
-        use opentrustregion, only: solver_settings_type, hess_x_type, minres
+        use opentrustregion, only: solver_settings_type, hess_x_type, minres, &
+                                   verbosity_warning, minres_max_iter_warning_msg
 
         type(solver_settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -4429,7 +4430,7 @@ contains
         integer(ip), parameter :: n_large = 50
         real(rp), dimension(n_large) :: large_rhs, large_solution, large_vector, &
                                         large_hess_vector, large_residual
-        integer(ip) :: error, i, n_hess_x
+        integer(ip) :: error, i, n_hess_x, n_iter
         type(hartmann6d_context_type), target :: context
         type(quadratic_context_type), target :: quadratic_context
 
@@ -4562,19 +4563,34 @@ contains
             test_minres = .false.
         end if
 
-        ! allow only a single iteration and check that an error is returned and an
-        ! error message is printed when the iteration limit is reached
+        ! allow only a single iteration and check that the approximate solution is
+        ! returned without an error and a warning is printed when the iteration limit
+        ! is reached
         call setup_error_logging(settings, context)
+        settings%verbose = verbosity_warning
         call minres(-rhs, hess_x_funptr, solution, mu, minres_tol, vector, &
                     hess_vector, settings, n_hess_x, error, max_iter=1_ip)
-        if (error /= 1) then
-            write(stderr, *) "test_minres failed: No error returned when iteration "// &
+        if (error /= 0) then
+            write(stderr, *) "test_minres failed: Produced error when iteration "// &
                 "limit is reached."
             test_minres = .false.
         end if
-        if (len_trim(context%log_message) == 0) then
-            write(stderr, *) "test_minres failed: No error message printed when "// &
+        if (index(context%log_message, " "//minres_max_iter_warning_msg) == 0) then
+            write(stderr, *) "test_minres failed: No warning printed when "// &
                 "iteration limit is reached."
+            test_minres = .false.
+        end if
+        corr_vector = matmul(context%hess, rhs) - mu * rhs
+        corr_vector = corr_vector - dot_product(corr_vector, solution) * solution
+        if (any(abs(vector + dot_product(rhs, corr_vector) / &
+                    dot_product(corr_vector, corr_vector) * rhs) > tol)) then
+            write(stderr, *) "test_minres failed: Returned solution is not the "// &
+                "iterate of the single iteration when iteration limit is reached."
+            test_minres = .false.
+        end if
+        if (any(abs(hess_vector - matmul(context%hess, vector)) > tol)) then
+            write(stderr, *) "test_minres failed: Returned Hessian linear "// &
+                "transformation wrong when iteration limit is reached."
             test_minres = .false.
         end if
 
@@ -4602,7 +4618,8 @@ contains
 
         ! solve the correction equation for a diagonal Hessian with a vanishing
         ! tolerance, which only the tests for tolerances below machine precision can
-        ! satisfy, and check that it is solved without reaching the iteration limit
+        ! satisfy, and check that it is solved without reaching the iteration limit,
+        ! which only prints a warning
         context%hess = 0.0_rp
         do i = 1, n_param
             context%hess(i, i) = real(i, kind=rp)
@@ -4612,11 +4629,19 @@ contains
         mu = context%hess(1, 1)
         call random_number(rhs)
         rhs(1) = 0.0_rp
+        call setup_error_logging(settings, context)
+        settings%verbose = verbosity_warning
+        n_hess_x = 0
         call minres(-rhs, hess_x_funptr, solution, mu, 0.0_rp, vector, hess_vector, &
                     settings, n_hess_x, error)
         if (error /= 0) then
             write(stderr, *) "test_minres failed: Produced error for vanishing "// &
                 "tolerance."
+            test_minres = .false.
+        end if
+        if (index(context%log_message, minres_max_iter_warning_msg) /= 0) then
+            write(stderr, *) "test_minres failed: Iteration limit reached for "// &
+                "vanishing tolerance."
             test_minres = .false.
         end if
         corr_vector = vector - dot_product(vector, solution) * solution
@@ -4625,6 +4650,25 @@ contains
         if (sum(abs(corr_vector + rhs)) > tol) then
             write(stderr, *) "test_minres failed: Returned solution does not solve "// &
                 "Jacobi-Davidson correction equation for vanishing tolerance."
+            test_minres = .false.
+        end if
+
+        ! solve the same correction equation with the iteration limit set to the
+        ! number of iterations it took, one Hessian linear transformation each, and
+        ! check that converging in the last allowed iteration does not print the
+        ! warning for the iteration limit
+        context%log_message = ""
+        n_iter = n_hess_x
+        call minres(-rhs, hess_x_funptr, solution, mu, 0.0_rp, vector, hess_vector, &
+                    settings, n_hess_x, error, max_iter=n_iter)
+        if (error /= 0) then
+            write(stderr, *) "test_minres failed: Produced error for convergence "// &
+                "in last allowed iteration."
+            test_minres = .false.
+        end if
+        if (index(context%log_message, minres_max_iter_warning_msg) /= 0) then
+            write(stderr, *) "test_minres failed: Iteration limit reached for "// &
+                "convergence in last allowed iteration."
             test_minres = .false.
         end if
 
@@ -5520,8 +5564,24 @@ contains
         ! setup settings object
         call setup_settings(settings, context)
 
+        ! check if error is correctly thrown for vanishing number of parameters
+        call setup_error_logging(settings, context)
+        call stability_sanity_check(settings, 0_ip, error)
+        if (error /= 1) then
+            write(stderr, *) "test_stability_sanity_check failed: No error "// &
+                "returned for vanishing number of parameters."
+            test_stability_sanity_check = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_stability_sanity_check failed: No error message "// &
+                "printed for vanishing number of parameters."
+            test_stability_sanity_check = .false.
+        end if
+
         ! check if number of random trial vectors is reduced correctly with a warning
         settings%n_random_trial_vectors = 3
+        settings%verbose = verbosity_info
+        context%log_message = ""
         call stability_sanity_check(settings, 3_ip, error)
         if (settings%n_random_trial_vectors /= 1) then
             write(stderr, *) "test_stability_sanity_check failed: Number of random "// &
