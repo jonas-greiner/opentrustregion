@@ -67,38 +67,40 @@ from pyopentrustregion.python_interface import (
     get_extra_trial_vectors_interface_type,
     conv_check_interface_type,
     logger_interface_type,
+    ext,
+    conda_prefix,
 )
-
-if sys.platform == "darwin":
-    ext = "dylib"
-elif sys.platform == "win32":
-    ext = "dll"
-else:
-    ext = "so"
 
 
 def load_testsuite_library() -> CDLL:
-    # try to load from installed package (site-packages)
-    lib_path = resources.files("pyopentrustregion") / f"libotrtestsuite.{ext}"
+    # try to load from installed package (conda)
+    lib_name = f"libotrtestsuite.{ext}"
+    conda_path_unix = conda_prefix / "lib" / lib_name
+    conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
+    if conda_path_unix.exists():
+        return CDLL(str(conda_path_unix))
+    elif conda_path_wind.exists():
+        return CDLL(str(conda_path_wind))
+
+    # fallback: try to load from installed package (site-packages)
+    lib_path = resources.files("pyopentrustregion") / lib_name
     if lib_path.is_file():
         return CDLL(str(lib_path))
 
     # fallback: try to load from same directory (editable install)
-    local_path = os.path.join(os.path.dirname(__file__), f"libotrtestsuite.{ext}")
+    local_path = os.path.join(os.path.dirname(__file__), lib_name)
     if os.path.exists(local_path):
         return CDLL(local_path)
 
     # fallback: try to load from ../build (development build)
     build_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../build", f"libotrtestsuite.{ext}")
+        os.path.join(os.path.dirname(__file__), "../build", lib_name)
     )
     if os.path.exists(build_path):
         return CDLL(build_path)
 
     # if all failed
-    raise FileNotFoundError(
-        f"Cannot find any of the expected libraries: libotrtestsuite.{ext}"
-    )
+    raise FileNotFoundError(f"Cannot find any of the expected libraries: {lib_name}")
 
 
 # load library
