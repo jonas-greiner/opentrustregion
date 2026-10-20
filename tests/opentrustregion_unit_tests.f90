@@ -6067,9 +6067,9 @@ contains
         !
         ! this function tests the subroutine which orthogonalizes trial vectors
         !
-        use opentrustregion, only: &
-            stability_settings_type, orthogonalize_trial_vectors, &
-            vanishing_trial_vector_warning_msg, lin_dep_trial_vector_warning_msg
+        use opentrustregion, only: stability_settings_type, &
+                                   orthogonalize_trial_vectors, &
+                                   lin_dep_trial_vector_warning_msg
 
         type(stability_settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
@@ -6096,7 +6096,7 @@ contains
 
         ! orthogonalize trial vectors and check that an orthonormal basis of the random
         ! vectors remains and that a warning is printed for the removal of the
-        ! linearly dependent and of the vanishing vector
+        ! linearly dependent vector
         call orthogonalize_trial_vectors(red_space_basis, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_orthogonalize_trial_vectors failed: Produced error."
@@ -6124,12 +6124,6 @@ contains
                 "printed when removing linearly dependent vector."
             test_orthogonalize_trial_vectors = .false.
         end if
-        if (index(context%log_message, " "//vanishing_trial_vector_warning_msg) == 0) &
-            then
-            write(stderr, *) "test_orthogonalize_trial_vectors failed: No warning "// &
-                "printed when removing vanishing vector."
-            test_orthogonalize_trial_vectors = .false.
-        end if
         deallocate(red_space_basis)
 
         ! a block whose vectors all vanish leaves no vector space behind, which is a
@@ -6137,9 +6131,7 @@ contains
         allocate(red_space_basis(n_param, 2))
         red_space_basis = 0.0_rp
 
-        ! orthogonalize trial vectors and check that the warning for the removal of a
-        ! vanishing vector is printed
-        context%log_message = ""
+        ! orthogonalize trial vectors and check that the vanishing vectors are removed
         call orthogonalize_trial_vectors(red_space_basis, settings, error)
         if (error /= 0) then
             write(stderr, *) "test_orthogonalize_trial_vectors failed: Produced "// &
@@ -6149,13 +6141,6 @@ contains
         if (size(red_space_basis, 2) /= 0) then
             write(stderr, *) "test_orthogonalize_trial_vectors failed: Block of "// &
                 "vanishing vectors did not produce an empty vector space."
-            test_orthogonalize_trial_vectors = .false.
-        end if
-        if (index(context%log_message, " "//vanishing_trial_vector_warning_msg) == 0) &
-            then
-            write(stderr, *) "test_orthogonalize_trial_vectors failed: No warning "// &
-                "printed when removing vanishing vectors of a block of vanishing "// &
-                "vectors."
             test_orthogonalize_trial_vectors = .false.
         end if
         deallocate(red_space_basis)

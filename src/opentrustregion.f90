@@ -91,8 +91,6 @@ module opentrustregion
         approx_hess_trial_vectors_warning_msg = &
             "Approximate Hessian eigenvectors for the initial trial space did not "// &
             "fully converge. The resulting trial vectors are still used.", &
-        vanishing_trial_vector_warning_msg = &
-            "Provided trial vector is vanishing and is being removed.", &
         lin_dep_trial_vector_warning_msg = &
             "Provided trial vector is linearly dependent and is being removed.", &
         minres_max_iter_warning_msg = "MINRES: The iteration limit was reached.", &
@@ -2223,10 +2221,7 @@ contains
             ! a vanishing vector carries no direction and is how a caller signals that
             ! it has nothing to contribute for this slot, so it is dropped before
             ! Gram-Schmidt, whose own zero-vector guard is an unconditional error
-            if (dnrm2(n_param, red_space_basis(:, i), 1_ip) < numerical_zero) then
-                call settings%log(vanishing_trial_vector_warning_msg, verbosity_warning)
-                cycle
-            end if
+            if (dnrm2(n_param, red_space_basis(:, i), 1_ip) < numerical_zero) cycle
             call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :num_valid), &
                               settings, error)
             if (error == error_gram_schmidt_lin_dep) then
