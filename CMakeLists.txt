@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.24)
 project(OpenTrustRegion VERSION 3.0.0 LANGUAGES Fortran C)
 
 # get commands
@@ -82,13 +82,41 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
     endif()
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-    set(CMAKE_Fortran_FLAGS_DEBUG "-g -warn all -traceback")
+    set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g -warn all -traceback")
+
+    # store .true. as 1 rather than -1 in every build type, since 1 is the only true
+    # value of the C bool that logical(c_bool) is passed to
+    add_compile_options("$<$<COMPILE_LANGUAGE:Fortran>:SHELL:-fpscomp logicals>")
 
     if(CMAKE_CROSSCOMPILING OR NOT ${otr}_ENABLE_XHOST)
         set(CMAKE_Fortran_FLAGS_RELEASE "-O2")
     else()
         set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -xHost")
     endif()
+
+elseif(CMAKE_Fortran_COMPILER_ID MATCHES "LLVMFlang")
+    set(CMAKE_Fortran_FLAGS_DEBUG "-g")
+
+    if(CMAKE_CROSSCOMPILING OR NOT ${otr}_ENABLE_XHOST)
+        set(CMAKE_Fortran_FLAGS_RELEASE "-O2")
+    else()
+        set(CMAKE_Fortran_FLAGS_RELEASE "-O2 -march=native")
+    endif()
+
+    # CMake has no Apple platform file for Flang and passes the C compiler's
+    # -dynamiclib (before CMake 4.0) and bare -install_name, which only the C compiler
+    # driver accepts
+    if(APPLE)
+        set(CMAKE_SHARED_LIBRARY_CREATE_Fortran_FLAGS "-shared")
+        set(CMAKE_SHARED_LIBRARY_SONAME_Fortran_FLAG "-Xlinker -install_name -Xlinker")
+    endif()
+
+elseif(NOT CMAKE_Fortran_COMPILER_ID)
+    # CMake sets no flags for a compiler it does not recognize, so the library would
+    # be built without optimization
+    message(WARNING "Fortran compiler ${CMAKE_Fortran_COMPILER} not recognized by "
+                    "CMake ${CMAKE_VERSION}, so no optimization flags are set; pass "
+                    "them through CMAKE_Fortran_FLAGS or use a newer CMake")
 endif()
 
 # user-supplied integer size
@@ -281,7 +309,7 @@ set_target_properties(
 
 # allow undefined symbols at link time on macOS for shared libraries
 if(${BUILD_SHARED_LIBS} AND APPLE)
-    set_target_properties(opentrustregion PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+    set_target_properties(opentrustregion PROPERTIES LINK_FLAGS "-Wl,-undefined,dynamic_lookup")
 endif()
 
 # create target-specific version property
@@ -405,7 +433,8 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     endif()
 
     # create shared test library which is then called from Python for testing
-    add_library(otrtestsuite SHARED ${OPENTRUSTREGION_TESTS})
+    add_library(otrtestsuite SHARED ${OPENTRUSTREGION_TESTS}
+                $<TARGET_OBJECTS:opentrustregion>)
 
     # enable preprocessing
     set_source_files_properties(${OPENTRUSTREGION_TESTS}

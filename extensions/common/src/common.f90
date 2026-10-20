@@ -45,7 +45,7 @@ module otr_common
     ! them, holding the object and the host record of the level
     type :: extension_level_type
         class(extension_type), pointer :: extension => null()
-        type(host_record_type) :: host
+        type(host_record_type) :: host = host_record_type()
     end type
 
     ! roles an extension object performs itself, which have to be exactly those whose

@@ -68,7 +68,7 @@ module otr_common_c_interface
     ! the copy and the host's array, to which the orbital update copies them back
     type :: holder_level_type
         type(extension_level_type), pointer :: level => null()
-        type(c_callbacks_type) :: callbacks
+        type(c_callbacks_type) :: callbacks = c_callbacks_type()
         type(solver_state_type_c), pointer :: state_c => null()
         real(rp), pointer :: orbitals(:, :, :) => null()
         real(c_rp), pointer :: orbitals_c(:, :, :) => null()

@@ -146,7 +146,7 @@ module opentrustregion
         ! trust-region step could be resolved or the gradient vanishes exactly
         logical :: max_precision_reached = .false.
         ! state of the most recent internal stability check
-        type(stability_state_type) :: stability_state
+        type(stability_state_type) :: stability_state = stability_state_type()
     end type
 
     ! derived type for the Lanczos process of the generalized Lanczos trust region
@@ -303,7 +303,7 @@ module opentrustregion
                        jacobi_davidson_start = 30
         character(len=kw_len) :: subsystem_solver = "davidson_ls", &
                                  trust_region_shape = "none"
-        type(stability_settings_type) :: stability_settings
+        type(stability_settings_type) :: stability_settings = stability_settings_type()
         procedure(precond_pd_type), pointer, nopass :: precond_pd => null()
         procedure(conv_check_type), pointer, nopass :: conv_check => null()
         procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
@@ -2808,7 +2808,7 @@ contains
 
         if (present(n_micro)) then
             if (present(n_jacobi_davidson)) then
-                write(n_micro_str, '(X, I3, X, "|", X, I3, 2X)') n_jacobi_davidson, &
+                write(n_micro_str, '(1X, I3, 1X, "|", 1X, I3, 2X)') n_jacobi_davidson, &
                     n_micro - n_jacobi_davidson
             else
                 write(n_micro_str, '(7X, I3, 2X)') n_micro
@@ -2824,7 +2824,7 @@ contains
         end if
 
         if (present(kappa_norm)) then
-            write(kappa_norm_str, '(X, 1PE9.2)') kappa_norm
+            write(kappa_norm_str, '(1X, 1PE9.2)') kappa_norm
         else
             write(kappa_norm_str, '(6X, "-", 3X)')
         end if
