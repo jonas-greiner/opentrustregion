@@ -273,7 +273,6 @@ static c_int stability_hess_x(const c_real *x, c_real *hx, void *context);
  * function is provided. */
 static c_int approx_hess_x(const c_real *x, c_real *hx, void *context);
 
-/* Convergence check of the stability check, which accepts a converged residual. */
 /* Convergence check of the stability check, which reads the RMS residual of the lowest
  * eigenpair from the state of a standalone stability check or from the nested state of
  * the solver and records it, and fails without a state to read. */

@@ -3073,19 +3073,19 @@ contains
             ! match
             exp_a = matrix_exponential(a, settings, error)
             if (error /= 0) then
-                write(stderr, *) "test_matrix_exponential failed for "// &
-                    trim(case_names(i))//" angle: Produced error."
+                write(stderr, *) "test_matrix_exponential failed: Produced error "// &
+                    "for "//trim(case_names(i))//" angle."
                 test_matrix_exponential = .false.
             end if
             if (size(exp_a, 1) /= n .or. size(exp_a, 2) /= n) then
-                write(stderr, *) "test_matrix_exponential failed for "// &
-                    trim(case_names(i))//" angle: Incorrect matrix dimensions."
+                write(stderr, *) "test_matrix_exponential failed: Incorrect matrix "// &
+                    "dimensions for "//trim(case_names(i))//" angle."
                 test_matrix_exponential = .false.
                 cycle
             end if
             if (norm2(exp_a - expected) > tol) then
-                write(stderr, *) "test_matrix_exponential failed for "// &
-                    trim(case_names(i))//" angle: Incorrect matrix values."
+                write(stderr, *) "test_matrix_exponential failed: Incorrect matrix "// &
+                    "values for "//trim(case_names(i))//" angle."
                 test_matrix_exponential = .false.
             end if
         end do

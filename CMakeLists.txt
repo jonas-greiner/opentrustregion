@@ -302,7 +302,7 @@ set_target_properties(
     VERSION ${PROJECT_VERSION}
     # interface version
     SOVERSION ${PROJECT_VERSION_MAJOR}
-    # position-independent code - not automatically enabled for static libraries, but 
+    # position-independent code - not automatically enabled for static libraries, but
     # required when linking a static library into a shared library
     POSITION_INDEPENDENT_CODE ON
 )
