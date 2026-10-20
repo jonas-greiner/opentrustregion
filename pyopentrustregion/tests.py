@@ -71,40 +71,42 @@ from pyopentrustregion.python_interface import (
     conda_prefix,
 )
 
+lib = None
 
-def load_testsuite_library() -> CDLL:
-    # try to load from installed package (conda)
-    lib_name = f"libotrtestsuite.{ext}"
-    conda_path_unix = conda_prefix / "lib" / lib_name
-    conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
-    if conda_path_unix.exists():
-        return CDLL(str(conda_path_unix))
-    elif conda_path_wind.exists():
-        return CDLL(str(conda_path_wind))
+# try to load from installed package (conda)
+lib_name = f"libotrtestsuite.{ext}"
+conda_path_unix = conda_prefix / "lib" / lib_name
+conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
+if conda_path_unix.exists():
+    lib = CDLL(str(conda_path_unix))
+elif conda_path_wind.exists():
+    lib = CDLL(str(conda_path_wind))
 
-    # fallback: try to load from installed package (site-packages)
-    lib_path = resources.files("pyopentrustregion") / lib_name
+# fallback: try to load from installed package (site-packages)
+if lib is None:
+    lib_path = resources.files("pyopentrustregion") / f"libotrtestsuite.{ext}"
     if lib_path.is_file():
-        return CDLL(str(lib_path))
+        lib = CDLL(str(lib_path))
 
-    # fallback: try to load from same directory (editable install)
-    local_path = os.path.join(os.path.dirname(__file__), lib_name)
+# fallback: try to load from same directory (editable install)
+if lib is None:
+    local_path = os.path.join(os.path.dirname(__file__), f"libotrtestsuite.{ext}")
     if os.path.exists(local_path):
-        return CDLL(local_path)
+        lib = CDLL(local_path)
 
-    # fallback: try to load from ../build (development build)
+# fallback: try to load from ../build (development build)
+if lib is None:
     build_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../build", lib_name)
+        os.path.join(os.path.dirname(__file__), "../build", f"libotrtestsuite.{ext}")
     )
     if os.path.exists(build_path):
-        return CDLL(build_path)
+        lib = CDLL(build_path)
 
-    # if all failed
-    raise FileNotFoundError(f"Cannot find any of the expected libraries: {lib_name}")
-
-
-# load library
-lib = load_testsuite_library()
+# if all failed
+if lib is None:
+    raise FileNotFoundError(
+        f"Cannot find any of the expected libraries: libotrtestsuite.{ext}"
+    )
 
 
 def print_separator(string: str):
