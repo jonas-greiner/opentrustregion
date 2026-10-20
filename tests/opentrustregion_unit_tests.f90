@@ -3997,10 +3997,11 @@ contains
         !
         use opentrustregion, only: newton_step
 
-        character(len=*), parameter :: case_names(2) = &
-            [character(len=10) :: "symmetric", "asymmetric"]
+        character(len=*), parameter :: case_names(3) = &
+            [character(len=10) :: "symmetric", "asymmetric", "singular"]
         real(rp) :: red_space_basis(n_param, n_trial), grad(n_param), grad_norm, &
-                    red_space_hess(n_trial, n_trial), eigvals(n_trial), &
+                    red_space_hess(n_trial, n_trial), &
+                    symm_red_space_hess(n_trial, n_trial), eigvals(n_trial), &
                     eigvals_im(n_trial), right_eigvecs(n_trial, n_trial), &
                     left_eigvecs(n_trial, n_trial), solution(n_param), &
                     red_space_solution(n_trial)
@@ -4012,24 +4013,40 @@ contains
         ! set up the reduced space near a minimum, where its Hessian is positive
         ! definite
         call setup_reduced_space(near_minimum, grad, grad_norm, red_space_basis, &
-                                 red_space_hess)
+                                 symm_red_space_hess)
 
         ! perform the Newton step with the eigendecomposition of the reduced space
-        ! Hessian and of this Hessian made asymmetric and determine whether it solves
-        ! the Newton equation in the reduced space and is returned in the full space
+        ! Hessian, of this Hessian made asymmetric and of this Hessian with the last
+        ! basis vector, which has no gradient component, decoupled with a vanishing
+        ! eigenvalue, whose eigenvector is given a gradient component at the level of
+        ! rounding errors, along which the step then has no component, and determine
+        ! whether it solves the Newton equation in the reduced space and is returned in
+        ! the full space
         do i_case = 1, size(case_names)
+            red_space_hess = symm_red_space_hess
             if (i_case == 1) then
                 call ref_symm_mat_diag(red_space_hess, eigvals, right_eigvecs)
                 left_eigvecs = right_eigvecs
-            else
+            else if (i_case == 2) then
                 red_space_hess(1, 2) = red_space_hess(1, 2) + 0.5_rp
                 call ref_general_mat_diag(red_space_hess, eigvals, eigvals_im, &
                                           right_eigvecs, left_eigvecs)
+            else
+                red_space_hess(:, n_trial) = 0.0_rp
+                red_space_hess(n_trial, :) = 0.0_rp
+                eigvals = 0.0_rp
+                right_eigvecs = 0.0_rp
+                call ref_symm_mat_diag(red_space_hess(:n_trial - 1, :n_trial - 1), &
+                                       eigvals(:n_trial - 1), &
+                                       right_eigvecs(:n_trial - 1, :n_trial - 1))
+                right_eigvecs(n_trial, n_trial) = 1.0_rp
+                left_eigvecs = right_eigvecs
+                left_eigvecs(1, n_trial) = 1e-16_rp
             end if
             call newton_step(grad_norm, red_space_basis, eigvals, right_eigvecs, &
                              left_eigvecs, solution, red_space_solution)
-            if (norm2(matmul(red_space_basis, matmul( &
-                red_space_hess, red_space_solution)) + grad) > tol) then
+            if (.not. norm2(matmul(red_space_basis, matmul( &
+                red_space_hess, red_space_solution)) + grad) <= tol) then
                 write(stderr, *) "test_newton_step failed: Newton step does not "// &
                     "satisfy Newton equation for "//trim(case_names(i_case))// &
                     " Hessian."

@@ -824,9 +824,14 @@ contains
         ! reduced space size
         n_red = size(red_space_basis, 2)
 
-        ! construct Newton step in eigenvector basis
-        eigspace_solution = -grad_norm * red_space_hess_left_eigvecs(1, :) / &
-                            red_space_hess_eigvals
+        ! construct Newton step in eigenvector basis, in which an eigenvector whose
+        ! gradient component is indistinguishable from zero contributes nothing, also
+        ! where its eigenvalue vanishes
+        allocate(eigspace_solution(n_red))
+        eigspace_solution = 0.0_rp
+        where (abs(red_space_hess_left_eigvecs(1, :)) > numerical_zero) &
+            eigspace_solution = -grad_norm * red_space_hess_left_eigvecs(1, :) / &
+                                red_space_hess_eigvals
 
         ! transform from eigenvector basis to reduced step basis
         call dgemv("N", n_red, n_red, 1.0_rp, red_space_hess_right_eigvecs, n_red, &
