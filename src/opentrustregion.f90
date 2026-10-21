@@ -118,7 +118,8 @@ module opentrustregion
         integer(ip) :: n_update_orbs = 0, n_obj_func = 0, n_hess_x = 0
         ! whether the predicted function change of the last trust-region step could
         ! not be resolved while its actual change could not be resolved either or the
-        ! step was rejected
+        ! step was rejected, or the gradient vanishes exactly, unless the convergence
+        ! check passes
         logical :: max_precision_reached = .false.
         ! state of the most recent internal stability check
         type(stability_state_type) :: stability_state = stability_state_type()
@@ -347,6 +348,11 @@ contains
                 ! calculate RMS gradient
                 grad_rms = grad_norm / sqrt(real(n_param, kind=rp))
 
+                ! an exactly vanishing gradient, which a symmetric problem can reach,
+                ! leaves the subsystem solvers no subproblem they can solve, so the
+                ! point is taken as one at maximum precision
+                if (grad_norm <= 0.0_rp) current_state%max_precision_reached = .true.
+
                 ! update the state with the current point, whose row is printed below
                 current_state%macro_iteration = imacro - 1
                 current_state%func = func
@@ -382,13 +388,14 @@ contains
                 call add_error_origin(error, error_conv_check, local_settings)
                 if (error /= 0) return
             else
-                conv_check_passed = .false.
+                conv_check_passed = grad_rms < local_settings%conv_tol
             end if
-            if (grad_rms < local_settings%conv_tol .or. &
-                current_state%max_precision_reached .or. conv_check_passed) then
-                ! always perform stability check if starting at stationary point and
-                ! continue along the unstable mode if the stationary point is unstable
-                if (local_settings%stability .or. imacro == 1) then
+            if (conv_check_passed .or. current_state%max_precision_reached) then
+                ! always perform stability check if starting at stationary point or at
+                ! an exactly vanishing gradient and continue along the unstable mode if
+                ! the stationary point is unstable
+                if (local_settings%stability .or. imacro == 1 .or. &
+                    grad_norm <= 0.0_rp) then
                     call check_stationary_point(func, h_diag, hess_x_funptr, obj_func, &
                                                 imacro, local_settings, current_state, &
                                                 stable, kappa, kappa_norm, error)
@@ -403,8 +410,7 @@ contains
                         cycle
                     end if
                 end if
-                ! a passed custom convergence check takes precedence over maximum
-                ! precision
+                ! convergence takes precedence over maximum precision
                 if (conv_check_passed) current_state%max_precision_reached = .false.
                 macro_converged = .true.
                 exit
