@@ -150,10 +150,10 @@ module opentrustregion_unit_tests
     ! define type for the host context handed to the mock callback functions of the
     ! double well function x^2 - y^2 + y^4, which has a saddle point at the origin and
     ! minima at y = +-1/sqrt(2), and holds its current variables, records whether the
-    ! Hessian linear transformation received it and counts the objective function
-    ! evaluations
+    ! Hessian linear transformation received it, counts the objective function
+    ! evaluations and keeps the objective function at the previous convergence check
     type, extends(test_context_type) :: double_well_context_type
-        real(rp) :: vars(2) = 0.0_rp
+        real(rp) :: vars(2) = 0.0_rp, last_conv_check_func = huge(1.0_rp)
         logical :: hess_x_called = .false.
         integer(ip) :: n_obj_func_calls = 0
     end type
@@ -1224,8 +1224,10 @@ contains
         ! check host context
         call check_host_context(context)
 
-        ! get Hartmann 6D state
+        ! initialize result in case the test problem state is missing
         converged = .false.
+
+        ! get Hartmann 6D state
         state => resolve_hartmann6d_context(context, error)
         if (error /= 0) return
 
@@ -1832,6 +1834,41 @@ contains
         end select
 
     end subroutine state_reading_update_orbs
+
+    function double_well_conv_check(error, context) result(converged)
+        !
+        ! this function describes a convergence check of the double well function
+        ! which, like a host's check of the change of the objective function, reports
+        ! convergence once the objective function has changed by less than the
+        ! tolerance since the previous check, so that it can not pass at a stationary
+        ! point the solver has just reached
+        !
+        use test_reference, only: check_host_context
+
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        logical :: converged
+
+        class(double_well_context_type), pointer :: state
+        real(rp) :: func
+
+        ! check host context
+        call check_host_context(context)
+
+        ! initialize result in case the double well state is missing
+        converged = .false.
+
+        ! get double well state
+        state => resolve_double_well_context(context, error)
+        if (error /= 0) return
+
+        ! compare the objective function against that of the previous check and keep
+        ! it for the next check
+        func = double_well_func(state%vars)
+        converged = abs(func - state%last_conv_check_func) < tol
+        state%last_conv_check_func = func
+
+    end function double_well_conv_check
 
     function resolve_half_step_context(context, error) result(state)
         !
@@ -2496,6 +2533,7 @@ contains
         procedure(obj_func_type), pointer :: obj_func_funptr
         type(solver_settings_type) :: settings
         type(hartmann6d_recording_context_type), target :: context
+        type(double_well_context_type), target :: double_well_context
         type(half_step_context_type), target :: half_step_context
         type(double_well_state_context_type), target :: state_context
         type(solver_state_type), target :: state
@@ -2711,7 +2749,6 @@ contains
         context%vars = near_minimum
         settings = solver_settings_type()
         settings%context => context
-        settings%conv_tol = 0.0_rp
         settings%subsystem_solver = "tcg"
         settings%conv_check => mock_conv_check_without_update
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
@@ -2742,6 +2779,27 @@ contains
         if (any(abs(context%vars - near_minimum) > tol)) then
             write(stderr, *) "test_solver failed: Solver did not stop when "// &
                 "convergence check passed."
+            test_solver = .false.
+        end if
+
+        ! run solver with a convergence threshold which the RMS gradient already
+        ! satisfies and a convergence check of the gradient with the default threshold,
+        ! which replaces the criterion on the RMS gradient, so that the solver does not
+        ! stop at the first check but continues to the minimum
+        context%vars = near_minimum
+        settings = solver_settings_type()
+        settings%context => context
+        settings%conv_tol = 1.0_rp
+        settings%conv_check => faulty_conv_check
+        call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error when convergence "// &
+                "check replaces gradient criterion."
+            test_solver = .false.
+        end if
+        if (any(abs(context%vars - minimum1) > var_thres)) then
+            write(stderr, *) "test_solver failed: Solver stopped by gradient "// &
+                "criterion which convergence check replaces."
             test_solver = .false.
         end if
 
@@ -3039,35 +3097,54 @@ contains
         end do
 
         ! minimize the double well function from (0.5, 0) as above, but without the
-        ! stability check and with a vanishing convergence threshold, so that the
-        ! solver reaches the saddle point at an exactly vanishing gradient, which it
-        ! takes as a point at maximum precision whose stability it checks nevertheless,
-        ! then continues along the unstable mode with the flag reset and finally stops
-        ! at a minimum, which can not pass the convergence check either
+        ! stability check and with a convergence check of the change of the objective
+        ! function, so that the solver reaches the saddle point at an exactly vanishing
+        ! gradient without passing the convergence check, takes it as a point at
+        ! maximum precision whose stability it checks nevertheless, then continues
+        ! along the unstable mode with the flag reset and finally stops at a minimum
         update_orbs_funptr => double_well_update_orbs
         settings = solver_settings_type()
         settings%grad_noise = .false.
         settings%n_random_trial_vectors = 0
         settings%n_extra_trial_vectors = 0
         settings%start_trust_radius = 0.3_rp
-        settings%conv_tol = 0.0_rp
-        settings%context => state_context
-        state_context%vars = [0.5_rp, 0.0_rp]
-        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings, state)
+        settings%conv_check => double_well_conv_check
+        settings%context => double_well_context
+        double_well_context%vars = [0.5_rp, 0.0_rp]
+        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings)
         if (error /= 0) then
             write(stderr, *) "test_solver failed: Produced error at exactly "// &
                 "vanishing gradient."
             test_solver = .false.
         end if
-        if (abs(abs(state_context%vars(2)) - 1.0_rp / sqrt(2.0_rp)) > var_thres) then
+        if (abs(abs(double_well_context%vars(2)) - 1.0_rp / sqrt(2.0_rp)) > var_thres) &
+            then
             write(stderr, *) "test_solver failed: Did not continue from the saddle "// &
                 "point of the double well function at an exactly vanishing "// &
                 "gradient to a minimum."
             test_solver = .false.
         end if
+
+        ! start at the minimum of the quadratic model 1/2 |x|^2 at the origin, where
+        ! the gradient vanishes exactly, with a vanishing convergence threshold, which
+        ! the gradient can therefore not pass, and check that the solver stops there
+        ! without an error and flags that maximum precision was reached, since the
+        ! stability check finds the point stable
+        call setup_settings(settings, half_step_context)
+        settings%conv_tol = 0.0_rp
+        half_step_context%vars = 0.0_rp
+        update_orbs_funptr => half_step_update_orbs
+        obj_func_funptr => half_step_obj_func
+        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings, state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error at a stable point "// &
+                "with an exactly vanishing gradient."
+            test_solver = .false.
+        end if
         if (.not. state%max_precision_reached) then
             write(stderr, *) "test_solver failed: Maximum precision not flagged at "// &
-                "a minimum that can not pass the convergence check."
+                "a stable point with an exactly vanishing gradient which can not "// &
+                "pass the convergence check."
             test_solver = .false.
         end if
 
