@@ -2527,7 +2527,7 @@ contains
             error_get_extra_trial_vectors, subsystem_solver_options
 
         real(rp), parameter :: var_thres = 1e-4_rp
-        integer(ip) :: error
+        integer(ip) :: error, i_case
         real(rp) :: final_grad(n_param), start_vars(2), final_vars(n_param)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -3097,33 +3097,45 @@ contains
         end do
 
         ! minimize the double well function from (0.5, 0) as above, but without the
-        ! stability check and with a convergence check of the change of the objective
-        ! function, so that the solver reaches the saddle point at an exactly vanishing
-        ! gradient without passing the convergence check, takes it as a point at
-        ! maximum precision whose stability it checks nevertheless, then continues
-        ! along the unstable mode with the flag reset and finally stops at a minimum
+        ! stability check, so that the solver reaches the saddle point at an exactly
+        ! vanishing gradient, once with a convergence check of the change of the
+        ! objective function, which can not pass at a stationary point the solver has
+        ! just reached, so that the solver takes the saddle point as a point at maximum
+        ! precision and resets the flag once it continues, and once with the criterion
+        ! on the RMS gradient, which passes there, and check that the solver checks the
+        ! stability of the saddle point nevertheless, continues along the unstable mode
+        ! and finally stops at a minimum
         update_orbs_funptr => double_well_update_orbs
-        settings = solver_settings_type()
-        settings%grad_noise = .false.
-        settings%n_random_trial_vectors = 0
-        settings%n_extra_trial_vectors = 0
-        settings%start_trust_radius = 0.3_rp
-        settings%conv_check => double_well_conv_check
-        settings%context => double_well_context
-        double_well_context%vars = [0.5_rp, 0.0_rp]
-        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings)
-        if (error /= 0) then
-            write(stderr, *) "test_solver failed: Produced error at exactly "// &
-                "vanishing gradient."
-            test_solver = .false.
-        end if
-        if (abs(abs(double_well_context%vars(2)) - 1.0_rp / sqrt(2.0_rp)) > var_thres) &
-            then
-            write(stderr, *) "test_solver failed: Did not continue from the saddle "// &
-                "point of the double well function at an exactly vanishing "// &
-                "gradient to a minimum."
-            test_solver = .false.
-        end if
+        obj_func_funptr => double_well_obj_func
+        do i_case = 1, 2
+            settings = solver_settings_type()
+            settings%grad_noise = .false.
+            settings%n_random_trial_vectors = 0
+            settings%n_extra_trial_vectors = 0
+            settings%start_trust_radius = 0.3_rp
+            settings%context => double_well_context
+            if (i_case == 1) then
+                settings%conv_check => double_well_conv_check
+                case_name = "with convergence check of the function change"
+            else
+                case_name = "with gradient criterion"
+            end if
+            double_well_context%vars = [0.5_rp, 0.0_rp]
+            double_well_context%last_conv_check_func = huge(1.0_rp)
+            call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings)
+            if (error /= 0) then
+                write(stderr, *) "test_solver failed: Produced error at exactly "// &
+                    "vanishing gradient "//trim(case_name)//"."
+                test_solver = .false.
+            end if
+            if (abs(abs(double_well_context%vars(2)) - 1.0_rp / sqrt(2.0_rp)) > &
+                var_thres) then
+                write(stderr, *) "test_solver failed: Did not continue from the "// &
+                    "saddle point of the double well function at an exactly "// &
+                    "vanishing gradient to a minimum "//trim(case_name)//"."
+                test_solver = .false.
+            end if
+        end do
 
         ! start at the minimum of the quadratic model 1/2 |x|^2 at the origin, where
         ! the gradient vanishes exactly, with a vanishing convergence threshold, which
