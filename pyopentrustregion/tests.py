@@ -1427,8 +1427,8 @@ class PyInterfaceUnitTests(unittest.TestCase):
             setattr(case_settings.settings_c, name, None)
 
         # a keyword given as bytes, as read from a C struct, is stored as well
-        settings.subsystem_solver = b"davidson"
-        if settings.subsystem_solver != "davidson":
+        settings.subsystem_solver = b"davidson_ah"
+        if settings.subsystem_solver != "davidson_ah":
             print(
                 " test_solver_settings failed: Keyword given as bytes not stored "
                 "correctly."

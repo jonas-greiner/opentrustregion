@@ -239,10 +239,10 @@ The optimization process can be fine-tuned using the following settings:
 - **`refresh_hess`** (boolean): Determines whether the subsystem solver rebuilds its Hessian information after every rejected trust-region step, since the Hessian linear transformation may have changed with the objective function evaluation at the rejected point.
 - **`grad_noise`** (boolean): Determines whether the gradient is perturbed by a random vector before every subsystem solve. The perturbation keeps the solution from remaining exactly within a symmetry subspace of the starting point, which a Hessian with no negative curvature outside that subspace, or no information about it, cannot otherwise leave. Its norm is the micro-iteration reduction factor (`local_red_factor` or `global_red_factor`) of the region the previous subproblem was solved in, the first counting as global, and always `local_red_factor` for `"tcg"`, which always solves to it, times the gradient norm, so that it goes to zero together with the gradient at convergence; the micro iterations are never asked to reduce the residual below this relative size, so that they do not resolve the perturbation itself, whichever region the subproblem turns out to be solved in.
 - **`subsystem_solver`** (string): Specifies which subsystem solver to use. Options include:
-  - `"davidson_ls"`: generalized Davidson method applied to linear system,
-  - `"jacobi-davidson_ls"`: generalized Davidson method applied to linear system with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
-  - `"davidson_ah"`: Davidson method applied diagonalization of augmented Hessian,
-  - `"jacobi-davidson_ah"`: Davidson method applied diagonalization of augmented Hessian with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"davidson_ls"`: generalized Davidson method applied to the linear system,
+  - `"jacobi-davidson_ls"`: generalized Davidson method applied to the linear system with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
+  - `"davidson_ah"`: Davidson method applied to the diagonalization of the augmented Hessian,
+  - `"jacobi-davidson_ah"`: Davidson method applied to the diagonalization of the augmented Hessian with fallback to Jacobi-Davidson if convergence is difficult, or automatically after `jacobi_davidson_start` micro iterations,
   - `"tcg"`: truncated conjugate gradient method,
   - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient, which a custom `conv_check` replaces.
