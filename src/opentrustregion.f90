@@ -40,11 +40,11 @@ module opentrustregion
         error_get_extra_trial_vectors = 1700, error_precond_pd = 1800
 
     ! define useful parameters
-    real(rp), parameter :: &
-        numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
-        hess_symm_thres = 1e-12_rp, residual_norm_floor = 1e-12_rp, &
-        level_shift_local_thres = 1e-12_rp, newton_eigval_thresh = -1e-5_rp, &
-        stability_thresh = -1e-3_rp, precond_rel_floor_factor = 1e-2_rp
+    real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
+                           hess_symm_thres = 1e-12_rp, residual_norm_floor = 1e-12_rp, &
+                           level_shift_local_thres = 1e-12_rp, &
+                           newton_eigval_thresh = -1e-5_rp, &
+                           precond_rel_floor_factor = 1e-2_rp
 
     ! define verbosity levels
     integer(ip), parameter :: verbosity_silent = 0, verbosity_error = 1, &
@@ -293,7 +293,7 @@ module opentrustregion
 
     type, extends(optimizer_settings_type) :: stability_settings_type
         logical :: stop_on_instability = .false.
-        real(rp) :: conv_tol = 1e-9_rp
+        real(rp) :: conv_tol = 1e-9_rp, stability_thresh = -1e-3_rp
         integer(ip) :: n_random_trial_vectors = -1, n_iter = 100, &
                        jacobi_davidson_start = 50
         character(len=kw_len) :: diag_solver = "davidson"
@@ -695,7 +695,7 @@ contains
         if (present(kappa)) kappa = eigvecs(:, 1)
 
         ! determine if saddle point
-        stable = eigval > stability_thresh
+        stable = eigval > local_settings%stability_thresh
         if (.not. stable) then
             write(msg, '(A, F0.4)') unstable_warning_msg, eigval
             call local_settings%log(msg, verbosity_warning)
@@ -753,6 +753,9 @@ contains
         ! magnitude
         call saddle_point_step(grad, grad_rms, state%stability_state%min_eigval, &
                                state%trust_radius, settings, kappa, kappa_norm)
+
+        ! warn of the saddle point, advising to perturb the gradient where it is not
+        ! perturbed
         if (imacro == 1) then
             call settings%log(started_at_saddle_point_warning_msg, verbosity_warning)
         else if (associated(settings%stability_hess_x)) then
@@ -2125,7 +2128,7 @@ contains
                         ! requested
                         pair_converged = &
                             (settings%stop_on_instability .and. &
-                             red_eigvals(i) < stability_thresh) .or. &
+                             red_eigvals(i) < settings%stability_thresh) .or. &
                             dnrm2(n_param, residual(:, i), 1_ip) / &
                             sqrt(real(n_param, kind=rp)) < settings%conv_tol
                     end if
@@ -2169,8 +2172,8 @@ contains
                 ! vanishing eigenvalue of such a direction before reaching a negative
                 ! one; the shift bounds this amplification by the curvature the check
                 ! has to resolve anyway
-                call add_trial_vector(residual(:, i), stability_thresh, h_diag, &
-                                      jacobi_davidson_iter, solution(:, i), &
+                call add_trial_vector(residual(:, i), settings%stability_thresh, &
+                                      h_diag, jacobi_davidson_iter, solution(:, i), &
                                       red_eigvals(i), hess_x_funptr, red_space_basis, &
                                       h_basis, settings, state%n_hess_x, error)
                 if (error == error_gram_schmidt_lin_dep) then
@@ -4059,6 +4062,14 @@ contains
         if (.not. settings%hess_symm .and. settings%stop_on_instability) then
             call settings%log("Stopping at an instability not supported with "// &
                               "non-symmetric Hessian.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that the stability threshold does not count a minimum as unstable
+        if (settings%stability_thresh > 0.0_rp) then
+            call settings%log("Stability threshold should not be positive.", &
+                              verbosity_error, .true.)
             error = 1
             return
         end if

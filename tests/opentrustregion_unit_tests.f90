@@ -3519,6 +3519,21 @@ contains
             test_stability_check = .false.
         end if
 
+        ! check that a stability threshold below the lowest eigenvalue counts the
+        ! saddle point as stable
+        settings%stability_thresh = 2.0_rp * hess_eigvals(1)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "saddle point with stability threshold below its lowest eigenvalue."
+            test_stability_check = .false.
+        end if
+        if (.not. stable) then
+            write(stderr, *) "test_stability_check failed: Saddle point not stable "// &
+                "with stability threshold below its lowest eigenvalue."
+            test_stability_check = .false.
+        end if
+
         ! run stability check with settings which the sanity check rejects and check
         ! that its error is returned with the stability check's origin
         settings = stability_settings_type()
@@ -3936,6 +3951,7 @@ contains
         settings%grad_noise = .true.
         context%vars = [0.0_rp, 0.0_rp]
         stability_context%vars = [0.0_rp, 0.0_rp]
+        stability_context%hess_x_called = .false.
         settings%stability_settings%context => stability_context
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
@@ -3957,13 +3973,15 @@ contains
         end if
 
         ! check the saddle point in a later macro iteration without the gradient
-        ! perturbation and with a vanishing convergence threshold, as the solver
+        ! perturbation, with truncated conjugate gradient, which also only perturbs the
+        ! gradient with it, and with a vanishing convergence threshold, as the solver
         ! reaches it at an exactly vanishing gradient, and check that the step along
         ! the unstable mode reaches the trust radius of the state and that the warning
         ! for reaching a saddle point advises enabling the perturbation
         call setup_settings(settings, context)
         context%vars = [0.0_rp, 0.0_rp]
         settings%grad_noise = .false.
+        settings%subsystem_solver = "tcg"
         settings%conv_tol = 0.0_rp
         settings%stability_settings%context => context
         state%trust_radius = 0.7_rp
@@ -6098,8 +6116,7 @@ contains
         ! eigenpair and a larger block
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, &
-                                   block_davidson, stability_thresh, error_hess_x, &
-                                   error_conv_check
+                                   block_davidson, error_hess_x, error_conv_check
 
         integer(ip), parameter :: n_block = 3
         character(len=*), parameter :: jacobi_davidson_case_names(5) = &
@@ -6191,13 +6208,14 @@ contains
         ! check single eigenpair, with a preconditioner which has to be level-shifted
         ! to the stability threshold
         settings%conv_tol = res_tol
+        settings%stability_thresh = -2e-2_rp
         settings%precond => mu_recording_precond
         context%recorded_mu = huge(1.0_rp)
         trial_space = unit_vectors(1_ip)
         call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
                             eigvals(:1), eigvecs(:, :1), converged, settings, state, &
                             error)
-        if (abs(context%recorded_mu - stability_thresh) > tol) then
+        if (abs(context%recorded_mu - settings%stability_thresh) > tol) then
             write(stderr, *) "test_block_davidson failed: Preconditioner not "// &
                 "level-shifted to the stability threshold."
             test_block_davidson = .false.
@@ -6468,6 +6486,24 @@ contains
         if (abs(eigvals(1) + 1.0_rp) > tol) then
             write(stderr, *) "test_block_davidson failed: Incorrect Ritz value "// &
                 "when stopping at instability."
+            test_block_davidson = .false.
+        end if
+
+        ! a stability threshold below the eigenvalue does not establish an instability,
+        ! so that the same single iteration must not report convergence
+        settings%stability_thresh = -2.0_rp
+        trial_space = unit_vectors(1_ip)
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 1_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
+        if (error /= 0) then
+            write(stderr, *) "test_block_davidson failed: Produced error when "// &
+                "stopping at instability below the eigenvalue."
+            test_block_davidson = .false.
+        end if
+        if (converged) then
+            write(stderr, *) "test_block_davidson failed: Converged when stopping "// &
+                "at instability with a stability threshold below the eigenvalue."
             test_block_davidson = .false.
         end if
 
@@ -10197,14 +10233,14 @@ contains
         end if
 
         ! check that nested stability check settings with a convergence check of their
-        ! own, a verbosity above the solver's and a number of random trial vectors keep
-        ! all of these
+        ! own, a verbosity above the solver's and no random trial vectors keep all of
+        ! these
         call setup_settings(settings, context)
         settings%verbose = verbosity_info
         settings%stability_settings%conv_check => mock_stability_conv_check
         settings%stability_settings%verbose = verbosity_debug
         settings%stability_settings%stop_on_instability = .false.
-        settings%stability_settings%n_random_trial_vectors = 3
+        settings%stability_settings%n_random_trial_vectors = 0
         call init_defaults(settings)
         if (settings%stability_settings%verbose /= verbosity_debug) then
             write(stderr, *) "test_init_defaults failed: Higher verbosity of "// &
@@ -10216,9 +10252,9 @@ contains
                 "settings with convergence check stop on instability."
             test_init_defaults = .false.
         end if
-        if (settings%stability_settings%n_random_trial_vectors /= 3) then
-            write(stderr, *) "test_init_defaults failed: Number of random trial "// &
-                "vectors of nested stability check settings replaced."
+        if (settings%stability_settings%n_random_trial_vectors /= 0) then
+            write(stderr, *) "test_init_defaults failed: Vanishing number of "// &
+                "random trial vectors of nested stability check settings replaced."
             test_init_defaults = .false.
         end if
 
@@ -10525,17 +10561,18 @@ contains
         ! rejects
         character(len=*), parameter :: mixed_case_diag_solvers(2) = &
             [character(len=15) :: "Davidson", "Jacobi-Davidson"]
-        character(len=*), parameter :: error_case_names(8) = [ &
-            character(len=55) :: "vanishing number of parameters", "extra trial "// &
-            "vector function without extra trial vectors", "vanishing number of "// &
-            "trial vectors", "no random and a negative number of extra trial vectors", &
-            "no extra and no random trial vectors that fit", "unknown "// &
-            "diagonalization solver", "non-symmetric Hessian with Jacobi-Davidson "// &
-            "solver", "stopping at an instability with non-symmetric Hessian"]
-        character(len=*), parameter :: accepted_case_names(3) = &
+        character(len=*), parameter :: error_case_names(9) = &
+            [character(len=55) :: "vanishing number of parameters", &
+             "extra trial vector function without extra trial vectors", &
+             "vanishing number of trial vectors", &
+             "no random and a negative number of extra trial vectors", "no extra "// &
+             "and no random trial vectors that fit", "unknown diagonalization solver", &
+             "non-symmetric Hessian with Jacobi-Davidson solver", "stopping at an "// &
+             "instability with non-symmetric Hessian", "positive stability threshold"]
+        character(len=*), parameter :: accepted_case_names(4) = &
             [character(len=49) :: "non-symmetric Hessian with Davidson solver", &
              "stopping at an instability with symmetric Hessian", &
-             "no random but extra trial vectors"]
+             "no random but extra trial vectors", "vanishing stability threshold"]
         type(stability_settings_type) :: settings
         integer(ip) :: error, i_solver, i_case, n_param
         type(test_context_type), target :: context
@@ -10632,6 +10669,8 @@ contains
             case (8)
                 settings%hess_symm = .false.
                 settings%stop_on_instability = .true.
+            case (9)
+                settings%stability_thresh = 1e-3_rp
             end select
             call stability_sanity_check(settings, n_param, error)
             if (error /= 1) then
@@ -10656,11 +10695,18 @@ contains
                 settings%stop_on_instability = .true.
             case (3)
                 settings%n_random_trial_vectors = 0
+            case (4)
+                settings%stability_thresh = 0.0_rp
             end select
             call stability_sanity_check(settings, 4_ip, error)
             if (error /= 0) then
                 write(stderr, *) "test_stability_sanity_check failed: Error "// &
                     "returned for "//trim(accepted_case_names(i_case))//"."
+                test_stability_sanity_check = .false.
+            end if
+            if (i_case == 3 .and. settings%n_random_trial_vectors /= 0) then
+                write(stderr, *) "test_stability_sanity_check failed: Vanishing "// &
+                    "number of random trial vectors replaced."
                 test_stability_sanity_check = .false.
             end if
         end do
