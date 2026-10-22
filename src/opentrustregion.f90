@@ -4005,10 +4005,6 @@ contains
         ! convert strings to lowercase
         settings%diag_solver = string_to_lowercase(settings%diag_solver)
 
-        ! resolve the automatic number of random trial vectors
-        if (settings%n_random_trial_vectors < 0) &
-            settings%n_random_trial_vectors = standalone_n_random_trial_vectors
-
         ! check whether the extra trial vector function has anything to fill
         if (associated(settings%get_extra_trial_vectors) .and. &
             settings%n_extra_trial_vectors <= 0) then
@@ -4018,6 +4014,10 @@ contains
             error = 1
             return
         end if
+
+        ! resolve the automatic number of random trial vectors
+        if (settings%n_random_trial_vectors < 0) &
+            settings%n_random_trial_vectors = standalone_n_random_trial_vectors
 
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param / 2) then
