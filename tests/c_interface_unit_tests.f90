@@ -275,7 +275,8 @@ contains
         !
         ! this function is a test function for the C extra trial vector function
         !
-        use test_reference, only: check_host_context_c, host_context_error
+        use test_reference, only: check_host_context_c, host_context_error, &
+                                  n_extra_trial_vectors_c_ref => n_extra_trial_vectors_c
 
         real(c_rp), intent(out), target :: trial_vectors(*)
         integer(c_ip), intent(in), value :: n_extra_trial_vectors_c
@@ -286,6 +287,15 @@ contains
 
         ! check host context
         call check_host_context_c(context_c)
+
+        ! check the number of extra trial vectors, which is all the function knows of
+        ! the size of the array, before writing them
+        if (n_extra_trial_vectors_c /= n_extra_trial_vectors_c_ref) then
+            write(stderr, *) "test_get_extra_trial_vectors_f_wrapper failed: "// &
+                "Passed number of extra trial vectors wrong."
+            error = 1
+            return
+        end if
 
         do i = 1, n_extra_trial_vectors_c
             trial_vectors((i - 1) * n_param + 1:i * n_param) = real(i, kind=c_rp)
@@ -1193,8 +1203,8 @@ contains
         end if
 
         ! an orbital update that succeeds without providing a Hessian linear
-        ! transformation leaves the Hessian linear transformation disassociated, even if
-        ! it was associated before, so that the solver reports the missing one
+        ! transformation leaves the Hessian linear transformation disassociated, even
+        ! if it was associated before, so that the solver reports the missing one
         callbacks%update_orbs => mock_update_orbs_no_hess_x
         kappa = 1.0_rp
         hess_x_funptr => hess_x_f_wrapper
@@ -1779,13 +1789,14 @@ contains
         use opentrustregion, only: get_extra_trial_vectors_type
         use c_interface, only: c_callbacks_type, get_extra_trial_vectors_f_wrapper
         use test_reference, only: check_get_extra_trial_vectors_funptr, host_context, &
-                                  arm_host_context_c, arm_state_c, host_context_reached
+                                  arm_host_context_c, arm_state_c, &
+                                  host_context_reached, n_extra_trial_vectors
 
         procedure(get_extra_trial_vectors_type), pointer :: funptr
         type(c_callbacks_type), target :: callbacks
         class(*), pointer :: context, foreign_context
         real(rp), target :: foreign_context_target
-        real(rp) :: trial_vectors(n_param, 1)
+        real(rp) :: trial_vectors(n_param, n_extra_trial_vectors)
         integer(ip) :: error
 
         ! assume tests pass
@@ -1951,9 +1962,10 @@ contains
         type(solver_settings_type_c) :: settings_c
         type(solver_settings_type) :: settings, expected_settings
         integer(ip) :: i
-        character(len=12), parameter :: logical_names(5) = &
-            [character(len=12) :: "stability", "line_search", "refresh_hess", &
-             "grad_noise", "hess_symm"]
+        character(len=38), parameter :: logical_names(7) = &
+            [character(len=38) :: "stability", "line_search", "refresh_hess", &
+             "grad_noise", "hess_symm", "stability_settings.hess_symm", &
+             "stability_settings.stop_on_instability"]
 
         ! assume tests pass
         test_assign_solver_f_c = .true.
@@ -1994,8 +2006,10 @@ contains
             expected_settings%refresh_hess = logical_names(i) == "refresh_hess"
             expected_settings%grad_noise = logical_names(i) == "grad_noise"
             expected_settings%hess_symm = logical_names(i) == "hess_symm"
-            expected_settings%stability_settings%hess_symm = .false.
-            expected_settings%stability_settings%stop_on_instability = .false.
+            expected_settings%stability_settings%hess_symm = &
+                logical_names(i) == "stability_settings.hess_symm"
+            expected_settings%stability_settings%stop_on_instability = &
+                logical_names(i) == "stability_settings.stop_on_instability"
             settings = settings_c
             if (settings /= expected_settings) then
                 write(stderr, *) "test_assign_solver_f_c failed: Settings with "// &
@@ -2134,9 +2148,10 @@ contains
         type(solver_settings_type) :: settings
         type(solver_settings_type_c) :: settings_c, no_callbacks_c
         integer(ip) :: i
-        character(len=12), parameter :: logical_names(5) = &
-            [character(len=12) :: "stability", "line_search", "refresh_hess", &
-             "grad_noise", "hess_symm"]
+        character(len=38), parameter :: logical_names(7) = &
+            [character(len=38) :: "stability", "line_search", "refresh_hess", &
+             "grad_noise", "hess_symm", "stability_settings.hess_symm", &
+             "stability_settings.stop_on_instability"]
 
         ! assume tests pass
         test_assign_solver_c_f = .true.
@@ -2196,6 +2211,10 @@ contains
             settings%refresh_hess = logical_names(i) == "refresh_hess"
             settings%grad_noise = logical_names(i) == "grad_noise"
             settings%hess_symm = logical_names(i) == "hess_symm"
+            settings%stability_settings%hess_symm = &
+                logical_names(i) == "stability_settings.hess_symm"
+            settings%stability_settings%stop_on_instability = &
+                logical_names(i) == "stability_settings.stop_on_instability"
             settings_c = settings
             if (settings_c /= settings) then
                 write(stderr, *) "test_assign_solver_c_f failed: Settings with "// &

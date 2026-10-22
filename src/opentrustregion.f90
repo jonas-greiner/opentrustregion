@@ -88,11 +88,16 @@ module opentrustregion
         bisection_imaginary_eigval_warning_msg = &
             "Bisection cannot reach trust region due to imaginary part of lowest "// &
             "eigenvalue. This is purely an artifact of using an asymmetric Hessian.", &
+        complex_eigval_warning_msg = &
+            "Lowest eigenvalues include a complex conjugate pair, for which "// &
+            "normalized real vectors of its invariant subspace are returned "// &
+            "instead of eigenvectors. This is purely an artifact of using an "// &
+            "asymmetric Hessian.", &
         approx_hess_trial_vectors_warning_msg = &
             "Approximate Hessian eigenvectors for the initial trial space did not "// &
             "fully converge. The resulting trial vectors are still used.", &
         lin_dep_trial_vector_warning_msg = &
-            "Provided trial vector is linearly dependent and is being removed.", &
+            "Extra trial vector is linearly dependent and is being removed.", &
         minres_max_iter_warning_msg = "MINRES: The iteration limit was reached. "// &
                                       "The approximate solution of the last "// &
                                       "iteration is used.", &
@@ -1789,6 +1794,7 @@ contains
         real(rp), allocatable :: all_eigvals(:), right_eigvecs(:, :), left_eigvecs(:, :)
         complex(rp), allocatable :: gen_eigvals(:)
         logical, allocatable :: taken(:)
+        real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
@@ -1810,13 +1816,20 @@ contains
             call general_mat_diag(matrix, gen_eigvals, right_eigvecs, left_eigvecs, &
                                   settings, error)
             if (error == 0) then
-                ! get eigenvalues with lowest real part
+                ! get eigenvalues with lowest real part, the column of a complex
+                ! conjugate pair holds the real or imaginary part of its complex
+                ! eigenvector, a real vector of the pair's invariant subspace which is
+                ! no eigenvector and is therefore normalized and reported
                 taken = .false.
                 do i = 1, n_target
                     idx = minloc(gen_eigvals%re, dim=1, mask=.not. taken)
                     taken(idx) = .true.
                     eigvals(i) = gen_eigvals(idx)%re
                     eigvecs(:, i) = right_eigvecs(:, idx)
+                    if (abs(gen_eigvals(idx)%im) > 0.0_rp) then
+                        eigvecs(:, i) = eigvecs(:, i) / dnrm2(n, eigvecs(:, i), 1_ip)
+                        call settings%log(complex_eigval_warning_msg, verbosity_warning)
+                    end if
                 end do
             end if
             deallocate(gen_eigvals, right_eigvecs, left_eigvecs, taken)
@@ -1883,7 +1896,7 @@ contains
         real(rp), allocatable :: red_space_basis(:, :)
 
         real(rp), allocatable :: leading_block(:, :)
-        integer(ip) :: n_param, n_extra, n_leading, n_total
+        integer(ip) :: n_param, n_extra, n_leading, n_total, i
 
         ! initialize error flag
         error = 0
@@ -1909,10 +1922,20 @@ contains
                 ! unit vectors along the lowest Hessian diagonal elements
                 call lowest_h_diag_unit_vectors(h_diag, .true., leading_block(:, 2:))
             end if
+
+            ! project the extra trial vectors, which the caller does not have to
+            ! project, while the gradient direction is already projected
+            if (error == 0 .and. associated(settings%project)) then
+                do i = 2, size(leading_block, 2)
+                    call settings%project(leading_block(:, i), error, settings%context)
+                    call add_error_origin(error, error_project, settings)
+                    if (error /= 0) exit
+                end do
+            end if
         end if
 
-        ! orthonormalize and project the leading block, dropping vanishing vectors and
-        ! vectors that are linearly dependent on the gradient direction
+        ! orthonormalize the leading block, dropping vanishing vectors and vectors that
+        ! are linearly dependent on the gradient direction
         if (error == 0) call orthogonalize_trial_vectors(leading_block, settings, error)
 
         ! the caller assigns the function result before it inspects the error flag, so
@@ -1940,7 +1963,8 @@ contains
     subroutine generate_random_trial_vectors(red_space_basis, n_fill, settings, error)
         !
         ! this subroutine generates random trial vectors, filling the trailing columns
-        ! of the provided space and orthogonalizing them against the leading ones
+        ! of the provided space, projecting them and orthogonalizing them against the
+        ! leading ones
         !
         real(rp), intent(inout) :: red_space_basis(:, :)
         integer(ip), intent(in) :: n_fill
@@ -1981,6 +2005,12 @@ contains
                     call random_number(red_space_basis(:, i))
                     red_space_basis(:, i) = 2 * red_space_basis(:, i) - 1
                 end do
+                if (associated(settings%project)) then
+                    call settings%project(red_space_basis(:, i), error, &
+                                          settings%context)
+                    call add_error_origin(error, error_project, settings)
+                    if (error /= 0) return
+                end if
                 call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :i - 1), &
                                   settings, error)
             end do
@@ -2087,10 +2117,12 @@ contains
                     if (present(res_tol)) then
                         pair_converged = dnrm2(n_param, residual(:, i), 1_ip) < res_tol
                     else
-                        ! a Ritz value is an upper bound on the true lowest eigenvalue,
-                        ! so once it has dropped below the instability threshold the
-                        ! sign is already certain and convergence can be declared
-                        ! regardless of the residual, when requested
+                        ! a Ritz value of a symmetric Hessian, the only one for which
+                        ! the sanity check allows it, is an upper bound on the true
+                        ! lowest eigenvalue, so once it has dropped below the
+                        ! instability threshold the sign is already certain and
+                        ! convergence can be declared regardless of the residual, when
+                        ! requested
                         pair_converged = &
                             (settings%stop_on_instability .and. &
                              red_eigvals(i) < stability_thresh) .or. &
@@ -2176,7 +2208,7 @@ contains
         real(rp), parameter :: approx_hess_trial_conv = 1e-5_rp
         integer(ip), parameter :: approx_hess_trial_extra = 3, &
                                   approx_hess_trial_max_iter = 100
-        integer(ip) :: n_param, n_total, n_extra
+        integer(ip) :: n_param, n_total, n_extra, i
         real(rp), allocatable :: start_space(:, :), eigvals(:), leading_block(:, :)
         logical :: converged
         type(stability_state_type) :: approx_hess_state
@@ -2234,8 +2266,17 @@ contains
                 call lowest_h_diag_unit_vectors(h_diag, .false., leading_block)
             end if
 
-            ! orthonormalize and project the whole leading block, dropping vanishing
-            ! and linearly dependent vectors
+            ! project the extra trial vectors, which the caller does not have to project
+            if (associated(settings%project)) then
+                do i = 1, n_extra
+                    call settings%project(leading_block(:, i), error, settings%context)
+                    call add_error_origin(error, error_project, settings)
+                    if (error /= 0) return
+                end do
+            end if
+
+            ! orthonormalize the whole leading block, dropping vanishing and linearly
+            ! dependent vectors
             call orthogonalize_trial_vectors(leading_block, settings, error)
             call add_error_origin(error, error_stability_check, settings)
             if (error /= 0) return
@@ -2317,8 +2358,8 @@ contains
                             lin_trans_space)
         !
         ! this subroutine orthonormalizes a vector with respect to a vector space,
-        ! additionally applying settings%project, if associated, by alternating between
-        ! orthogonalization and projection until both converge simultaneously; this
+        ! which keeps a vector within the range of the projection if the vector and the
+        ! space lie within it, so that neither has to be projected again; this
         ! subroutine can additionally also return a linear transformation of the
         ! orthogonalized vector if the linear transformations of the vector and the
         ! vector space are provided
@@ -2380,11 +2421,6 @@ contains
                 end if
                 vector = orthogonal_projection(vector, space(:, i))
             end do
-            if (associated(settings%project)) then
-                call settings%project(vector, error, settings%context)
-                call add_error_origin(error, error_project, settings)
-                if (error /= 0) return
-            end if
             norm = dnrm2(n_param, vector, 1_ip)
             ! a linearly dependent vector is in all cases handled as a regular outcome
             if (norm < numerical_zero) then
@@ -3762,9 +3798,11 @@ contains
         ! metric to define an ellipsoidal one; the starting trust radius default
         ! depends on this resolved shape; the nested stability check settings inherit
         ! the solver's preconditioning, projection and logging functions and its host
-        ! context unless they provide their own and its verbosity if higher, stop as
-        ! soon as an instability is certain unless they provide a convergence check
-        ! and use a single random trial vector unless their number is set
+        ! context unless they provide their own, its verbosity if higher and a
+        ! non-symmetric Hessian unless they diagonalize a Hessian of their own, stop as
+        ! soon as an instability is certain for a symmetric Hessian unless they provide
+        ! a convergence check and use a single random trial vector unless their number
+        ! is set
         !
         type(solver_settings_type), intent(inout) :: settings
 
@@ -3795,11 +3833,16 @@ contains
         call inherit_solver_callbacks(settings)
 
         associate (nested => settings%stability_settings)
-            ! inherit the solver's verbosity if higher, stop the check as soon as an
-            ! instability is certain unless a convergence check is provided, and use a
-            ! single random trial vector unless their number is set
+            ! inherit the solver's verbosity if higher and a non-symmetric Hessian
+            ! unless the internal stability check diagonalizes a Hessian of its own,
+            ! stop the check as soon as an instability is certain for a symmetric
+            ! Hessian unless a convergence check is provided, and use a single random
+            ! trial vector unless their number is set
             nested%verbose = max(nested%verbose, settings%verbose)
-            if (.not. associated(nested%conv_check)) nested%stop_on_instability = .true.
+            if (.not. associated(settings%stability_hess_x)) &
+                nested%hess_symm = nested%hess_symm .and. settings%hess_symm
+            if (.not. associated(nested%conv_check) .and. nested%hess_symm) &
+                nested%stop_on_instability = .true.
             if (nested%n_random_trial_vectors < 0) nested%n_random_trial_vectors = 1
         end associate
 
@@ -3848,6 +3891,14 @@ contains
         if (settings%n_micro < 1) then
             call settings%log("Number of microiterations should be larger than 0.", &
                               verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that number of random trial vectors is not negative
+        if (settings%n_random_trial_vectors < 0) then
+            call settings%log("Number of random trial vectors should not be "// &
+                              "negative.", verbosity_error, .true.)
             error = 1
             return
         end if
@@ -3914,9 +3965,17 @@ contains
             return
         end if
 
-        ! check whether projection function is passed
-        if (associated(settings%project)) &
+        ! check whether projection function is passed, unless the nested stability
+        ! check settings inherited it, whose check below prints the same warning
+        if (associated(settings%project) .and. &
+            .not. associated(settings%stability_settings%project, settings%project)) &
             call settings%log(project_warning_msg, verbosity_warning)
+
+        ! check the nested stability check settings, with the defaults they inherit
+        ! from the solver already resolved, since the internal stability check also
+        ! runs without a requested stability check, so that settings it would reject
+        ! are reported before the optimization starts
+        call stability_sanity_check(settings%stability_settings, n_param, error)
 
     end subroutine solver_sanity_check
 
@@ -3957,22 +4016,23 @@ contains
             return
         end if
 
-        ! check that the trial space is not empty, also for a negative number of extra
-        ! trial vectors, which requests none
-        if (settings%n_extra_trial_vectors <= 0 .and. &
-            settings%n_random_trial_vectors == 0) then
-            call settings%log("Vanishing number of trial vectors for stability "// &
-                              "check.", verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
         ! check that number of random trial vectors is below number of parameters
         if (settings%n_random_trial_vectors > n_param / 2) then
             settings%n_random_trial_vectors = n_param / 2
             write(msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
                 settings%n_random_trial_vectors, "."
             call settings%log(msg, verbosity_warning)
+        end if
+
+        ! check that the trial space is not empty, also for a negative number of extra
+        ! trial vectors, which requests none, and once the number of random trial
+        ! vectors is reduced
+        if (settings%n_extra_trial_vectors <= 0 .and. &
+            settings%n_random_trial_vectors == 0) then
+            call settings%log("Vanishing number of trial vectors for stability "// &
+                              "check.", verbosity_error, .true.)
+            error = 1
+            return
         end if
 
         ! check for character options
@@ -3990,6 +4050,15 @@ contains
             then
             call settings%log("Non-symmetric Hessian not supported with "// &
                               "Jacobi-Davidson solver.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check whether stopping at an instability is requested for a non-symmetric
+        ! Hessian, whose Ritz values are no upper bounds on its eigenvalues
+        if (.not. settings%hess_symm .and. settings%stop_on_instability) then
+            call settings%log("Stopping at an instability not supported with "// &
+                              "non-symmetric Hessian.", verbosity_error, .true.)
             error = 1
             return
         end if
@@ -4389,8 +4458,8 @@ contains
     subroutine gltr_assemble_solution(lanczos, hess_x_funptr, solution, settings, &
                                       n_hess_x, error)
         !
-        ! this subroutine assembles the solution of the trust region subproblem from the
-        ! solution of the reduced problem and the preconditioned residuals of the
+        ! this subroutine assembles the solution of the trust region subproblem from
+        ! the solution of the reduced problem and the preconditioned residuals of the
         ! Lanczos process, whose Lanczos vectors are these residuals normalized and
         ! alternating in sign with the step sizes, and completes it in the hard case
         ! along the eigenvector of the lowest eigenvalue assembled in the same way
@@ -4654,10 +4723,10 @@ contains
         !   indefinite and zero if it was found to be positive definite without an
         !   interior solution
         ! - hard_case: the solution of the shifted system stays inside the trust region
-        !   even as lambda approaches the negative lowest eigenvalue, to which lambda is
-        !   then set, so that the solution has to be completed to the boundary by
-        !   hard_case_step_size times the returned eigenvector of the lowest eigenvalue,
-        !   at which func is evaluated
+        !   even as lambda approaches the negative lowest eigenvalue, to which lambda
+        !   is then set, so that the solution has to be completed to the boundary by
+        !   hard_case_step_size times the returned eigenvector of the lowest
+        !   eigenvalue, at which func is evaluated
         !
         integer(ip), intent(in) :: n_red_space
         real(rp), intent(in) :: diagonal(n_red_space), off_diagonal(n_red_space - 1), &
@@ -5059,8 +5128,8 @@ contains
         !
         ! this subroutine solves the system (T + lambda I) x = b with one step of
         ! iterative refinement given the LDL^T factorization of the tridiagonal matrix
-        ! T + lambda I, and returns the dot product b^T (T + lambda I)^-1 b of the right
-        ! hand side and the solution before the refinement
+        ! T + lambda I, and returns the dot product b^T (T + lambda I)^-1 b of the
+        ! right hand side and the solution before the refinement
         !
         integer(ip), intent(in) :: n_elem
         real(rp), intent(in) :: lambda

@@ -654,8 +654,8 @@ contains
     logical(c_bool) function test_h2o_fb_solver_gltr() bind(C)
         !
         ! this function tests the solver for the Foster-Boys localization of the
-        ! occupied orbitals of water with the generalized Lanczos trust region subsystem
-        ! solver
+        ! occupied orbitals of water with the generalized Lanczos trust region
+        ! subsystem solver
         !
         test_h2o_fb_solver_gltr = &
             logical(check_h2o_fb_solver("h2o_fb_solver_gltr", "gltr"), kind=c_bool)

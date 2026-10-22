@@ -26,7 +26,7 @@ module test_reference
     integer(ip), parameter :: n_param = 3_ip
     integer(c_ip), bind(C, name="test_n_param") :: n_param_c = n_param
 
-    ! number of extra trial vectors
+    ! number of extra trial vectors the checks of extra trial vector functions request
     integer(ip), parameter :: n_extra_trial_vectors = 2_ip
     integer(c_ip), parameter :: n_extra_trial_vectors_c = &
         int(n_extra_trial_vectors, kind=c_ip)
@@ -1242,9 +1242,9 @@ contains
 
     logical function solver_callbacks_wrapped(settings)
         !
-        ! this function checks that every callback function of solver settings converted
-        ! from C, including those of the nested stability check settings, is associated
-        ! with its wrapper
+        ! this function checks that every callback function of solver settings
+        ! converted from C, including those of the nested stability check settings, is
+        ! associated with its wrapper
         !
         use c_interface, only: precond_f_wrapper, precond_pd_f_wrapper, &
                                project_f_wrapper, get_extra_trial_vectors_f_wrapper, &
