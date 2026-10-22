@@ -450,7 +450,6 @@ contains
                 else if (.not. stable) then
                     call local_settings%print_results(imacro - 1, func, grad_rms, &
                                                       kappa_norm=kappa_norm)
-                    stable = .true.
                 else if (current_state%jacobi_davidson_iteration > 0) then
                     call local_settings%print_results( &
                         imacro - 1, func, grad_rms, &
@@ -476,6 +475,13 @@ contains
             else
                 conv_check_passed = grad_rms < local_settings%conv_tol
             end if
+
+            ! a point reached by a step along an unstable mode is not taken as
+            ! converged, since this step only sets up the trust-region step that leaves
+            ! the stationary point and changes the objective function too little for a
+            ! convergence check of this change
+            if (.not. stable) conv_check_passed = .false.
+            stable = .true.
             if (conv_check_passed .or. current_state%max_precision_reached) then
                 ! always perform stability check if starting at stationary point or at
                 ! an exactly vanishing gradient and continue along the unstable mode if
@@ -762,7 +768,8 @@ contains
         ! this subroutine determines the step along the direction of negative curvature
         ! such that the (linearized) gradient RMS increases to one order of magnitude
         ! above its current value, or above the convergence threshold if the gradient
-        ! is already converged, or, if both vanish, the step to the trust radius
+        ! is already converged, or, if both vanish, the step to the trust radius, and
+        ! limits it to the trust radius
         !
         real(rp), intent(in) :: grad(:), grad_rms, min_eigval, trust_radius
         type(solver_settings_type), intent(in) :: settings
@@ -796,6 +803,10 @@ contains
             ! trust region step along the direction of negative curvature would
             n_kappa = trust_radius
         end if
+
+        ! the step is taken without evaluating the objective function, so it is
+        ! limited to the trust radius
+        n_kappa = sign(min(abs(n_kappa), trust_radius), n_kappa)
 
         ! scale step
         kappa = n_kappa * kappa
