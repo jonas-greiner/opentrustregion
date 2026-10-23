@@ -1839,6 +1839,10 @@ class PyIntegrationTests(unittest.TestCase):
             h_diag[:] = np.diag(state["hess"])
 
             def hess_x(v, hv):
+                # the internal stability check calls this function too when the
+                # settings provide no Hessian linear transformation of the stability
+                # check, and its state then counts the calls before this one
+                state["nested_n_hess_x_seen"] = solver_state.stability_state.n_hess_x
                 hv[:] = state["hess"] @ v
 
             return self._func(x), hess_x
@@ -2007,11 +2011,28 @@ class PyIntegrationTests(unittest.TestCase):
 
         # solve again without an extra trial vector function of the nested settings,
         # which the internal stability check does not inherit, so that it reaches the
-        # approximate Hessian linear transformation of the nested settings instead
+        # approximate Hessian linear transformation of the nested settings instead, and
+        # without a Hessian linear transformation of the stability check, so that the
+        # internal stability check calls the one the orbital update returns, which
+        # finds the state of the internal stability check current
         state["curr"] = self.near_minimum.copy()
         state["called"].clear()
+        state["nested_n_hess_x_seen"] = None
         settings.stability_settings.get_extra_trial_vectors = None
-        solver(update_orbs, obj_func, self.n_param, settings)
+        settings.stability_hess_x = None
+        solver(update_orbs, obj_func, self.n_param, settings, state=solver_state)
+        if (
+            "stability_hess_x" in state["called"]
+            or state["nested_n_hess_x_seen"] is None
+            or state["nested_n_hess_x_seen"]
+            != solver_state.stability_state.n_hess_x - 1
+        ):
+            print(
+                " test_solver_py failed: Hessian linear transformation of the orbital "
+                "update was not called by the internal stability check with its state "
+                "current."
+            )
+            test_passed = False
         if "stability_approx_hess_x" not in state["called"]:
             print(
                 " test_solver_py failed: Approximate Hessian linear transformation set "
@@ -2167,9 +2188,12 @@ class PyIntegrationTests(unittest.TestCase):
 
         # at a saddle, the stability flag and the sign of the lowest eigenvalue have
         # to differ from the ones returned at the minimum and the returned direction
-        # has to be a normalized direction of negative curvature
+        # has to be a normalized direction of negative curvature, with the extra trial
+        # vector function again, so that the extra trial vectors are not taken from the
+        # approximate Hessian linear transformation, which is exact here
         H = self._hess(self.saddle_point)
         h_diag = np.diag(H).copy()
+        settings.get_extra_trial_vectors = get_extra_trial_vectors
         stable = stability_check(
             h_diag, hess_x, self.n_param, settings, kappa=kappa, state=stability_state
         )

@@ -50,19 +50,28 @@ option(ENABLE_ROTATION_QN "Include rotation quasi-Newton extension in OpenTrustR
 option(ENABLE_DENSITY_QN "Include density quasi-Newton extension in OpenTrustRegion" OFF)
 option(ENABLE_S_GEK
        "Include subspace gradient-enhanced kriging extension in OpenTrustRegion" OFF)
+# density quasi-Newton works on the objects of both orbital bases, which it switches on
+# for this configuration only, so that they are off again once it is switched off
 if(ENABLE_DENSITY_QN AND NOT ENABLE_MO)
     message(STATUS "Including molecular orbital extension module as a dependency for density quasi-Newton")
-    set(ENABLE_MO ON CACHE BOOL "Enabled by density quasi-Newton dependency" FORCE)
+    set(ENABLE_MO ON)
 endif()
 if(ENABLE_DENSITY_QN AND NOT ENABLE_OAO)
     message(STATUS "Including orthogonal AO extension module as a dependency for density quasi-Newton")
-    set(ENABLE_OAO ON CACHE BOOL "Enabled by density quasi-Newton dependency" FORCE)
+    set(ENABLE_OAO ON)
 endif()
 message(STATUS "Showing option ENABLE_MO: ${ENABLE_MO}")
 message(STATUS "Showing option ENABLE_OAO: ${ENABLE_OAO}")
 message(STATUS "Showing option ENABLE_ROTATION_QN: ${ENABLE_ROTATION_QN}")
 message(STATUS "Showing option ENABLE_DENSITY_QN: ${ENABLE_DENSITY_QN}")
 message(STATUS "Showing option ENABLE_S_GEK: ${ENABLE_S_GEK}")
+
+# every extension builds on the code the extensions share
+if(ENABLE_MO OR ENABLE_OAO OR ENABLE_ROTATION_QN OR ENABLE_DENSITY_QN OR ENABLE_S_GEK)
+    set(ANY_EXTENSION_ENABLED ON)
+else()
+    set(ANY_EXTENSION_ENABLED OFF)
+endif()
 
 # ====  Build  ==================================================================
 
@@ -214,51 +223,49 @@ set(OPENTRUSTREGION_SOURCES src/opentrustregion.f90 src/c_interface.f90)
 # base include directories
 set(OPENTRUSTREGION_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# conditionally add extension files
-if(ENABLE_MO)
-    message(STATUS "Including molecular orbitals in OpenTrustRegion")
+# conditionally add extension files, the code the extensions share once
+if(ANY_EXTENSION_ENABLED)
     list(APPEND OPENTRUSTREGION_SOURCES
         extensions/common/src/common.f90
         extensions/common/src/common_c_interface.f90
+    )
+    list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
+        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
+    )
+endif()
+if(ENABLE_MO)
+    message(STATUS "Including molecular orbitals in OpenTrustRegion")
+    list(APPEND OPENTRUSTREGION_SOURCES
         extensions/mo/src/mo.f90
         extensions/mo/src/mo_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/mo/include
     )
 endif()
 if(ENABLE_OAO)
     message(STATUS "Including orthogonal AO in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
-        extensions/common/src/common_c_interface.f90
         extensions/oao/src/oao.f90
         extensions/oao/src/oao_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/oao/include
     )
 endif()
 if(ENABLE_ROTATION_QN)
     message(STATUS "Including rotation quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
-        extensions/common/src/common_c_interface.f90
         extensions/rotation_qn/src/rotation_qn.f90
         extensions/rotation_qn/src/rotation_qn_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/rotation_qn/include
     )
 endif()
 if(ENABLE_DENSITY_QN)
     message(STATUS "Including density quasi-Newton in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
-        extensions/common/src/common_c_interface.f90
         extensions/density_qn/src/density_qn.f90
         extensions/density_qn/src/density_qn_c_interface.f90
     )
@@ -269,13 +276,10 @@ endif()
 if(ENABLE_S_GEK)
     message(STATUS "Including subspace gradient-enhanced kriging in OpenTrustRegion")
     list(APPEND OPENTRUSTREGION_SOURCES
-        extensions/common/src/common.f90
-        extensions/common/src/common_c_interface.f90
         extensions/s_gek/src/s_gek.f90
         extensions/s_gek/src/s_gek_c_interface.f90
     )
     list(APPEND OPENTRUSTREGION_INCLUDE_DIRS
-        ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include
         ${CMAKE_CURRENT_SOURCE_DIR}/extensions/s_gek/include
     )
 endif()
@@ -350,8 +354,8 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
         tests/opentrustregion_system_tests.f90
         tests/c_integration_tests.c)
 
-    # conditionally add extension tests
-    if(ENABLE_MO)
+    # conditionally add extension tests, those of the code the extensions share once
+    if(ANY_EXTENSION_ENABLED)
         list(APPEND OPENTRUSTREGION_TESTS
             extensions/common/tests/common_mock.f90
             extensions/common/tests/common_test_reference.f90
@@ -359,6 +363,10 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
             extensions/common/tests/common_c_interface_unit_tests.f90
             extensions/common/tests/common_c_interface_mock.f90
             extensions/common/tests/common_c_integration_tests.c
+        )
+    endif()
+    if(ENABLE_MO)
+        list(APPEND OPENTRUSTREGION_TESTS
             extensions/mo/tests/mo_test_reference.f90
             extensions/mo/tests/mo_unit_tests.f90
             extensions/mo/tests/mo_c_interface_unit_tests.f90
@@ -369,12 +377,6 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     endif()
     if(ENABLE_OAO)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_test_reference.f90
-            extensions/common/tests/common_unit_tests.f90
-            extensions/common/tests/common_c_interface_unit_tests.f90
-            extensions/common/tests/common_c_interface_mock.f90
-            extensions/common/tests/common_c_integration_tests.c
             extensions/oao/tests/oao_test_reference.f90
             extensions/oao/tests/oao_unit_tests.f90
             extensions/oao/tests/oao_c_interface_unit_tests.f90
@@ -385,12 +387,6 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     endif()
     if(ENABLE_ROTATION_QN)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_test_reference.f90
-            extensions/common/tests/common_unit_tests.f90
-            extensions/common/tests/common_c_interface_unit_tests.f90
-            extensions/common/tests/common_c_interface_mock.f90
-            extensions/common/tests/common_c_integration_tests.c
             extensions/rotation_qn/tests/rotation_qn_test_reference.f90
             extensions/rotation_qn/tests/rotation_qn_unit_tests.f90
             extensions/rotation_qn/tests/rotation_qn_c_interface_unit_tests.f90
@@ -401,12 +397,6 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     endif()
     if(ENABLE_DENSITY_QN)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_test_reference.f90
-            extensions/common/tests/common_unit_tests.f90
-            extensions/common/tests/common_c_interface_unit_tests.f90
-            extensions/common/tests/common_c_interface_mock.f90
-            extensions/common/tests/common_c_integration_tests.c
             extensions/density_qn/tests/density_qn_test_reference.f90
             extensions/density_qn/tests/density_qn_unit_tests.f90
             extensions/density_qn/tests/density_qn_c_interface_unit_tests.f90
@@ -417,12 +407,6 @@ if (${otr}_BUILD_TESTING AND NOT ${otr}_HOST_PROVIDES_BLAS)
     endif()
     if(ENABLE_S_GEK)
         list(APPEND OPENTRUSTREGION_TESTS
-            extensions/common/tests/common_mock.f90
-            extensions/common/tests/common_test_reference.f90
-            extensions/common/tests/common_unit_tests.f90
-            extensions/common/tests/common_c_interface_unit_tests.f90
-            extensions/common/tests/common_c_interface_mock.f90
-            extensions/common/tests/common_c_integration_tests.c
             extensions/s_gek/tests/s_gek_test_reference.f90
             extensions/s_gek/tests/s_gek_unit_tests.f90
             extensions/s_gek/tests/s_gek_c_interface_unit_tests.f90
@@ -491,7 +475,7 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT ${runtime_component}
 )
-if(ENABLE_OAO OR ENABLE_MO OR ENABLE_ROTATION_QN OR ENABLE_S_GEK)
+if(ANY_EXTENSION_ENABLED)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/extensions/common/include/
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             COMPONENT ${runtime_component}

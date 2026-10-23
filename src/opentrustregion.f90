@@ -37,7 +37,8 @@ module opentrustregion
         error_gram_schmidt_lin_dep = 51, error_obj_func = 1100, &
         error_update_orbs = 1200, error_hess_x = 1300, error_precond = 1400, &
         error_conv_check = 1500, error_project = 1600, &
-        error_get_extra_trial_vectors = 1700, error_precond_pd = 1800
+        error_get_extra_trial_vectors = 1700, error_precond_pd = 1800, &
+        error_approx_hess_x = 1900
 
     ! define useful parameters
     real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
@@ -2254,6 +2255,12 @@ contains
                     settings%approx_hess_x, h_diag, start_space, .false., n_extra, &
                     approx_hess_trial_max_iter, eigvals, leading_block, converged, &
                     settings, approx_hess_state, error, res_tol=approx_hess_trial_conv)
+
+                ! the Davidson procedure reports a failing linear transformation with
+                ! the origin of the Hessian linear transformation, which here is the
+                ! approximate one
+                if (error > error_hess_x .and. error < error_hess_x + 100) &
+                    error = error - error_hess_x + error_approx_hess_x
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
 
@@ -3833,14 +3840,18 @@ contains
         call inherit_solver_callbacks(settings)
 
         associate (nested => settings%stability_settings)
-            ! inherit the solver's verbosity if higher and a non-symmetric Hessian
-            ! unless the internal stability check diagonalizes a Hessian of its own,
+            ! inherit the solver's verbosity if higher
+            nested%verbose = max(nested%verbose, settings%verbose)
+
+            ! treat the Hessian as non-symmetric if the solver does, since the internal
+            ! stability check diagonalizes the solver's Hessian unless it has a Hessian
+            ! of its own
+            if (.not. associated(settings%stability_hess_x)) &
+                nested%hess_symm = nested%hess_symm .and. settings%hess_symm
+
             ! stop the check as soon as an instability is certain for a symmetric
             ! Hessian unless a convergence check is provided, and use a single random
             ! trial vector unless their number is set
-            nested%verbose = max(nested%verbose, settings%verbose)
-            if (.not. associated(settings%stability_hess_x)) &
-                nested%hess_symm = nested%hess_symm .and. settings%hess_symm
             if (.not. associated(nested%conv_check) .and. nested%hess_symm) &
                 nested%stop_on_instability = .true.
             if (nested%n_random_trial_vectors < 0) nested%n_random_trial_vectors = 1

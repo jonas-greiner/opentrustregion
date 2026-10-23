@@ -141,7 +141,7 @@ conv_check_interface_type = callback_type(c_int, POINTER(c_bool))
 logger_interface_type = callback_type(None, c_char_p)
 
 
-def adopt_collector(*callbacks: Any) -> "Dict[str, Exception]":
+def adopt_collector(*callbacks: Any) -> Dict[str, Exception]:
     """
     this function returns the exception collector to use for a run
     """
@@ -507,7 +507,7 @@ class PrecondPyInterface(CFunctionInterface):
         precond_residual_buffer = c_buffer(precond_residual)
         error = self.funptr(
             residual_buffer.ctypes.data_as(POINTER(c_real)),
-            c_real(mu),
+            byref(c_real(mu)),
             precond_residual_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
         )

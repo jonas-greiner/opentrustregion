@@ -137,6 +137,11 @@ static c_int hess_x_fun(const c_real *x, c_real *hx, void *context) {
     return 1;
   if (ctx->stability_state)
     ctx->n_hess_x_seen = ctx->stability_state->n_hess_x;
+  /* the internal stability check of a solve calls this function too, directly or
+   * through the Hessian linear transformation of the stability check, the last time
+   * after all its other Hessian linear transformations */
+  if (ctx->solver_state)
+    ctx->nested_n_hess_x_seen = ctx->solver_state->stability_state.n_hess_x;
   for (int i = 0; i < N_PARAM; i++) {
     c_real s = 0.0;
     for (int j = 0; j < N_PARAM; j++)
@@ -308,8 +313,6 @@ static c_int stability_hess_x(const c_real *x, c_real *hx, void *context) {
   if (!ctx)
     return 1;
   ctx->stability_hess_x_called = 1;
-  if (ctx->solver_state)
-    ctx->nested_n_hess_x_seen = ctx->solver_state->stability_state.n_hess_x;
   return hess_x_fun(x, hx, context);
 }
 
@@ -857,10 +860,16 @@ bool test_solver_c(void) {
 
   /* solve again without an extra trial vector function of the nested settings, which
    * the internal stability check does not inherit, so that it reaches the approximate
-   * Hessian linear transformation of the nested settings instead */
+   * Hessian linear transformation of the nested settings instead, and without a
+   * Hessian linear transformation of the stability check, so that the internal
+   * stability check calls the one the orbital update returns, which finds the state of
+   * the internal stability check current */
   memcpy(ctx.curr_vars, hartmann6d_near_minimum, sizeof(ctx.curr_vars));
   ctx.approx_hess_x_called = 0;
+  ctx.stability_hess_x_called = 0;
+  ctx.nested_n_hess_x_seen = -1;
   settings.stability_settings.get_extra_trial_vectors = NULL;
+  settings.stability_hess_x = NULL;
   error = solver(update_orbs, obj_func, N_PARAM, &settings, &state);
   if (error != 0) {
     fprintf(stderr, "test_solver_c failed: Produced error without an extra trial "
@@ -871,6 +880,13 @@ bool test_solver_c(void) {
     fprintf(stderr, "test_solver_c failed: Approximate Hessian linear transformation "
                     "set on the nested stability settings was not called by the "
                     "internal stability check.\n");
+    ok = false;
+  }
+  if (ctx.stability_hess_x_called ||
+      ctx.nested_n_hess_x_seen != state.stability_state.n_hess_x - 1) {
+    fprintf(stderr, "test_solver_c failed: Hessian linear transformation of the "
+                    "orbital update was not called by the internal stability check "
+                    "with its state current.\n");
     ok = false;
   }
 
@@ -1050,6 +1066,7 @@ bool test_stability_check_c(void) {
    * the extra trial vectors are taken from the approximate Hessian linear
    * transformation, with the state, which the convergence check reads */
   settings.get_extra_trial_vectors = NULL;
+  ctx.approx_hess_x_called = 0;
   stable = true;
   error =
       stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, &state, NULL);

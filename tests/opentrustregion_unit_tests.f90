@@ -2528,7 +2528,7 @@ contains
             default_settings => default_solver_settings, error_solver, &
             error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
             error_precond, error_project, error_conv_check, error_precond_pd, &
-            error_get_extra_trial_vectors, subsystem_solver_options
+            error_get_extra_trial_vectors, error_approx_hess_x, subsystem_solver_options
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error, i_case
@@ -2546,13 +2546,14 @@ contains
         real(rp), allocatable :: step_norms(:)
         character(len=60) :: case_name
         integer(ip) :: i_config, callback, i_call, n_calls(n_fault_callbacks)
-        integer(ip), parameter :: fault_origins(n_fault_callbacks) = [ &
-            error_update_orbs, error_obj_func, error_hess_x, error_precond, &
-            error_project, error_conv_check, error_precond_pd, &
-            error_get_extra_trial_vectors, error_hess_x, error_hess_x, error_conv_check]
+        integer(ip), parameter :: fault_origins(n_fault_callbacks) = &
+            [error_update_orbs, error_obj_func, error_hess_x, error_precond, &
+             error_project, error_conv_check, error_precond_pd, &
+             error_get_extra_trial_vectors, error_hess_x, error_approx_hess_x, &
+             error_conv_check]
         logical :: expected_calls(n_fault_callbacks)
         character(len=20) :: call_number
-        character(len=100) :: sweep_case
+        character(len=120) :: sweep_case
         type(hartmann6d_fault_context_type), target :: fault_context
 
         ! assume tests pass
@@ -3373,8 +3374,8 @@ contains
             hess_x_type, stability_settings_type, stability_check, &
             error_stability_check, error_stability_check_max_iter, verbosity_warning, &
             error_hess_x, error_precond, error_project, error_conv_check, &
-            error_get_extra_trial_vectors, diag_solver_options, unstable_warning_msg, &
-            default_stability_settings
+            error_get_extra_trial_vectors, error_approx_hess_x, diag_solver_options, &
+            unstable_warning_msg, default_stability_settings
         use test_reference, only: arm_host_context, host_context_reached, &
                                   n_extra_trial_vectors
 
@@ -3387,7 +3388,7 @@ contains
                                   fault_get_extra_trial_vectors, fault_approx_hess_x, &
                                   fault_stability_conv_check], &
             fault_origins(6) = [error_hess_x, error_precond, error_project, &
-                                error_get_extra_trial_vectors, error_hess_x, &
+                                error_get_extra_trial_vectors, error_approx_hess_x, &
                                 error_conv_check]
         real(rp) :: h_diag(n_param), direction(n_param), hess_eigvals(n_param), &
                     hess_eigvecs(n_param, n_param)
@@ -3496,8 +3497,11 @@ contains
             if (i_config == 1) then
                 settings%n_extra_trial_vectors = n_extra_trial_vectors
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+                case_name = "with every callback function and extra trial vectors"
             else
                 settings%approx_hess_x => approx_hess_x_fun
+                case_name = "with every callback function and an approximate "// &
+                            "Hessian linear transformation"
             end if
             call arm_host_context(settings, context)
             context%seen_residual_rms = -1.0_rp
@@ -3505,7 +3509,7 @@ contains
                                  state, direction)
             if (error /= 0) then
                 write(stderr, *) "test_stability_check failed: Produced error for "// &
-                    "saddle point with every callback function."
+                    "saddle point "//trim(case_name)//"."
                 test_stability_check = .false.
             end if
             if (.not. host_context_reached("stability_check", context)) &
@@ -3513,7 +3517,8 @@ contains
             if (abs(context%seen_residual_rms - state%residual_rms) > tol * &
                 state%residual_rms .or. state%residual_rms <= 0.0_rp) then
                 write(stderr, *) "test_stability_check failed: Convergence check "// &
-                    "did not read the final state in the caller's record."
+                    "did not read the final state in the caller's record "// &
+                    trim(case_name)//"."
                 test_stability_check = .false.
             end if
         end do
@@ -6576,7 +6581,8 @@ contains
         !
         use opentrustregion, only: stability_settings_type, get_stability_trial_space, &
                                    approx_hess_trial_vectors_warning_msg, &
-                                   error_get_extra_trial_vectors, error_project
+                                   error_get_extra_trial_vectors, error_project, &
+                                   error_approx_hess_x
 
         character(len=*), parameter :: case_names(6) = &
             [character(len=33) :: "Hessian diagonal leading block", "converged "// &
@@ -6586,6 +6592,11 @@ contains
             [3_ip, 3_ip, 2_ip, n_param, 2_ip, 1_ip]
 
         type(stability_settings_type) :: settings
+        integer(ip), parameter :: &
+            failing_callbacks(3) = &
+                [fault_get_extra_trial_vectors, fault_project, fault_approx_hess_x], &
+            failing_origins(3) = &
+                [error_get_extra_trial_vectors, error_project, error_approx_hess_x]
         real(rp) :: h_diag(n_param), h_diag_copy(n_param), projected_extra(n_param)
         real(rp), allocatable :: red_space_basis(:, :)
         integer(ip) :: error, i, i_case, ref_idx(2), leading_idx(2)
@@ -6764,19 +6775,24 @@ contains
             test_get_stability_trial_space = .false.
         end if
 
-        ! check that the errors of a failing extra trial vector function and of a
-        ! failing projection are reported with their origins
-        call setup_settings(settings, fault_context)
-        settings%get_extra_trial_vectors => faulty_get_extra_trial_vectors
-        settings%project => faulty_project
-        do i_case = 1, 2
+        ! check that the errors of a failing extra trial vector function, of a
+        ! failing projection and of a failing approximate Hessian linear
+        ! transformation, which the extra trial vector function takes precedence over,
+        ! are reported with their origins
+        fault_context%hess = context%hess
+        do i_case = 1, 3
+            call setup_settings(settings, fault_context)
+            settings%project => faulty_project
+            if (i_case < 3) then
+                settings%get_extra_trial_vectors => faulty_get_extra_trial_vectors
+            else
+                settings%approx_hess_x => faulty_approx_hess_x
+            end if
             fault_context%n_callback_calls = 0
-            fault_context%fault_callback = &
-                merge(fault_get_extra_trial_vectors, fault_project, i_case == 1)
+            fault_context%fault_callback = failing_callbacks(i_case)
             fault_context%fault_call = 1
             call get_stability_trial_space(h_diag, red_space_basis, settings, error)
-            if (error /= merge(error_get_extra_trial_vectors, error_project, &
-                               i_case == 1) + 1) then
+            if (error /= failing_origins(i_case) + 1) then
                 write(stderr, *) "test_get_stability_trial_space failed: Error of "// &
                     "failing "// &
                     trim(fault_callback_names(fault_context%fault_callback))// &
