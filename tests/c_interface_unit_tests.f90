@@ -614,8 +614,8 @@ contains
         type(c_ptr) :: kappa_c_ptr
         integer(c_ip) :: error
         integer(ip) :: i_case
-        character(len=45), parameter :: case_names(2) = &
-            [character(len=45) :: "without returned direction", &
+        character(len=26), parameter :: case_names(2) = &
+            [character(len=26) :: "without returned direction", &
              "with returned direction"]
 
         ! assume tests pass

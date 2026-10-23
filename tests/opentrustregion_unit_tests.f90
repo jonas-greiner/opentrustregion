@@ -3234,22 +3234,24 @@ contains
         ! inject faults by running the solver from the saddle point, where it performs
         ! the internal stability check, with a stability check at convergence, a line
         ! search and every optional callback function, for every subsystem solver and
-        ! once with extra trial vectors of the nested settings and once with the
-        ! approximate Hessian linear transformation they take precedence over, once
-        ! without a fault to count the calls of every callback function and then
-        ! letting every one of these calls fail in turn, and check that the unfaulted
-        ! run reaches exactly the callback functions the case uses, that the error is
-        ! reported with the origin of the failing callback function and that the
-        ! reported counters still agree with the calls
+        ! once with extra trial vectors of the nested settings and an unperturbed
+        ! gradient and once with the approximate Hessian linear transformation they
+        ! take precedence over and a perturbed gradient, whose perturbation is
+        ! projected, once without a fault to count the calls of every callback function
+        ! and then letting every one of these calls fail in turn, and check that the
+        ! unfaulted run reaches exactly the callback functions the case uses, that the
+        ! error is reported with the origin of the failing callback function and that
+        ! the reported counters still agree with the calls
         do i_solver = 1, size(subsystem_solver_options)
             do i_config = 1, 2
                 if (i_config == 1) then
                     sweep_case = trim(subsystem_solver_options(i_solver))// &
-                                 " subsystem solver and nested extra trial vectors"
+                                 " subsystem solver, nested extra trial vectors "// &
+                                 "and unperturbed gradient"
                 else
                     sweep_case = trim(subsystem_solver_options(i_solver))// &
-                                 " subsystem solver and nested approximate Hessian "// &
-                                 "linear transformation"
+                                 " subsystem solver, nested approximate Hessian "// &
+                                 "linear transformation and perturbed gradient"
                 end if
                 call run_with_fault(0_ip, 0_ip)
                 if (error /= 0) then
@@ -3333,10 +3335,12 @@ contains
             fault_context%stability_state => state%stability_state
 
             ! set up settings with every optional callback function, the extra trial
-            ! vectors of the nested settings only in the first case
+            ! vectors of the nested settings and an unperturbed gradient only in the
+            ! first case
             settings = solver_settings_type()
             settings%context => fault_context
             settings%subsystem_solver = subsystem_solver_options(i_solver)
+            settings%grad_noise = i_config == 2
             settings%jacobi_davidson_start = 0
             settings%line_search = .true.
             settings%stability = .true.
@@ -4075,11 +4079,10 @@ contains
         end if
 
         ! check that nested stability check settings which its sanity check rejects,
-        ! here an empty trial space, are reported with the origin of the stability
-        ! check
+        ! here an unknown diagonalization solver, are reported with the origin of the
+        ! stability check
         call setup_settings(settings, context)
-        settings%stability_settings%n_extra_trial_vectors = 0
-        settings%stability_settings%n_random_trial_vectors = 0
+        settings%stability_settings%diag_solver = "unknown"
         hess_x_funptr => double_well_hess_x
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
@@ -8558,12 +8561,12 @@ contains
         ! reduction factor prevents natural convergence, and one large Hessian
         ! eigenvalue ensures that even the exact full-rank solution's residual carries
         ! enough floating-point noise to stay above the solver's fixed convergence
-        ! floor, for a diagonal Hessian with only two distinct eigenvalues the
-        ! preconditioned residuals stay in a small subspace so that a new trial vector
-        ! becomes linearly dependent before the reduced space reaches the dimension of
-        ! the full parameter space, while for the same Hessian in a random orthonormal
-        ! basis the reduced space grows to this dimension, each trial vector costs one
-        ! Hessian linear transformation
+        ! floor, for a diagonal Hessian with only two distinct eigenvalues and without
+        ! random trial vectors the preconditioned residuals stay in a small subspace so
+        ! that a new trial vector becomes linearly dependent before the reduced space
+        ! reaches the dimension of the full parameter space, while for the same Hessian
+        ! in a random orthonormal basis the reduced space grows to this dimension, each
+        ! trial vector costs one Hessian linear transformation
         do i_case = 1, 2
             call setup_settings(settings, quadratic_context)
             settings%grad_noise = .false.

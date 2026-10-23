@@ -363,7 +363,6 @@ contains
             allocate(h_diag_ptr(n_param_c))
             h_diag_ptr = real(h_diag_c(:n_param_c), kind=rp)
         end if
-        nullify(kappa_ptr)
         if (c_associated(kappa_c_ptr)) then
             if (rp == c_rp) then
                 call c_f_pointer(cptr=kappa_c_ptr, fptr=kappa_ptr, shape=[n_param_c])
@@ -386,20 +385,22 @@ contains
             write(stderr, '(A)') " "//settings_uninitialized_warning_msg
 
         ! call stability check
-        call stability_check(h_diag_ptr, hess_x, stable, error, settings, state, &
-                             kappa=kappa_ptr)
+        if (c_associated(kappa_c_ptr)) then
+            call stability_check(h_diag_ptr, hess_x, stable, error, settings, state, &
+                                 kappa=kappa_ptr)
+            if (rp /= c_rp) then
+                kappa_ptr_c = kappa_ptr
+                deallocate(kappa_ptr)
+            end if
+        else
+            call stability_check(h_diag_ptr, hess_x, stable, error, settings, state)
+        end if
+        if (rp /= c_rp) deallocate(h_diag_ptr)
 
         ! copy the state into the host's record once more, also after an error
         call copy_state_to_c(callbacks)
 
         ! convert return arguments to C kind
-        if (rp /= c_rp) then
-            if (associated(kappa_ptr)) then
-                kappa_ptr_c = real(kappa_ptr, kind=c_rp)
-                deallocate(kappa_ptr)
-            end if
-            deallocate(h_diag_ptr)
-        end if
         stable_c = logical(stable, kind=c_bool)
         error_c = int(error, kind=c_ip)
 

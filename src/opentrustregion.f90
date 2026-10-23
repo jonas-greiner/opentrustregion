@@ -270,10 +270,7 @@ module opentrustregion
         end subroutine logger_type
     end interface
 
-    ! derived types for the settings, whose components are initialized to the default
-    ! values, so that a declared settings object holds the default settings, with the
-    ! settings the solver and the stability check share in optimizer_settings_type
-    ! wherever their default values agree
+    ! derived types for the settings
     type, abstract :: settings_type
         integer(ip) :: verbose = 0
         class(*), pointer :: context => null()
@@ -318,7 +315,7 @@ module opentrustregion
         procedure :: print_results
     end type
 
-    ! default settings, which the components of the settings types hold
+    ! default settings
     type(stability_settings_type), parameter :: default_stability_settings = &
         stability_settings_type()
     type(solver_settings_type), parameter :: default_solver_settings = &
@@ -390,7 +387,7 @@ contains
         call add_error_origin(error, error_solver, local_settings)
         if (error /= 0) return
 
-        ! set starting trust radius
+        ! initialize starting trust radius
         current_state%trust_radius = local_settings%start_trust_radius
 
         ! print header
@@ -3907,7 +3904,7 @@ contains
         end if
 
         ! check that number of random trial vectors is below number of parameters
-        if ((string_in("davidson", settings%subsystem_solver)) .and. &
+        if (string_in("davidson", settings%subsystem_solver) .and. &
             settings%n_random_trial_vectors > n_param / 2) then
             settings%n_random_trial_vectors = n_param / 2
             write(msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &

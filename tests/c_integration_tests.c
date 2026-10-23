@@ -62,16 +62,16 @@ typedef struct {
   int stability_precond_called;
   int stability_project_called;
   int stability_logger_called;
+  int nested_check_ran;
+  int nested_check_error;
+  int in_nested;
+  int outer_used_inner_hess_x;
   int get_extra_trial_vectors_called;
   int stability_hess_x_called;
   int stability_get_extra_trial_vectors_called;
   int stability_conv_check_called;
   c_real stability_residual_rms_seen;
   int approx_hess_x_called;
-  int nested_check_ran;
-  int nested_check_error;
-  int in_nested;
-  int outer_used_inner_hess_x;
 } hartmann_context;
 
 static void exp_terms(const c_real x[N_PARAM], c_real out[N_TERM]) {
@@ -986,13 +986,13 @@ bool test_stability_check_c(void) {
                     "counter was not populated.\n");
     ok = false;
   }
+  if (state.iteration <= 0) {
+    fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
+    ok = false;
+  }
   if (state.min_eigval <= 0.0) {
     fprintf(stderr, "test_stability_check_c failed: State does not hold a positive "
                     "lowest eigenvalue for minimum.\n");
-    ok = false;
-  }
-  if (state.iteration <= 0) {
-    fprintf(stderr, "test_stability_check_c failed: State was not returned.\n");
     ok = false;
   }
   /* the last Hessian linear transformation read the ones before it and the last

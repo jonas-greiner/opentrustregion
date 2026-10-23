@@ -356,6 +356,27 @@ class ProjectInterface(SettingsCallbackInterface):
         return 0
 
 
+class GetExtraTrialVectorsInterface(SettingsCallbackInterface):
+    """
+    this class provides the interface to the extra trial vector function
+    """
+
+    def call(self, trial_vectors_ptr, n_extra_trial_vectors) -> int:
+        try:
+            # convert matrix pointer to numpy array with one trial vector per row
+            trial_vectors = np.ctypeslib.as_array(
+                trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
+            )
+
+            # call extra trial vector function
+            self.func(trial_vectors)
+        except Exception as e:
+            self.exception["exc"] = e
+            return 1
+
+        return 0
+
+
 class ConvCheckInterface(SettingsCallbackInterface):
     """
     this class provides the interface to the convergence check function
@@ -365,27 +386,6 @@ class ConvCheckInterface(SettingsCallbackInterface):
         # call convergence check
         try:
             conv_ptr[0] = self.func()
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
-
-        return 0
-
-
-class GetExtraTrialVectorsInterface(SettingsCallbackInterface):
-    """
-    this class provides the interface to the extra trial vector function
-    """
-
-    def call(self, trial_vectors_ptr, n_extra_trial_vectors) -> int:
-        try:
-            # convert matrix pointers to numpy arrays
-            trial_vectors = np.ctypeslib.as_array(
-                trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
-            )
-
-            # call extra trial vector function
-            self.func(trial_vectors)
         except Exception as e:
             self.exception["exc"] = e
             return 1
