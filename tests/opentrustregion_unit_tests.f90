@@ -2525,13 +2525,22 @@ contains
         !
         use opentrustregion, only: &
             update_orbs_type, obj_func_type, solver_settings_type, solver, &
-            default_settings => default_solver_settings, error_solver, &
-            error_solver_max_iter, error_update_orbs, error_obj_func, error_hess_x, &
-            error_precond, error_project, error_conv_check, error_precond_pd, &
-            error_get_extra_trial_vectors, error_approx_hess_x, subsystem_solver_options
+            default_settings => default_solver_settings, error_solver_max_iter, &
+            error_update_orbs, error_conv_check, error_obj_func, error_hess_x, &
+            error_solver, error_precond, error_project, error_get_extra_trial_vectors, &
+            error_precond_pd, error_approx_hess_x, subsystem_solver_options
 
         real(rp), parameter :: var_thres = 1e-4_rp
-        integer(ip) :: error, i_case
+        integer(ip) :: error, i_solver, i_case, callback, i_call, &
+                       n_calls(n_fault_callbacks)
+        logical :: grad_noise, expected_calls(n_fault_callbacks)
+        integer(ip), parameter :: fault_origins(n_fault_callbacks) = &
+            [error_update_orbs, error_obj_func, error_hess_x, error_precond, &
+             error_project, error_conv_check, error_precond_pd, &
+             error_get_extra_trial_vectors, error_hess_x, error_approx_hess_x, &
+             error_conv_check]
+        character(len=20) :: call_number
+        type(hartmann6d_fault_context_type), target :: fault_context
         real(rp) :: final_grad(n_param), start_vars(2), final_vars(n_param)
         procedure(update_orbs_type), pointer :: update_orbs_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr
@@ -2542,19 +2551,9 @@ contains
         type(double_well_state_context_type), target :: state_context
         type(solver_state_type), target :: state
         type(solver_state_type) :: explicit_state
-        integer(ip) :: n_updates, i_update, i_solver
+        integer(ip) :: n_updates, i_update
         real(rp), allocatable :: step_norms(:)
         character(len=60) :: case_name
-        integer(ip) :: i_config, callback, i_call, n_calls(n_fault_callbacks)
-        integer(ip), parameter :: fault_origins(n_fault_callbacks) = &
-            [error_update_orbs, error_obj_func, error_hess_x, error_precond, &
-             error_project, error_conv_check, error_precond_pd, &
-             error_get_extra_trial_vectors, error_hess_x, error_approx_hess_x, &
-             error_conv_check]
-        logical :: expected_calls(n_fault_callbacks)
-        character(len=20) :: call_number
-        character(len=120) :: sweep_case
-        type(hartmann6d_fault_context_type), target :: fault_context
 
         ! assume tests pass
         test_solver = .true.
@@ -3234,30 +3233,25 @@ contains
 
         ! inject faults by running the solver from the saddle point, where it performs
         ! the internal stability check, with a stability check at convergence, a line
-        ! search and every optional callback function, for every subsystem solver and
-        ! once with extra trial vectors of the nested settings and an unperturbed
-        ! gradient and once with the approximate Hessian linear transformation they
-        ! take precedence over and a perturbed gradient, whose perturbation is
-        ! projected, once without a fault to count the calls of every callback function
-        ! and then letting every one of these calls fail in turn, and check that the
-        ! unfaulted run reaches exactly the callback functions the case uses, that the
-        ! error is reported with the origin of the failing callback function and that
-        ! the reported counters still agree with the calls
+        ! search and every optional callback function, also of the nested settings,
+        ! once without a fault to count the calls of every callback function and then
+        ! letting every one of these calls fail in turn, for every subsystem solver
+        ! without and with a perturbed gradient, whose perturbation is projected, the
+        ! latter without the extra trial vector function of the nested settings, which
+        ! takes precedence over their approximate Hessian linear transformation, and
+        ! check that the unfaulted run reaches exactly the callback functions the case
+        ! uses, that the error is reported with the origin of the failing callback
+        ! function and that the reported counters still agree with the calls
         do i_solver = 1, size(subsystem_solver_options)
-            do i_config = 1, 2
-                if (i_config == 1) then
-                    sweep_case = trim(subsystem_solver_options(i_solver))// &
-                                 " subsystem solver, nested extra trial vectors "// &
-                                 "and unperturbed gradient"
-                else
-                    sweep_case = trim(subsystem_solver_options(i_solver))// &
-                                 " subsystem solver, nested approximate Hessian "// &
-                                 "linear transformation and perturbed gradient"
-                end if
+            do i_case = 1, 2
+                grad_noise = i_case == 2
+                case_name = trim(subsystem_solver_options(i_solver))// &
+                            " subsystem solver"
+                if (grad_noise) case_name = trim(case_name)//" and perturbed gradient"
                 call run_with_fault(0_ip, 0_ip)
                 if (error /= 0) then
                     write(stderr, *) "test_solver failed: Produced error without "// &
-                        "fault for "//trim(sweep_case)//"."
+                        "fault with "//trim(case_name)//"."
                     test_solver = .false.
                     cycle
                 end if
@@ -3267,29 +3261,25 @@ contains
                 ! positive-definite preconditioner, which only the ellipsoidal trust
                 ! region of truncated conjugate gradient and generalized Lanczos uses,
                 ! the extra trial vector function, which the solver only calls for
-                ! (Jacobi-)Davidson and the stability check for the nested settings of
-                ! the first case, and the approximate Hessian linear transformation,
-                ! which the stability check only calls in the second case
+                ! (Jacobi-)Davidson and the stability check only for an unperturbed
+                ! gradient, and the approximate Hessian linear transformation, which
+                ! the stability check only calls for a perturbed gradient
                 expected_calls = .true.
                 expected_calls(fault_precond_pd) = &
                     index(subsystem_solver_options(i_solver), "davidson") == 0
                 expected_calls(fault_get_extra_trial_vectors) = &
-                    i_config == 1 .or. &
+                    .not. grad_noise .or. &
                     index(subsystem_solver_options(i_solver), "davidson") > 0
-                expected_calls(fault_approx_hess_x) = i_config == 2
+                expected_calls(fault_approx_hess_x) = grad_noise
                 do callback = 1, n_fault_callbacks
                     if ((n_calls(callback) > 0) .neqv. expected_calls(callback)) then
                         write(stderr, *) "test_solver failed: Unfaulted run "// &
                             trim(merge("did not call", "called      ", &
                                        expected_calls(callback)))//" "// &
-                            trim(fault_callback_names(callback))//" for "// &
-                            trim(sweep_case)//"."
+                            trim(fault_callback_names(callback))//" with "// &
+                            trim(case_name)//"."
                         test_solver = .false.
                     end if
-                end do
-
-                ! let every call fail in turn
-                do callback = 1, n_fault_callbacks
                     do i_call = 1, n_calls(callback)
                         call run_with_fault(callback, i_call)
                         write(call_number, '(I0)') i_call
@@ -3297,16 +3287,18 @@ contains
                             write(stderr, *) "test_solver failed: Error of failing "// &
                                 trim(fault_callback_names(callback))//" at call "// &
                                 trim(call_number)//" not reported with its origin "// &
-                                "for "//trim(sweep_case)//"."
+                                "with "//trim(case_name)//"."
                             test_solver = .false.
                         end if
                         if (.not. check_call_counts( &
                             fault_context, "solver", &
                             "for failing "//trim(fault_callback_names(callback))// &
-                            " at call "//trim(call_number)//" for "//trim(sweep_case), &
+                            " at call "//trim(call_number)//" with "//trim(case_name), &
                             n_hess_x=state%n_hess_x, &
                             n_update_orbs=state%n_update_orbs, &
-                            n_obj_func=state%n_obj_func)) test_solver = .false.
+                            n_obj_func=state%n_obj_func)) then
+                            test_solver = .false.
+                        end if
                     end do
                 end do
             end do
@@ -3317,8 +3309,8 @@ contains
         subroutine run_with_fault(fault_callback, fault_call)
             !
             ! this subroutine runs the solver from the saddle point with the subsystem
-            ! solver and the nested settings of the current case and lets the given
-            ! call of the given callback function fail
+            ! solver and the gradient perturbation of the current case and lets the
+            ! given call of the given callback function fail
             !
             integer(ip), intent(in) :: fault_callback, fault_call
 
@@ -3335,16 +3327,16 @@ contains
             fault_context%fault_call = fault_call
             fault_context%stability_state => state%stability_state
 
-            ! set up settings with every optional callback function, the extra trial
-            ! vectors of the nested settings and an unperturbed gradient only in the
-            ! first case
+            ! set up settings with every optional callback function, also of the nested
+            ! settings, but the extra trial vector function of the nested settings for
+            ! a perturbed gradient
             settings = solver_settings_type()
             settings%context => fault_context
             settings%subsystem_solver = subsystem_solver_options(i_solver)
-            settings%grad_noise = i_config == 2
             settings%jacobi_davidson_start = 0
             settings%line_search = .true.
             settings%stability = .true.
+            settings%grad_noise = grad_noise
             settings%precond => faulty_precond
             settings%precond_pd => faulty_precond_pd
             settings%project => faulty_project
@@ -3353,8 +3345,10 @@ contains
             settings%stability_hess_x => faulty_stability_hess_x
             settings%stability_settings%conv_check => faulty_stability_conv_check
             settings%stability_settings%approx_hess_x => faulty_approx_hess_x
-            if (i_config == 1) settings%stability_settings%get_extra_trial_vectors => &
-                faulty_get_extra_trial_vectors
+            if (.not. grad_noise) then
+                settings%stability_settings%get_extra_trial_vectors => &
+                    faulty_get_extra_trial_vectors
+            end if
 
             ! run solver
             faulty_update_orbs_funptr => faulty_update_orbs

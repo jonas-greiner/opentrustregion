@@ -255,8 +255,8 @@ The optimization process can be fine-tuned using the following settings:
 - **`n_macro`** (integer): Maximum number of macro iterations.
 - **`n_micro`** (integer): Maximum number of micro iterations per attempted trust-region step.
 - **`jacobi_davidson_start`** (integer): Number of micro iterations after which the subsystem solver switches to the Jacobi-Davidson method.
-- **`global_red_factor`** (real): Reduction factor for the residual during micro iterations in the global region, also the relative size of the gradient perturbation there (see `grad_noise`).
-- **`local_red_factor`** (real): Reduction factor for the residual during micro iterations in the local region, also the relative size of the gradient perturbation there (see `grad_noise`).
+- **`global_red_factor`** (real): Reduction factor for the residual during the micro iterations in the global region, also the relative size of the gradient perturbation there (see `grad_noise`).
+- **`local_red_factor`** (real): Reduction factor for the residual during the micro iterations in the local region, also the relative size of the gradient perturbation there and always for `"tcg"` (see `grad_noise`).
 - **`verbose`** (integer): Controls the verbosity of output during optimization. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
@@ -272,8 +272,8 @@ The solver keeps the state it is given up to date during the optimization, start
 - **`trust_radius`** (real): Current trust radius.
 - **`micro_iteration`** (integer): Number of micro iterations spent on the trust-region subproblem being solved or, until the next one starts, on the last one, including those of rejected steps, and 0 after a step along an unstable mode.
 - **`jacobi_davidson_iteration`** (integer): Number of these micro iterations that were Jacobi-Davidson iterations.
-- **`relative_residual`** (real): Residual of the trust-region subproblem being solved relative to the gradient it is solved for, which `grad_noise` perturbs, both measured in the norm that the stopping test of the micro iterations uses, and 0 after a step along an unstable mode.
-- **`level_shift`** (real): Level shift of the last step, which the Davidson-family subsystem solvers apply to the Hessian and which is the Lagrange multiplier of the trust-region constraint for `"gltr"`, so as to keep a step within the trust region, 0 for a step inside the trust region, for a step along an unstable mode and for `"tcg"`.
+- **`relative_residual`** (real): Norm of the residual of the trust-region subproblem being solved, relative to that of the gradient it is solved for, which `grad_noise` perturbs, both measured in the norm that the stopping test of the micro iterations uses, and 0 after a step along an unstable mode. For `"tcg"`, the residual is that of its last iterate inside the trust region.
+- **`level_shift`** (real): Level shift of the last step, which the Davidson-family subsystem solvers apply to the Hessian to keep a step within the trust region and which is the Lagrange multiplier of the trust-region constraint for `"gltr"`, 0 for a Newton step inside the trust region, for a step along an unstable mode and for `"tcg"`.
 - **`step_size`** (real): Size of the last step in the norm of the trust region, after the line search if one is performed. A step along an unstable mode is measured in the Euclidean norm, also for an ellipsoidal trust region.
 - **`n_update_orbs`** (integer): Number of orbital updates (`update_orbs`).
 - **`n_obj_func`** (integer): Number of objective function evaluations (`obj_func`), including those of the line search.

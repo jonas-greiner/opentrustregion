@@ -29,12 +29,11 @@ from ctypes import (
 )
 from unittest.mock import patch
 from pathlib import Path
-
 import numpy as np
 
 # check if pyopentrustregion is installed or import it from the source tree
 try:
-    from pyopentrustregion import (
+    from pyopentrustregion.python_interface import (
         SolverSettings,
         StabilitySettings,
         SolverState,
@@ -43,10 +42,23 @@ try:
         stability_check,
         c_int,
         c_real,
+        ext,
+        conda_prefix,
+        UpdateOrbsInterface,
+        c_buffer,
+        write_back,
+        raise_on_failure,
+        hess_x_interface_type,
+        precond_interface_type,
+        precond_pd_interface_type,
+        project_interface_type,
+        get_extra_trial_vectors_interface_type,
+        conv_check_interface_type,
+        logger_interface_type,
     )
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-    from pyopentrustregion import (
+    from pyopentrustregion.python_interface import (
         SolverSettings,
         StabilitySettings,
         SolverState,
@@ -55,22 +67,20 @@ except ImportError:
         stability_check,
         c_int,
         c_real,
+        ext,
+        conda_prefix,
+        UpdateOrbsInterface,
+        c_buffer,
+        write_back,
+        raise_on_failure,
+        hess_x_interface_type,
+        precond_interface_type,
+        precond_pd_interface_type,
+        project_interface_type,
+        get_extra_trial_vectors_interface_type,
+        conv_check_interface_type,
+        logger_interface_type,
     )
-from pyopentrustregion.python_interface import (
-    UpdateOrbsInterface,
-    c_buffer,
-    write_back,
-    raise_on_failure,
-    hess_x_interface_type,
-    precond_interface_type,
-    precond_pd_interface_type,
-    project_interface_type,
-    get_extra_trial_vectors_interface_type,
-    conv_check_interface_type,
-    logger_interface_type,
-    ext,
-    conda_prefix,
-)
 
 lib = None
 
@@ -425,7 +435,10 @@ class PyInterfaceUnitTests(unittest.TestCase):
             grad[:] = 2 * kappa
             h_diag[:] = 3 * kappa
 
-            return func, self._mock_hess_x
+            def hess_x(x, hess_x):
+                hess_x[:] = 4 * x
+
+            return func, hess_x
 
         # the callback functions record that they were called and the logging
         # functions record the messages, separately for the settings and the nested

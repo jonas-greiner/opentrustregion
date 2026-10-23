@@ -503,7 +503,8 @@ contains
 
         ! check that the solver received the callback bundles of the converted
         ! settings, of which the nested one holds the nested settings' own callback
-        ! functions and context
+        ! functions and context and the Hessian linear transformation the orbital
+        ! update returned
         if (.not. associated(received_callbacks%precond, mock_precond) .or. &
             .not. associated(received_stability_callbacks%precond, &
                              mock_stability_precond) .or. &
@@ -511,6 +512,12 @@ contains
                                c_loc(nested_host_context))) then
             write(stderr, *) "test_solver_c_wrapper failed: Callback bundles of "// &
                 "the converted settings not passed."
+            test_solver_c_wrapper = .false.
+        end if
+        if (.not. associated(received_stability_callbacks%hess_x, mock_hess_x)) then
+            write(stderr, *) "test_solver_c_wrapper failed: Hessian linear "// &
+                "transformation returned by orbital update not handed to internal "// &
+                "stability check."
             test_solver_c_wrapper = .false.
         end if
 
