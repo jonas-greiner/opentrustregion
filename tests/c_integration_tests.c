@@ -68,10 +68,10 @@ typedef struct {
   int outer_used_inner_hess_x;
   int get_extra_trial_vectors_called;
   int stability_hess_x_called;
+  int approx_hess_x_called;
   int stability_get_extra_trial_vectors_called;
   int stability_conv_check_called;
   c_real stability_residual_rms_seen;
-  int approx_hess_x_called;
 } hartmann_context;
 
 static void exp_terms(const c_real x[N_PARAM], c_real out[N_TERM]) {
@@ -271,12 +271,24 @@ static c_int stability_get_extra_trial_vectors(c_real *trial_vectors,
 
 /* The Hessian linear transformation of the internal stability check, which the
  * stability check uses instead of the one the orbital update returns. */
-static c_int stability_hess_x(const c_real *x, c_real *hx, void *context);
+static c_int stability_hess_x(const c_real *x, c_real *hx, void *context) {
+  hartmann_context *ctx = context;
+  if (!ctx)
+    return 1;
+  ctx->stability_hess_x_called = 1;
+  return hess_x_fun(x, hx, context);
+}
 
 /* An approximate Hessian linear transformation for the stability settings, which the
  * stability check only uses for extra trial vectors when no extra trial vector
  * function is provided. */
-static c_int approx_hess_x(const c_real *x, c_real *hx, void *context);
+static c_int approx_hess_x(const c_real *x, c_real *hx, void *context) {
+  hartmann_context *ctx = context;
+  if (!ctx)
+    return 1;
+  ctx->approx_hess_x_called = 1;
+  return hess_x_fun(x, hx, context);
+}
 
 /* Convergence check of the stability check, which reads the RMS residual of the lowest
  * eigenpair from the state of a standalone stability check or from the nested state of
@@ -305,22 +317,6 @@ static c_int inner_hess_x(const c_real *x, c_real *hx, void *context) {
     return 1;
   if (!ctx->in_nested)
     ctx->outer_used_inner_hess_x = 1;
-  return hess_x_fun(x, hx, context);
-}
-
-static c_int stability_hess_x(const c_real *x, c_real *hx, void *context) {
-  hartmann_context *ctx = context;
-  if (!ctx)
-    return 1;
-  ctx->stability_hess_x_called = 1;
-  return hess_x_fun(x, hx, context);
-}
-
-static c_int approx_hess_x(const c_real *x, c_real *hx, void *context) {
-  hartmann_context *ctx = context;
-  if (!ctx)
-    return 1;
-  ctx->approx_hess_x_called = 1;
   return hess_x_fun(x, hx, context);
 }
 

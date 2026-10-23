@@ -260,7 +260,7 @@ The optimization process can be fine-tuned using the following settings:
 - **`verbose`** (integer): Controls the verbosity of output during optimization. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors and the random gradient perturbation.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it, and the `solver` uses it only during the call. An extension factory, however, keeps the context of the settings it wires, nested stability check settings included, until the extension is released (see [Optional Extensions](#optional-extensions)), so it must stay valid that long. Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own state record and, with solver settings an extension factory wired, its own settings object. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls). The factories of the extensions create a new object for every call, so solves using them can run at the same time or be nested in the same way.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call, unless an extension factory wired the settings, in which case the extension keeps their context and that of their nested stability check settings until it is released (see [Optional Extensions](#optional-extensions)). Two solves can therefore run at the same time, or be nested inside one another, as long as each is given its own state record and, with solver settings an extension factory wired, its own settings object. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`stability_settings`** (stability_settings_type): Settings object controlling the internal stability check that is automatically performed upon convergence when `stability` is `True` and in any case at a starting point that is already converged and at a point with an exactly vanishing gradient (see the Stability Check section below). If `stability_settings%precond`, `stability_settings%project`, `stability_settings%logger`, or `stability_settings%context` are left unset, they default to the corresponding `precond`, `project`, `logger`, and `context` supplied to `solver`. The internal stability check hands its own context to every callback function it calls, so when `stability_settings%context` is set, the Hessian linear transformation returned by `update_orbs` or `stability_hess_x` and any inherited `precond`, `project` or `logger` receive it instead of the solver's `context` and must accept it. Leaving it unset keeps the solver's `context` everywhere. `stability_settings%verbose` is raised to at least the solver's own `verbose` level, and `stability_settings%hess_symm` is switched off together with the solver's `hess_symm` unless `stability_hess_x` is set. Unless `stability_settings%conv_check` is set, the internal stability check stops as soon as an instability is certain for a symmetric Hessian (see `stop_on_instability`), and by default it uses a single random trial vector. The solver checks the nested settings, after these defaults are resolved, together with its own before the optimization starts, also without `stability`, since the internal stability check runs in any case at the points named above.
 
 ### Output
@@ -448,7 +448,7 @@ The stability check can be fine-tuned using the following settings:
 - **`verbose`** (integer): Controls the verbosity of output during the stability check. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors.
 - **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it, and `stability_check` uses it only during the call. Nested stability check settings are the exception: once an extension factory has wired the solver settings that hold them, their context stays in use until the extension is released. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it and never keeps it past the call, so it only has to stay valid for the duration of the call, unless these are the nested stability check settings of solver settings an extension factory wired, in which case the extension keeps their context until it is released. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 
 ### Output
 The stability check keeps the state it is given up to date during its iterations, starting from the default values on every call, and leaves its final state in it when it returns, also after an error. As for the solver, a callback function can therefore read the current state. The state holds the following fields:
@@ -624,7 +624,7 @@ c_int n_occ[1], n_particle, n_ao, n_mo, n_param;
 c_real *mo_coeff, *ao_overlap;
 
 // set callback function pointers to existing implementations
-evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
+evaluate_dm_fp evaluate_dm_funptr = evaluate_dm;
 
 // initialize MO settings
 mo_settings_type mo_settings = mo_settings_init();
@@ -816,7 +816,7 @@ c_int n_particle, n_ao, n_param;
 c_real *dm_ao, *ao_overlap;
 
 // set callback function pointers to existing implementations
-evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
+evaluate_dm_fp evaluate_dm_funptr = evaluate_dm;
 
 // initialize OAO settings
 oao_settings_type oao_settings = oao_settings_init();
@@ -939,7 +939,7 @@ This allows the solver to automatically update the Hessian using a quasi-Newton 
 - **`solver_settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new rotation QN object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `rotation_qn_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`settings`** (rotation_qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
+- **`settings`** (rotation_qn_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used, which `NULL` in C and `None` in Python select.
 
 ---
 
@@ -991,10 +991,10 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 c_int n_param;
 
 // set callback function pointers to existing implementations
-update_orbs_fp update_orbs_funptr = (void*)update_orbs;
-obj_func_fp obj_func_funptr = (void*)obj_func;
-transport_fp transport_funptr = (void*)transport;
-init_hess_fp init_hess_funptr = (void*)init_hess;
+update_orbs_fp update_orbs_funptr = update_orbs;
+obj_func_fp obj_func_funptr = obj_func;
+transport_fp transport_funptr = transport;
+init_hess_fp init_hess_funptr = init_hess;
 
 // initialize rotation QN settings
 rotation_qn_settings_type rotation_qn_settings = rotation_qn_settings_init();
@@ -1203,8 +1203,8 @@ c_real *mo_coeff, *ao_overlap, *kappa, *grad, *h_diag, func;
 
 // set callback function pointers to existing implementations, the exact density
 // matrix evaluating function for the MO object and that of density QN
-evaluate_dm_fp evaluate_dm_mo_funptr = (void*)evaluate_dm_mo;
-density_qn_evaluate_dm_fp evaluate_dm_funptr = (void*)evaluate_dm;
+evaluate_dm_fp evaluate_dm_mo_funptr = evaluate_dm_mo;
+density_qn_evaluate_dm_fp evaluate_dm_funptr = evaluate_dm;
 
 // initialize density QN settings
 density_qn_settings_type density_qn_settings = density_qn_settings_init();
@@ -1368,7 +1368,7 @@ This allows the solver to automatically update the Hessian by building and evalu
 - **`solver_settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 - **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
 - **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`settings`** (s_gek_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used.
+- **`settings`** (s_gek_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used, which `NULL` in C and `None` in Python select.
 
 ---
 
@@ -1418,9 +1418,9 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 c_int n_param;
 
 // set callback function pointers to existing implementations
-update_orbs_fp update_orbs_funptr = (void*)update_orbs;
-obj_func_fp obj_func_funptr = (void*)obj_func;
-change_reference_fp change_reference_funptr = (void*)change_reference;
+update_orbs_fp update_orbs_funptr = update_orbs;
+obj_func_fp obj_func_funptr = obj_func;
+change_reference_fp change_reference_funptr = change_reference;
 
 // initialize S-GEK settings
 s_gek_settings_type s_gek_settings = s_gek_settings_init();

@@ -1496,19 +1496,22 @@ contains
 
     end function check_update_orbs_c_funptr
 
-    function check_hess_x_funptr(hess_x_funptr, test_name, message, context) &
+    function check_hess_x_funptr(hess_x_funptr, test_name, message, context, factor) &
         result(test_passed)
         !
-        ! this function tests a provided Hessian linear transformation function pointer
+        ! this function tests a provided Hessian linear transformation function
+        ! pointer, which scales by 4 unless another factor is given
         !
         use opentrustregion, only: hess_x_type
 
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         character(len=*), intent(in) :: test_name, message
         class(*), intent(in), pointer :: context
+        real(rp), intent(in), optional :: factor
         logical :: test_passed
 
         real(rp), allocatable :: x(:), hess_x(:)
+        real(rp) :: expected_factor
         integer(ip) :: error
 
         ! assume tests pass
@@ -1539,7 +1542,9 @@ contains
         end if
 
         ! check Hessian linear transformation
-        if (any(abs(hess_x - 4.0_rp) > tol)) then
+        expected_factor = 4.0_rp
+        if (present(factor)) expected_factor = factor
+        if (any(abs(hess_x - expected_factor) > tol)) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Hessian linear transformation returned"//message//" wrong."
             test_passed = .false.

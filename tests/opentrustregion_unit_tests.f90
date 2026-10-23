@@ -252,6 +252,26 @@ contains
 
     end subroutine identity_hess_x
 
+    subroutine failing_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes a Hessian linear transformation which always fails
+        ! and needs no test context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        hess_x = x
+        error = 1
+
+    end subroutine failing_hess_x
+
     function constant_obj_func(delta_vars, error, context) result(func)
         !
         ! this function describes an objective function evaluation that does not depend
@@ -1656,26 +1676,6 @@ contains
 
     end subroutine double_well_hess_x
 
-    subroutine failing_double_well_hess_x(x, hess_x, error, context)
-        !
-        ! this subroutine describes a Hessian linear transformation for the double well
-        ! function which always fails
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        hess_x = x
-        error = 1
-
-    end subroutine failing_double_well_hess_x
-
     subroutine double_well_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                        error, context)
         !
@@ -2164,6 +2164,25 @@ contains
 
     end subroutine setup_error_logging
 
+    subroutine setup_hartmann6d_point(context, vars, func, grad, h_diag)
+        !
+        ! this subroutine moves a Hartmann 6D context to a point and evaluates the
+        ! function, its gradient and Hessian and the Hessian diagonal there
+        !
+        class(hartmann6d_context_type), intent(inout) :: context
+        real(rp), intent(in) :: vars(:)
+        real(rp), intent(out) :: func, grad(:), h_diag(:)
+
+        integer(ip) :: i
+
+        context%vars = vars
+        func = hartmann6d_func(vars)
+        call hartmann6d_gradient(vars, grad)
+        context%hess = hartmann6d_hessian(vars)
+        h_diag = [(context%hess(i, i), i=1, n_param)]
+
+    end subroutine setup_hartmann6d_point
+
     subroutine setup_refresh_context(context, func, h_diag)
         !
         ! this subroutine sets up the quadratic model used to test the Hessian refresh
@@ -2189,25 +2208,6 @@ contains
         h_diag = [(context%hess(i, i), i=1, n_param)]
 
     end subroutine setup_refresh_context
-
-    subroutine setup_hartmann6d_point(context, vars, func, grad, h_diag)
-        !
-        ! this subroutine moves a Hartmann 6D context to a point and evaluates the
-        ! function, its gradient and Hessian and the Hessian diagonal there
-        !
-        class(hartmann6d_context_type), intent(inout) :: context
-        real(rp), intent(in) :: vars(:)
-        real(rp), intent(out) :: func, grad(:), h_diag(:)
-
-        integer(ip) :: i
-
-        context%vars = vars
-        func = hartmann6d_func(vars)
-        call hartmann6d_gradient(vars, grad)
-        context%hess = hartmann6d_hessian(vars)
-        h_diag = [(context%hess(i, i), i=1, n_param)]
-
-    end subroutine setup_hartmann6d_point
 
     subroutine setup_double_well_state_context(context, state, func, grad, h_diag)
         !
@@ -4031,7 +4031,7 @@ contains
         context%hess_x_called = .false.
         settings%stability_settings%context => context
         settings%stability_hess_x => double_well_hess_x
-        hess_x_funptr => failing_double_well_hess_x
+        hess_x_funptr => failing_hess_x
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
                                     kappa, kappa_norm, error)
@@ -4082,7 +4082,6 @@ contains
         ! stability check
         call setup_settings(settings, context)
         settings%stability_settings%diag_solver = "unknown"
-        hess_x_funptr => double_well_hess_x
         call check_stationary_point(stationary_grad, 0.0_rp, saddle_h_diag, &
                                     hess_x_funptr, 2_ip, settings, state, stable, &
                                     kappa, kappa_norm, error)
@@ -6626,10 +6625,11 @@ contains
                 settings%approx_hess_x => approx_hess_x_fun
                 h_diag = -h_diag
             case (3)
-                ! request a single extra trial vector, whose warm start begins from a
-                ! space that has to be expanded twice to span all parameters, and let
-                ! the preconditioner always return the first unit vector, so that it
-                ! can only be expanded once
+                ! restore the Hessian diagonal elements, request a single extra trial
+                ! vector, whose warm start begins from a space that has to be expanded
+                ! twice to span all parameters, and let the preconditioner always
+                ! return the first unit vector, so that it can only be expanded once
+                h_diag = -h_diag
                 settings%n_extra_trial_vectors = 1
                 settings%precond => mock_precond_first_unit_vector
             case (4)
@@ -10445,7 +10445,9 @@ contains
                 if (settings%n_random_trial_vectors /= merge(2_ip, 3_ip, davidson)) then
                     write(stderr, *) "test_solver_sanity_check failed: Number of "// &
                         "random trial vectors wrong for "// &
-                        trim(subsystem_solver_options(i_solver))//" subsystem solver."
+                        trim(subsystem_solver_options(i_solver))// &
+                        " subsystem solver with "// &
+                        trim(trust_region_shape_options(i_shape))//" trust region."
                     test_solver_sanity_check = .false.
                 end if
                 if ((davidson .and. index(context%log_message, " "// &
@@ -10453,7 +10455,9 @@ contains
                     (.not. davidson .and. len_trim(context%log_message) > 0)) then
                     write(stderr, *) "test_solver_sanity_check failed: Warning for "// &
                         "the number of random trial vectors wrong for "// &
-                        trim(subsystem_solver_options(i_solver))//" subsystem solver."
+                        trim(subsystem_solver_options(i_solver))// &
+                        " subsystem solver with "// &
+                        trim(trust_region_shape_options(i_shape))//" trust region."
                     test_solver_sanity_check = .false.
                 end if
             end do

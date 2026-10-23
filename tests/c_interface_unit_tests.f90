@@ -243,30 +243,44 @@ contains
     function mock_stability_hess_x(x, hess_x, context_c) result(error) bind(C)
         !
         ! this function is a test function for the C Hessian linear transformation of
-        ! the stability check, which behaves like the one the orbital update returns
-        ! but is a different function
+        ! the stability check, which scales by a different factor than the one the
+        ! orbital update returns, so that the two cannot be confused
         !
+        use test_reference, only: check_host_context_c, host_context_error
+
         real(c_rp), intent(in), target :: x(*)
         real(c_rp), intent(out), target :: hess_x(*)
         type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
-        error = mock_hess_x(x, hess_x, context_c)
+        ! check host context
+        call check_host_context_c(context_c)
+
+        hess_x(:n_param) = 5 * x(:n_param)
+
+        error = host_context_error(context_c)
 
     end function mock_stability_hess_x
 
     function mock_approx_hess_x(x, hess_x, context_c) result(error) bind(C)
         !
         ! this function is a test function for the C approximate Hessian linear
-        ! transformation, which behaves like the one the orbital update returns but is
-        ! a different function
+        ! transformation, which scales by a different factor than the other Hessian
+        ! linear transformations, so that they cannot be confused
         !
+        use test_reference, only: check_host_context_c, host_context_error
+
         real(c_rp), intent(in), target :: x(*)
         real(c_rp), intent(out), target :: hess_x(*)
         type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
-        error = mock_hess_x(x, hess_x, context_c)
+        ! check host context
+        call check_host_context_c(context_c)
+
+        hess_x(:n_param) = 6 * x(:n_param)
+
+        error = host_context_error(context_c)
 
     end function mock_approx_hess_x
 
@@ -1688,8 +1702,12 @@ contains
         ! assume tests pass
         test_stability_hess_x_f_wrapper = .true.
 
-        ! inject mock C function and hand the bundle to the wrapper as its context
+        ! inject mock C function next to the other Hessian linear transformations,
+        ! which scale by different factors, so that a wrapper calling one of them is
+        ! detected, and hand the bundle to the wrapper as its context
+        callbacks%hess_x => mock_hess_x
         callbacks%stability_hess_x => mock_stability_hess_x
+        callbacks%approx_hess_x => mock_approx_hess_x
         call arm_host_context_c(callbacks%host_context)
         call arm_state_c(callbacks)
         context => callbacks
@@ -1699,7 +1717,7 @@ contains
 
         ! test wrapper
         if (.not. check_hess_x_funptr(funptr, "stability_hess_x_f_wrapper", "", &
-                                      context)) &
+                                      context, 5.0_rp)) &
             test_stability_hess_x_f_wrapper = .false.
 
         ! check that the wrapper handed the host context to the C function
@@ -1749,7 +1767,11 @@ contains
         ! assume tests pass
         test_approx_hess_x_f_wrapper = .true.
 
-        ! inject mock C function and hand the bundle to the wrapper as its context
+        ! inject mock C function next to the other Hessian linear transformations,
+        ! which scale by different factors, so that a wrapper calling one of them is
+        ! detected, and hand the bundle to the wrapper as its context
+        callbacks%hess_x => mock_hess_x
+        callbacks%stability_hess_x => mock_stability_hess_x
         callbacks%approx_hess_x => mock_approx_hess_x
         call arm_host_context_c(callbacks%host_context)
         call arm_state_c(callbacks)
@@ -1759,8 +1781,8 @@ contains
         funptr => approx_hess_x_f_wrapper
 
         ! test wrapper
-        if (.not. check_hess_x_funptr(funptr, "approx_hess_x_f_wrapper", "", context)) &
-            test_approx_hess_x_f_wrapper = .false.
+        if (.not. check_hess_x_funptr(funptr, "approx_hess_x_f_wrapper", "", context, &
+                                      6.0_rp)) test_approx_hess_x_f_wrapper = .false.
 
         ! check that the wrapper handed the host context to the C function
         if (.not. host_context_reached("approx_hess_x_f_wrapper")) &

@@ -3342,7 +3342,7 @@ contains
         ! this subroutine performs truncated conjugate gradient to solve the trust
         ! region subproblem, this implementation is a bit different from standard TCG
         ! since it is not only checking whether the current direction has negative
-        ! curvature but whether the entire subspace does by performing an Cholesky
+        ! curvature but whether the entire subspace does by performing a Cholesky
         ! factorization of the tridiagonal Lanczos matrix on the fly, this
         ! implementation is based on the implementation of the Steihaug-Toint method
         ! in the GALAHAD library (https://github.com/ralna/GALAHAD)
@@ -3580,7 +3580,7 @@ contains
         func, grad, h_diag, n_param, obj_func, hess_x_funptr, settings, local_region, &
         state, solution, solution_norm, lambda, error)
         !
-        ! this subroutine performs generalized lanczos trust region to solve the trust
+        ! this subroutine performs generalized Lanczos trust region to solve the trust
         ! region subproblem, this implementation is based on the implementation of GLTR
         ! in the GALAHAD library (https://github.com/ralna/GALAHAD)
         !

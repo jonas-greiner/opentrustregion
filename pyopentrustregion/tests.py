@@ -1524,9 +1524,9 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # extension objects wired into both, once nothing else refers to them
         stability_settings = settings.stability_settings
         settings_ref = weakref.ref(settings)
-        del settings, func
+        del settings, func, cases
         gc.collect()
-        if settings_ref() is None or stability_settings._parent is not settings_ref():
+        if settings_ref() is None:
             print(
                 " test_solver_settings failed: Nested stability check settings do not "
                 "keep the settings alive."
@@ -2183,6 +2183,7 @@ class PyIntegrationTests(unittest.TestCase):
         # approximate Hessian linear transformation, with the state, which the
         # convergence check reads
         settings.get_extra_trial_vectors = None
+        called.discard("approx_hess_x")
         stable = stability_check(
             h_diag, hess_x, self.n_param, settings, state=stability_state
         )

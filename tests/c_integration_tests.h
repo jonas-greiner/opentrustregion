@@ -5,8 +5,8 @@
 // file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 /* Code the C integration tests of the core share with those of the extensions: the
- * capture of the standard error, which c_integration_tests.c provides, and the warnings
- * the library prints for settings that were not initialized. */
+ * capture of the standard error, which c_integration_tests.c provides, and the
+ * warnings the library prints for settings that were not initialized. */
 
 #ifndef C_INTEGRATION_TESTS_H
 #define C_INTEGRATION_TESTS_H

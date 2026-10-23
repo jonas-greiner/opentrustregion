@@ -130,16 +130,16 @@ contains
                 " by given extra trial vector subroutine", settings%context)) &
                 test_passed = .false.
         end if
-        if (associated(settings%stability_hess_x)) then
-            if (.not. check_hess_x_funptr( &
-                settings%stability_hess_x, "solver_c_wrapper", &
-                " by given stability check Hessian linear transformation subroutine", &
-                settings%context)) test_passed = .false.
-        end if
         if (associated(settings%conv_check)) then
             if (.not. check_conv_check_funptr(settings%conv_check, "solver_c_wrapper", &
                                               " by given convergence check function", &
                                               settings%context)) test_passed = .false.
+        end if
+        if (associated(settings%stability_hess_x)) then
+            if (.not. check_hess_x_funptr( &
+                settings%stability_hess_x, "solver_c_wrapper", &
+                " by given stability check Hessian linear transformation subroutine", &
+                settings%context, 5.0_rp)) test_passed = .false.
         end if
         if (associated(settings%logger)) call settings%logger("test", settings%context)
 
@@ -244,7 +244,7 @@ contains
             if (.not. check_hess_x_funptr( &
                 settings%approx_hess_x, "stability_check_c_wrapper", &
                 " by given approximate Hessian linear transformation subroutine", &
-                settings%context)) test_passed = .false.
+                settings%context, 6.0_rp)) test_passed = .false.
         end if
         if (associated(settings%get_extra_trial_vectors)) then
             if (.not. check_get_extra_trial_vectors_funptr( &

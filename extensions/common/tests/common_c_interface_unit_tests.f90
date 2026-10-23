@@ -1659,7 +1659,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_stability_hess_x_c_wrapper = .false.
             end if
-            if (any(abs(hess_x_c - 4.0_c_rp * x_c) > tol_c)) then
+            if (any(abs(hess_x_c - 5.0_c_rp * x_c) > tol_c)) then
                 write(stderr, *) "test_stability_hess_x_c_wrapper failed: Result "// &
                     "of the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1721,7 +1721,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_approx_hess_x_c_wrapper = .false.
             end if
-            if (any(abs(hess_x_c - 4.0_c_rp * x_c) > tol_c)) then
+            if (any(abs(hess_x_c - 6.0_c_rp * x_c) > tol_c)) then
                 write(stderr, *) "test_approx_hess_x_c_wrapper failed: Result of "// &
                     "the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
