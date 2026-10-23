@@ -64,7 +64,7 @@ The build process can be customized using the following CMake options:
 
 ### Nested and Concurrent Calls
 
-The library keeps no state of its own between calls, so a solver or stability check call can be nested inside a callback function of another call, or run concurrently with another call in a different thread, as long as each call is given its own state record and, in Python, its own settings object, whose callback functions every call hands its number of parameters and exception collector, and, where an extension factory wired the solver settings, its own settings object, since these own the extension object a call works with. The same holds for calculations with extensions, whose factories create a new object for every call, see [Optional Extensions](#optional-extensions), as long as each calculation has its own solver settings, state record and orbitals. A nested call re-enters procedures of the library that are still running, which Fortran only permits for procedures compiled for recursion, and a concurrent call needs their local variables on its own thread's stack. The library then has to be built with `-frecursive` for gfortran (implied by `-fopenmp`) or `-recursive` for Intel:
+The library keeps no state of its own between calls, so a solver or stability check call can be nested inside a callback function of another call, or run concurrently with another call in a different thread, as long as each call is given its own state record and, where an extension factory wired the solver settings, its own settings object, since these own the extension object a call works with. The same holds for calculations with extensions, whose factories create a new object for every call, see [Optional Extensions](#optional-extensions), as long as each calculation has its own solver settings, state record and orbitals. A nested call re-enters procedures of the library that are still running, which Fortran only permits for procedures compiled for recursion, and a concurrent call needs their local variables on its own thread's stack. The library then has to be built with `-frecursive` for gfortran (implied by `-fopenmp`) or `-recursive` for Intel:
 
 ```sh
 cmake .. -DCMAKE_Fortran_FLAGS=-frecursive                  # Fortran or C
@@ -110,7 +110,7 @@ The optimization process is initiated by calling a `solver` subroutine. This rou
   - Receives the host context as its last argument.
 - **`n_param`** (integer): Specifies the number of parameters to be optimized.
 - **`error`** (integer): An integer code indicating the success or failure of the solver. The error code structure is explained below.
-- **`settings`** (settings_type, optional): Settings object which controls optional arguments as described below. The solver only reads it. Without it, the default settings are used.
+- **`settings`** (solver_settings_type, optional): Settings object which controls optional arguments as described below. The solver only reads it. Without it, the default settings are used.
 - **`state`** (solver_state_type, optional): Record that the solver keeps up to date during the optimization and that holds the final state of the optimization once the solver returns, as described below.
 
 ---
@@ -148,7 +148,7 @@ print *, "Number of orbital updates:", state%n_update_orbs
 
 - Callback function pointers (`update_orbs_funptr`, `obj_func_funptr`) point to existing implementations elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
-- A declared settings object holds the default settings, which can be overridden (here, `conv_tol` and `n_macro`); assigning `solver_settings_type()` resets an object to them.
+- A declared settings object holds the default settings, which can be overridden (here, `conv_tol`, `n_macro` and `subsystem_solver`); assigning `solver_settings_type()` resets an object to them.
 - `host_data` is a variable of any type declared with the `target` attribute. Every callback function receives it as its last argument, declared as `class(*), intent(in), pointer :: context`, and recovers its own type with `select type`. The `intent(in)` applies to the pointer rather than the data, so a callback function may modify `host_data` but not point `context` elsewhere. Leaving `settings%context` unset is fine; the callback functions then receive an unassociated pointer.
 - Finally, the `solver` is called with the callback functions, the settings and a state record. Both of these are optional: without settings, the default settings are used, and the state is only needed to read it.
 - After the call, `state` holds the final state of the optimization (here, the number of orbital updates `n_update_orbs`), see [Output](#output). The settings are left unchanged.
@@ -189,7 +189,7 @@ printf("Number of orbital updates: %lld\n", (long long)state.n_update_orbs);
 
 - Callback function pointers (`update_orbs_funptr`, `obj_func_funptr`) point to existing implementations elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
-- Solver settings are initialized via a small helper function `solver_settings_init()`, which returns a struct with default values. Individual settings (here, `conv_tol` and `n_macro`) can then be overridden.
+- Solver settings are initialized via a small helper function `solver_settings_init()`, which returns a struct with default values. Individual settings (here, `conv_tol`, `n_macro` and `subsystem_solver`) can then be overridden.
 - `host_data` is any host object. Every callback function receives `&host_data` as its `void *context` argument and casts it back. Leaving `settings.context` as `NULL` is fine; the callback functions then receive `NULL`.
 - Finally, the `solver` is called with the callback functions and pointers to the settings and to a state struct, and directly returns an error code in typical C fashion. Either pointer may be `NULL`: without settings, the default settings are used, and without a state struct, none is returned. Since the host context is a setting, a host that needs one passes settings.
 - After the call, `state` holds the final state of the optimization (here, `n_update_orbs`), also after an error, see [Output](#output). The state struct needs no initialization, and the settings are left unchanged.
@@ -219,7 +219,7 @@ print(f"Number of orbital updates: {state.n_update_orbs}")
 
 - Callback functions (`update_orbs`, `obj_func`) are defined elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
-- Solver settings are initialized via the `SolverSettings` class, which returns an object with default values; individual settings (here, `conv_tol`, and `n_macro`) can then be overridden.
+- Solver settings are initialized via the `SolverSettings` class, which returns an object with default values; individual settings (here, `conv_tol`, `n_macro` and `subsystem_solver`) can then be overridden.
 - There is no `context` setting in Python. Any callable works as a callback function, so a closure, a bound method or a `functools.partial` already carries whatever host data the callback function needs.
 - Finally, the `solver` is called with the callback functions, the settings and a state object, and errors can be caught in pythonic fashion in the form of a `RuntimeError`. The settings and the state are optional: without settings, the default settings are used, and the state is only needed to read it.
 - After the call, `state` holds the final state of the optimization (here, `n_update_orbs`), see [Output](#output), whose fields are read-only attributes. The settings are left unchanged.
@@ -227,10 +227,10 @@ print(f"Number of orbital updates: {state.n_update_orbs}")
 ### Optional Settings
 The optimization process can be fine-tuned using the following settings:
 
-- **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the Davidson-family subsystem solvers to approximate `(H - mu * I)^-1`; `mu` legitimately ranges over any real value, including exactly `0.0`, so `precond` is not guaranteed to be positive definite (e.g. near a saddle point). Receives the host context as its last argument.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). The Davidson iterations of the Davidson-family subsystem solvers use it to approximate `(H - mu * I)^-1`, also at `mu = 0`, while their Jacobi-Davidson iterations do not call it; `mu` legitimately ranges over any real value, so `precond` is not guaranteed to be positive definite (e.g. near a saddle point). The `"tcg"` and `"gltr"` subsystem solvers use `precond_pd` instead. Receives the host context as its last argument.
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for optimization using non-redundant parameters. When this is used, all other passed routines (`update_orbs`, `hess_x`, `precond`, and `precond_pd`) must be self-projecting. Receives the host context as its last argument.
 - **`precond_pd`** (subroutine): Applies a positive-definite preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Used by the `"tcg"` and `"gltr"` subsystem solvers to define the ellipsoidal trust-region metric (see `trust_region_shape` below); unlike `precond`, this callback takes no level shift and must always return a positive-definite result. Receives the host context as its last argument.
-- **`get_extra_trial_vectors`** (subroutine): Returns extra trial vectors that seed the leading part of the initial trial space, written in-place to the provided matrix, whose column count is `n_extra_trial_vectors` and is passed to the callback itself by the C and Python interfaces, since those only receive a flat pointer. In Python, the matrix holds one trial vector per row instead. The vectors do not need to be orthonormalized or projected, and a vanishing column is dropped, which is how the callback signals that it has no vector to contribute for that slot. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions. Receives the host context as its last argument.
+- **`get_extra_trial_vectors`** (subroutine): Returns extra trial vectors that seed the leading part of the initial trial space of the Davidson-family subsystem solvers, written in-place to the provided matrix, whose column count is `n_extra_trial_vectors` and is passed to the callback itself by the C and Python interfaces, since those only receive a flat pointer. In Python, the matrix holds one trial vector per row instead. The vectors do not need to be orthonormalized or projected, and a vanishing column is dropped, which is how the callback signals that it has no vector to contribute for that slot. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions. Receives the host context as its last argument.
 - **`conv_check`** (function): Returns whether the optimization has converged due to some supplied convergence criterion, which replaces the criterion on the RMS gradient (`conv_tol`). A point the solver reaches by a step along an unstable mode does not count as converged, whatever the check returns. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions. Receives the host context as its last argument.
 - **`stability_hess_x`** (subroutine): Applies a different Hessian linear transformation to a trial vector for the stability check than the one `update_orbs` returns for the optimization, and returns an integer error code (0 for success, positive integers < 100 for errors). Intended for optimization with an approximate Hessian, where the stability of a converged solution has to be decided with the exact Hessian. Receives the host context as its last argument.
 - **`stability`** (boolean): Determines whether a stability check is performed upon convergence. The solver checks the stability of a starting point that is already converged and of a point with an exactly vanishing gradient in any case. From an unstable point, it steps along the unstable mode until the gradient RMS of the quadratic model is ten times the larger of the current one and `conv_tol`, or by the trust radius if both vanish or the step would be longer, and does not take the point it reaches as converged.
@@ -247,7 +247,7 @@ The optimization process can be fine-tuned using the following settings:
   - `"gltr"`: generalized Lanczos trust region method.
 - **`conv_tol`** (real): Specifies the convergence criterion for the RMS gradient, which a custom `conv_check` replaces.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to initialize the micro iterations of the Davidson-family subsystem solvers.
-- **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors added alongside the gradient direction to initialize the micro iterations, on top of the `n_random_trial_vectors` random ones. These are taken from `get_extra_trial_vectors` when that callback is provided, and are otherwise unit vectors along the lowest Hessian diagonal elements, added only where those indicate negative curvature. Vectors that vanish or are linearly dependent on the gradient direction are dropped.
+- **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors added alongside the gradient direction to initialize the micro iterations of the Davidson-family subsystem solvers, on top of the `n_random_trial_vectors` random ones. These are taken from `get_extra_trial_vectors` when that callback is provided, and are otherwise unit vectors along the lowest Hessian diagonal elements, added only where those indicate negative curvature. Vectors that vanish or are linearly dependent on the gradient direction are dropped.
 - **`start_trust_radius`** (real): Initial trust radius. Defaults to 0.4 for a spherical and to 1.0 for an ellipsoidal trust region.
 - **`trust_region_shape`** (string): Shape of the trust region. The Davidson-family subsystem solvers only support a spherical trust region, so the shape is only a choice for the `"tcg"` and `"gltr"` subsystem solvers. It defaults to `"spherical"` for the Davidson-family solvers and to `"ellipsoidal"` for `"tcg"` and `"gltr"`; requesting `"ellipsoidal"` for a Davidson-family solver is an error. Options include:
   - `"ellipsoidal"`: the trust region is measured in the norm induced by the positive-definite preconditioner `precond_pd` (or, by default, shaped by the absolute value of the (approximate) Hessian diagonal). This also accelerates convergence of the underlying Krylov iteration.
@@ -293,7 +293,7 @@ A separate `stability_check` subroutine is available to verify whether the curre
   - Receives the host context as its last argument.
 - **`stable`** (boolean): Returns whether the current point is stable, i.e. whether the lowest Hessian eigenvalue is above the stability threshold `stability_thresh` (-1e-3 by default); a less negative eigenvalue is not distinguished from numerical noise, such as that of the integration grid of a density functional.
 - **`error`** (integer): An integer code indicating the success or failure of the stability check. The error code structure is explained below.
-- **`settings`** (settings_type, optional): Settings object which controls optional arguments as described below. The stability check only reads it. Without it, the default settings are used.
+- **`settings`** (stability_settings_type, optional): Settings object which controls optional arguments as described below. The stability check only reads it. Without it, the default settings are used.
 - **`state`** (stability_state_type, optional): Record that the stability check keeps up to date during its iterations and that holds its final state once it returns, as described below.
 - **`kappa`** (real array, optional): If provided, receives the normalized eigenvector of the lowest Hessian eigenvalue, written in-place, whether the current point is stable or not. At an unstable point (as can be checked from `stable`), this is the descent direction along the unstable mode.
 
@@ -334,7 +334,7 @@ print *, "Number of Hessian linear transformations:", state%n_hess_x
 
 - `hess_x_funptr` points to an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` is also assumed to be defined elsewhere.
-- A declared settings object holds the default settings, which can be overridden (here, `conv_tol` and `n_iter`); assigning `stability_settings_type()` resets an object to them.
+- A declared settings object holds the default settings, which can be overridden (here, `conv_tol`, `n_iter` and `diag_solver`); assigning `stability_settings_type()` resets an object to them.
 - `host_data` is a variable of any type declared with the `target` attribute. Every callback function receives it as its last argument, declared as `class(*), intent(in), pointer :: context`, and recovers its own type with `select type`. The `intent(in)` applies to the pointer rather than the data, so a callback function may modify `host_data` but not point `context` elsewhere. Leaving `settings%context` unset is fine; the callback functions then receive an unassociated pointer.
 - The `stable` logical output receives the result of the stability check.
 - The settings, the state and the lowest eigenvector `kappa` are optional: without settings, the default settings are used, and the others are only returned if provided.
@@ -383,7 +383,7 @@ printf("Number of Hessian linear transformations: %lld\n", (long long)state.n_he
 - `hess_x_funptr` points to an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` and `h_diag` are assumed to be defined elsewhere.
 - `host_data` is any host object. Every callback function receives `&host_data` as its `void *context` argument and casts it back. Leaving `settings.context` as `NULL` is fine; the callback functions then receive `NULL`.
-- Stability settings are initialized via a small helper function `stability_settings_init()`, which returns a struct with default values; individual settings (here, `conv_tol` and `n_iter`) can then be overridden.
+- Stability settings are initialized via a small helper function `stability_settings_init()`, which returns a struct with default values; individual settings (here, `conv_tol`, `n_iter` and `diag_solver`) can then be overridden.
 - The `stable` output receives the result of the stability check which directly returns an error code in typical C fashion.
 - `kappa` receives the lowest eigenvector and can be `NULL` to skip it. So can `state`, and `settings` can be `NULL` to use the default settings.
 - After the call, `state` holds the final state of the stability check (here, the lowest eigenvalue `min_eigval` and `n_hess_x`), also after an error, see [Output](#output-1). The state struct needs no initialization, and the settings are left unchanged.
@@ -393,6 +393,7 @@ printf("Number of Hessian linear transformations: %lld\n", (long long)state.n_he
 The following Python snippet demonstrates the equivalent usage through the Python interface:
 
 ```python
+import numpy as np
 from pyopentrustregion import StabilitySettings, StabilityState, stability_check
 
 # initialize settings and state
@@ -418,7 +419,7 @@ print(f"Number of Hessian linear transformations: {state.n_hess_x}")
 
 - `hess_x` is an existing Hessian-vector product implementation elsewhere in the program.
 - `n_param` and `h_diag` are assumed to be defined elsewhere.
-- Stability settings are initialized via the `StabilitySettings` class, which returns an object with default values; individual settings (here, `conv_tol`) can then be overridden.
+- Stability settings are initialized via the `StabilitySettings` class, which returns an object with default values; individual settings (here, `conv_tol`, `n_iter` and `diag_solver`) can then be overridden.
 - There is no `context` setting in Python. Any callable works as a callback function, so a closure, a bound method or a `functools.partial` already carries whatever host data the callback function needs.
 - The `stable` output receives the result of the stability check and errors can be caught in pythonic fashion in the form of a `RuntimeError`.
 - The lowest eigenvector is written into `kappa` if it is provided.
@@ -428,7 +429,7 @@ print(f"Number of Hessian linear transformations: {state.n_hess_x}")
 ### Optional Settings
 The stability check can be fine-tuned using the following settings:
 
-- **`precond`** (subroutine): Applies a preconditioner to a residual vector. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context as its last argument.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`, approximating `(H - mu * I)^-1`; the Davidson iterations of the stability check pass `stability_thresh` as `mu`, while its Jacobi-Davidson iterations do not call it. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context as its last argument.
 - **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x` and `precond`) must be self-projecting. Receives the host context as its last argument.
 - **`conv_check`** (function): Returns whether the stability check has converged due to some supplied convergence criterion, which replaces the criterion on the RMS residual (`conv_tol`) and `stop_on_instability`. It has the same arguments as the convergence check of the solver and can read the `state` passed to `stability_check`, or, for the internal stability check, from `stability_state` of the state passed to `solver`, so a host that supplies it has to pass a state. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions. Receives the host context as its last argument.
 - **`approx_hess_x`** (subroutine): Applies an approximate Hessian linear transformation to a trial vector and returns an integer error code (0 for success, positive integers < 100 for errors). Used solely to obtain the non-random starting vectors counted by `n_extra_trial_vectors`, which warm start the Davidson iterations. Has to be set explicitly, and only makes sense for a Hessian that really is approximate, since the stability check would otherwise be seeded with a converged eigenpair of the very operator it diagonalizes and report whichever eigenvalue it was handed. Receives the host context as its last argument.
@@ -446,7 +447,7 @@ The stability check can be fine-tuned using the following settings:
 - **`jacobi_davidson_start`** (integer): Number of iterations after which the diagonalization solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors.
-- **`logger`** (function): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
+- **`logger`** (subroutine): Accepts a log message. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of every callback function so that the host does not have to reach its own state through module-level variables. The library never inspects it, and `stability_check` uses it only during the call. Nested stability check settings are the exception: once an extension factory has wired the solver settings that hold them, their context stays in use until the extension is released. Two stability checks can therefore run at the same time, or be nested inside one another, as long as each is given its own state record. This requires a suitable build, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
 
 ### Output

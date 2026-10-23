@@ -639,6 +639,8 @@ contains
 
     end subroutine discarding_logger
 
+    ! 6D Hartmann function definition
+
     function hartmann6d_func(vars) result(f)
         !
         ! this function defines the Hartmann 6D function
@@ -727,6 +729,26 @@ contains
         if (.not. associated(state)) error = missing_context_error
 
     end function resolve_hartmann6d_context
+
+    logical function inject_fault(context, callback)
+        !
+        ! this function counts a call of a callback function in a fault injection
+        ! context and returns whether this call has to fail
+        !
+        class(*), intent(in), pointer :: context
+        integer(ip), intent(in) :: callback
+
+        ! count call and determine whether it fails
+        inject_fault = .false.
+        if (.not. associated(context)) return
+        select type (context)
+        class is (hartmann6d_fault_context_type)
+            context%n_callback_calls(callback) = context%n_callback_calls(callback) + 1
+            inject_fault = callback == context%fault_callback .and. &
+                           context%n_callback_calls(callback) == context%fault_call
+        end select
+
+    end function inject_fault
 
     subroutine hess_x_fun(x, hess_x, error, context)
         !
@@ -830,43 +852,6 @@ contains
 
     end subroutine approx_hess_x_fun
 
-    function obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the Hartmann 6D
-        ! function
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        class(hartmann6d_context_type), pointer :: state
-        real(rp) :: func
-
-        ! check host context
-        call check_host_context(context)
-
-        ! initialize result in case the test problem state is missing
-        func = 0.0_rp
-
-        ! get Hartmann 6D state
-        state => resolve_hartmann6d_context(context, error)
-        if (error /= 0) return
-
-        ! count call
-        state%n_obj_func_calls = state%n_obj_func_calls + 1
-
-        ! record whether function is evaluated without displacement
-        select type (state)
-        class is (hartmann6d_recording_context_type)
-            if (maxval(abs(delta_vars)) <= 0.0_rp) state%obj_func_zero_step = .true.
-        end select
-
-        func = hartmann6d_func(state%vars + delta_vars)
-
-    end function obj_func
-
     subroutine update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, &
                            context)
         !
@@ -946,6 +931,43 @@ contains
 
     end subroutine update_orbs_hess_x_once
 
+    function obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes the objective function evaluation for the Hartmann 6D
+        ! function
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(hartmann6d_context_type), pointer :: state
+        real(rp) :: func
+
+        ! check host context
+        call check_host_context(context)
+
+        ! initialize result in case the test problem state is missing
+        func = 0.0_rp
+
+        ! get Hartmann 6D state
+        state => resolve_hartmann6d_context(context, error)
+        if (error /= 0) return
+
+        ! count call
+        state%n_obj_func_calls = state%n_obj_func_calls + 1
+
+        ! record whether function is evaluated without displacement
+        select type (state)
+        class is (hartmann6d_recording_context_type)
+            if (maxval(abs(delta_vars)) <= 0.0_rp) state%obj_func_zero_step = .true.
+        end select
+
+        func = hartmann6d_func(state%vars + delta_vars)
+
+    end function obj_func
+
     function mock_conv_check_without_update(error, context) result(converged)
         !
         ! this function describes a convergence check which only passes in a macro
@@ -1000,32 +1022,6 @@ contains
 
     end subroutine settingless_hess_x
 
-    function settingless_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the Hartmann
-        ! 6D function of a solver called without settings, which reaches the variables
-        ! through the module context since it receives no host context
-        !
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        class(*), pointer :: module_context
-
-        ! check that the solver handed no host context
-        if (associated(context)) then
-            func = 0.0_rp
-            error = unexpected_context_error
-            return
-        end if
-
-        ! evaluate the function with the module context
-        module_context => settingless_context
-        func = obj_func(delta_vars, error, module_context)
-
-    end function settingless_obj_func
-
     subroutine settingless_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                        error, context)
         !
@@ -1059,25 +1055,31 @@ contains
 
     end subroutine settingless_update_orbs
 
-    logical function inject_fault(context, callback)
+    function settingless_obj_func(delta_vars, error, context) result(func)
         !
-        ! this function counts a call of a callback function in a fault injection
-        ! context and returns whether this call has to fail
+        ! this function describes the objective function evaluation for the Hartmann
+        ! 6D function of a solver called without settings, which reaches the variables
+        ! through the module context since it receives no host context
         !
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
-        integer(ip), intent(in) :: callback
+        real(rp) :: func
 
-        ! count call and determine whether it fails
-        inject_fault = .false.
-        if (.not. associated(context)) return
-        select type (context)
-        class is (hartmann6d_fault_context_type)
-            context%n_callback_calls(callback) = context%n_callback_calls(callback) + 1
-            inject_fault = callback == context%fault_callback .and. &
-                           context%n_callback_calls(callback) == context%fault_call
-        end select
+        class(*), pointer :: module_context
 
-    end function inject_fault
+        ! check that the solver handed no host context
+        if (associated(context)) then
+            func = 0.0_rp
+            error = unexpected_context_error
+            return
+        end if
+
+        ! evaluate the function with the module context
+        module_context => settingless_context
+        func = obj_func(delta_vars, error, module_context)
+
+    end function settingless_obj_func
 
     subroutine faulty_hess_x(x, hess_x, error, context)
         !
@@ -1097,6 +1099,81 @@ contains
         if (inject_fault(context, fault_hess_x)) error = 1
 
     end subroutine faulty_hess_x
+
+    subroutine faulty_stability_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes the separate Hessian linear transformation of the
+        ! stability check for the Hartmann 6D function, which is counted like the one
+        ! of the solver, into which a fault can be injected
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! perform Hessian linear transformation
+        call hess_x_fun(x, hess_x, error, context)
+        if (error /= 0) return
+
+        ! inject fault
+        if (inject_fault(context, fault_stability_hess_x)) error = 1
+
+    end subroutine faulty_stability_hess_x
+
+    subroutine faulty_approx_hess_x(x, hess_x, error, context)
+        !
+        ! this subroutine describes an approximate Hessian linear transformation for
+        ! the Hartmann 6D function, which is not counted as a Hessian linear
+        ! transformation, into which a fault can be injected
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(hartmann6d_context_type), pointer :: state
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get Hartmann 6D state
+        hess_x = 0.0_rp
+        state => resolve_hartmann6d_context(context, error)
+        if (error /= 0) return
+
+        ! apply the exact Hessian without counting it and inject fault
+        hess_x = matmul(state%hess, x)
+        if (inject_fault(context, fault_approx_hess_x)) error = 1
+
+    end subroutine faulty_approx_hess_x
+
+    subroutine faulty_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                  error, context)
+        !
+        ! this subroutine describes the orbital update of the Hartmann 6D function into
+        ! which a fault can be injected, and which returns the Hessian linear
+        ! transformation into which a fault can be injected
+        !
+        use opentrustregion, only: hess_x_type
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! perform orbital update
+        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, context)
+        if (error /= 0) return
+        hess_x_funptr => faulty_hess_x
+
+        ! inject fault
+        if (inject_fault(context, fault_update_orbs)) error = 1
+
+    end subroutine faulty_update_orbs
 
     function faulty_obj_func(delta_vars, error, context) result(func)
         !
@@ -1140,32 +1217,6 @@ contains
 
     end function first_step_rejecting_obj_func
 
-    subroutine faulty_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
-                                  error, context)
-        !
-        ! this subroutine describes the orbital update of the Hartmann 6D function into
-        ! which a fault can be injected, and which returns the Hessian linear
-        ! transformation into which a fault can be injected
-        !
-        use opentrustregion, only: hess_x_type
-
-        real(rp), intent(in), target :: delta_vars(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:), h_diag(:)
-        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! perform orbital update
-        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, context)
-        if (error /= 0) return
-        hess_x_funptr => faulty_hess_x
-
-        ! inject fault
-        if (inject_fault(context, fault_update_orbs)) error = 1
-
-    end subroutine faulty_update_orbs
-
     subroutine faulty_precond(residual, mu, precond_residual, error, context)
         !
         ! this subroutine describes the identity preconditioner into which a fault can
@@ -1185,6 +1236,28 @@ contains
         if (inject_fault(context, fault_precond)) error = 1
 
     end subroutine faulty_precond
+
+    subroutine faulty_precond_pd(residual, precond_residual, error, context)
+        !
+        ! this subroutine describes an identity positive-definite preconditioner into
+        ! which a fault can be injected
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        ! apply preconditioner and inject fault
+        precond_residual = residual
+        error = 0
+        if (inject_fault(context, fault_precond_pd)) error = 1
+
+    end subroutine faulty_precond_pd
 
     subroutine faulty_project(vector, error, context)
         !
@@ -1239,95 +1312,6 @@ contains
 
     end function faulty_conv_check
 
-    subroutine faulty_precond_pd(residual, precond_residual, error, context)
-        !
-        ! this subroutine describes an identity positive-definite preconditioner into
-        ! which a fault can be injected
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! apply preconditioner and inject fault
-        precond_residual = residual
-        error = 0
-        if (inject_fault(context, fault_precond_pd)) error = 1
-
-    end subroutine faulty_precond_pd
-
-    subroutine faulty_get_extra_trial_vectors(trial_vectors, error, context)
-        !
-        ! this subroutine describes the extra trial vector function which returns
-        ! scaled unit vectors into which a fault can be injected
-        !
-        real(rp), intent(out), target :: trial_vectors(:, :)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! return extra trial vectors
-        call mock_get_extra_trial_vectors(trial_vectors, error, context)
-        if (error /= 0) return
-
-        ! inject fault
-        if (inject_fault(context, fault_get_extra_trial_vectors)) error = 1
-
-    end subroutine faulty_get_extra_trial_vectors
-
-    subroutine faulty_stability_hess_x(x, hess_x, error, context)
-        !
-        ! this subroutine describes the separate Hessian linear transformation of the
-        ! stability check for the Hartmann 6D function, which is counted like the one
-        ! of the solver, into which a fault can be injected
-        !
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! perform Hessian linear transformation
-        call hess_x_fun(x, hess_x, error, context)
-        if (error /= 0) return
-
-        ! inject fault
-        if (inject_fault(context, fault_stability_hess_x)) error = 1
-
-    end subroutine faulty_stability_hess_x
-
-    subroutine faulty_approx_hess_x(x, hess_x, error, context)
-        !
-        ! this subroutine describes an approximate Hessian linear transformation for
-        ! the Hartmann 6D function, which is not counted as a Hessian linear
-        ! transformation, into which a fault can be injected
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        class(hartmann6d_context_type), pointer :: state
-
-        ! check host context
-        call check_host_context(context)
-
-        ! get Hartmann 6D state
-        hess_x = 0.0_rp
-        state => resolve_hartmann6d_context(context, error)
-        if (error /= 0) return
-
-        ! apply the exact Hessian without counting it and inject fault
-        hess_x = matmul(state%hess, x)
-        if (inject_fault(context, fault_approx_hess_x)) error = 1
-
-    end subroutine faulty_approx_hess_x
-
     function faulty_stability_conv_check(error, context) result(converged)
         !
         ! this function describes the convergence check of the stability check which
@@ -1346,6 +1330,24 @@ contains
         if (inject_fault(context, fault_stability_conv_check)) error = 1
 
     end function faulty_stability_conv_check
+
+    subroutine faulty_get_extra_trial_vectors(trial_vectors, error, context)
+        !
+        ! this subroutine describes the extra trial vector function which returns
+        ! scaled unit vectors into which a fault can be injected
+        !
+        real(rp), intent(out), target :: trial_vectors(:, :)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! return extra trial vectors
+        call mock_get_extra_trial_vectors(trial_vectors, error, context)
+        if (error /= 0) return
+
+        ! inject fault
+        if (inject_fault(context, fault_get_extra_trial_vectors)) error = 1
+
+    end subroutine faulty_get_extra_trial_vectors
 
     function resolve_quadratic_context(context, error) result(state)
         !
@@ -1589,6 +1591,8 @@ contains
 
     end function refresh_obj_func
 
+    ! double well function definition
+
     function double_well_func(vars) result(f)
         !
         ! this function defines the double well function
@@ -1672,35 +1676,6 @@ contains
 
     end subroutine failing_double_well_hess_x
 
-    function double_well_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes the objective function evaluation for the double
-        ! well function
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        class(double_well_context_type), pointer :: state
-
-        ! initialize result in case the double well state is missing
-        func = 0.0_rp
-
-        ! check host context
-        call check_host_context(context)
-
-        ! get double well state
-        state => resolve_double_well_context(context, error)
-        if (error /= 0) return
-
-        state%n_obj_func_calls = state%n_obj_func_calls + 1
-        func = double_well_func(state%vars + delta_vars)
-
-    end function double_well_obj_func
-
     subroutine double_well_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                        error, context)
         !
@@ -1739,6 +1714,70 @@ contains
 
     end subroutine double_well_update_orbs
 
+    function double_well_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes the objective function evaluation for the double
+        ! well function
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        class(double_well_context_type), pointer :: state
+
+        ! initialize result in case the double well state is missing
+        func = 0.0_rp
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get double well state
+        state => resolve_double_well_context(context, error)
+        if (error /= 0) return
+
+        state%n_obj_func_calls = state%n_obj_func_calls + 1
+        func = double_well_func(state%vars + delta_vars)
+
+    end function double_well_obj_func
+
+    function double_well_conv_check(error, context) result(converged)
+        !
+        ! this function describes a convergence check of the double well function
+        ! which, like a host's check of the change of the objective function, reports
+        ! convergence once the objective function has changed by less than 1e-8 since
+        ! the previous check, so that it can not pass at a stationary point the solver
+        ! has just reached
+        !
+        use test_reference, only: check_host_context
+
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        logical :: converged
+
+        class(double_well_context_type), pointer :: state
+        real(rp) :: func
+
+        ! check host context
+        call check_host_context(context)
+
+        ! initialize result in case the double well state is missing
+        converged = .false.
+
+        ! get double well state
+        state => resolve_double_well_context(context, error)
+        if (error /= 0) return
+
+        ! compare the objective function against that of the previous check and keep
+        ! it for the next check
+        func = double_well_func(state%vars)
+        converged = abs(func - state%last_conv_check_func) < 1e-8_rp
+        state%last_conv_check_func = func
+
+    end function double_well_conv_check
+
     subroutine state_reading_hess_x(x, hess_x, error, context)
         !
         ! this subroutine describes the Hessian linear transformation of the double
@@ -1764,37 +1803,6 @@ contains
         end select
 
     end subroutine state_reading_hess_x
-
-    subroutine state_reading_precond_pd(residual, precond_residual, error, context)
-        !
-        ! this subroutine describes a positive-definite preconditioner of the double
-        ! well function which keeps the residual and records the solver state it reads
-        ! through the pointer in its context
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: residual(:)
-        real(rp), intent(out), target :: precond_residual(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        ! check host context
-        call check_host_context(context)
-
-        ! keep residual
-        precond_residual = residual
-        error = 0
-
-        ! record the state
-        select type (context)
-        class is (double_well_state_context_type)
-            if (.not. allocated(context%seen_states)) &
-                allocate(context%seen_states(0), context%step_norms(0), &
-                         context%precond_step_norms(0))
-            context%seen_states = [context%seen_states, context%state]
-        end select
-
-    end subroutine state_reading_precond_pd
 
     subroutine state_reading_update_orbs(delta_vars, func, grad, h_diag, &
                                          hess_x_funptr, error, context)
@@ -1835,40 +1843,36 @@ contains
 
     end subroutine state_reading_update_orbs
 
-    function double_well_conv_check(error, context) result(converged)
+    subroutine state_reading_precond_pd(residual, precond_residual, error, context)
         !
-        ! this function describes a convergence check of the double well function
-        ! which, like a host's check of the change of the objective function, reports
-        ! convergence once the objective function has changed by less than 1e-8 since
-        ! the previous check, so that it can not pass at a stationary point the solver
-        ! has just reached
+        ! this subroutine describes a positive-definite preconditioner of the double
+        ! well function which keeps the residual and records the solver state it reads
+        ! through the pointer in its context
         !
         use test_reference, only: check_host_context
 
+        real(rp), intent(in), target :: residual(:)
+        real(rp), intent(out), target :: precond_residual(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
-        logical :: converged
-
-        class(double_well_context_type), pointer :: state
-        real(rp) :: func
 
         ! check host context
         call check_host_context(context)
 
-        ! initialize result in case the double well state is missing
-        converged = .false.
+        ! keep residual
+        precond_residual = residual
+        error = 0
 
-        ! get double well state
-        state => resolve_double_well_context(context, error)
-        if (error /= 0) return
+        ! record the state
+        select type (context)
+        class is (double_well_state_context_type)
+            if (.not. allocated(context%seen_states)) &
+                allocate(context%seen_states(0), context%step_norms(0), &
+                         context%precond_step_norms(0))
+            context%seen_states = [context%seen_states, context%state]
+        end select
 
-        ! compare the objective function against that of the previous check and keep
-        ! it for the next check
-        func = double_well_func(state%vars)
-        converged = abs(func - state%last_conv_check_func) < 1e-8_rp
-        state%last_conv_check_func = func
-
-    end function double_well_conv_check
+    end subroutine state_reading_precond_pd
 
     function resolve_half_step_context(context, error) result(state)
         !
@@ -1895,35 +1899,6 @@ contains
         if (.not. associated(state)) error = missing_context_error
 
     end function resolve_half_step_context
-
-    function half_step_obj_func(delta_vars, error, context) result(func)
-        !
-        ! this function describes an objective function which evaluates the quadratic
-        ! model 1/2 |x|^2 at half the displacement, so that its minimum along a step
-        ! lies at twice the Newton step of the model
-        !
-        use test_reference, only: check_host_context
-
-        real(rp), intent(in), target :: delta_vars(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        class(half_step_context_type), pointer :: state
-
-        ! initialize result in case the half step model state is missing
-        func = 0.0_rp
-
-        ! check host context
-        call check_host_context(context)
-
-        ! get half step model state
-        state => resolve_half_step_context(context, error)
-        if (error /= 0) return
-
-        func = 0.5_rp * sum((state%vars + 0.5_rp * delta_vars)**2)
-
-    end function half_step_obj_func
 
     subroutine half_step_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
                                      error, context)
@@ -1963,6 +1938,35 @@ contains
         hess_x_funptr => identity_hess_x
 
     end subroutine half_step_update_orbs
+
+    function half_step_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes an objective function which evaluates the quadratic
+        ! model 1/2 |x|^2 at half the displacement, so that its minimum along a step
+        ! lies at twice the Newton step of the model
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        class(half_step_context_type), pointer :: state
+
+        ! initialize result in case the half step model state is missing
+        func = 0.0_rp
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get half step model state
+        state => resolve_half_step_context(context, error)
+        if (error /= 0) return
+
+        func = 0.5_rp * sum((state%vars + 0.5_rp * delta_vars)**2)
+
+    end function half_step_obj_func
 
     function bracket_obj_func(delta_vars, error, context) result(func)
         !
@@ -2683,18 +2687,21 @@ contains
         ! force the maximum precision heuristic to trigger by requesting a convergence
         ! tolerance that floating-point noise in the gradient can never satisfy, with
         ! the line search, which has to be skipped for the step that is not taken once
-        ! maximum precision is reached
-        context%vars = near_minimum
+        ! maximum precision is reached, starting at the minimum, where the change the
+        ! step of the first subproblem predicts already lies below the resolution of
+        ! the objective function, so that no line search precedes maximum precision
+        context%vars = minimum1
         settings = solver_settings_type()
         settings%context => context
         settings%conv_tol = 0.0_rp
-        settings%subsystem_solver = "tcg"
         settings%line_search = .true.
 
         ! run solver, check that it still returns without error while flagging this in
-        ! the state, that the step that is not taken has no size and that the reported
-        ! number of orbital updates agrees with the calls
+        ! the state, that the line search, which first evaluates the objective function
+        ! without a step, is not performed, that the step that is not taken has no size
+        ! and that the reported number of orbital updates agrees with the calls
         context%n_update_orbs_calls = 0
+        context%obj_func_zero_step = .false.
         call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings, &
                     state)
         if (error /= 0) then
@@ -2707,9 +2714,14 @@ contains
                 "precision was reached when convergence tolerance could not be met."
             test_solver = .false.
         end if
-        if (abs(state%step_size) > 0.0_rp) then
+        if (context%obj_func_zero_step) then
             write(stderr, *) "test_solver failed: Line search performed for the "// &
                 "step not taken once maximum precision is reached."
+            test_solver = .false.
+        end if
+        if (abs(state%step_size) > 0.0_rp) then
+            write(stderr, *) "test_solver failed: Step not taken once maximum "// &
+                "precision is reached has a size."
             test_solver = .false.
         end if
         if (.not. check_call_counts( &

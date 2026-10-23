@@ -42,15 +42,15 @@ module opentrustregion_mock
     type(stability_settings_type) :: received_stability_settings
     type(c_callbacks_type) :: received_callbacks, received_stability_callbacks
 
-    ! whether the mock stability check received the optional direction, so that a test
-    ! can check that the C wrapper passes it on only where the caller provides memory
-    ! for it
-    logical :: kappa_received
-
     ! whether the callback bundles the mock solver and stability check received refer
     ! to the state record they were given, so that a test can check that the C
     ! wrappers copy this record into the host's
     logical :: solver_state_bundled, stability_state_bundled
+
+    ! whether the mock stability check received the optional direction, so that a test
+    ! can check that the C wrapper passes it on only where the caller provides memory
+    ! for it
+    logical :: kappa_received
 
     ! create function pointers to ensure that routines comply with interface
     procedure(solver), pointer :: mock_solver_ptr => mock_solver

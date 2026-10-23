@@ -4074,7 +4074,7 @@ contains
             return
         end if
 
-        ! check whether projection functions is passed
+        ! check whether projection function is passed
         if (associated(settings%project)) &
             call settings%log(project_warning_msg, verbosity_warning)
 

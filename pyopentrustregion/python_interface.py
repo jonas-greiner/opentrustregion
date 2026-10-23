@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import warnings
 from pathlib import Path
 import numpy as np
@@ -706,12 +707,13 @@ class Settings:
         else:
             self.settings_c = settings_c
 
-        # the callables assigned to the callback functions, and the number of
-        # parameters and the exception collector of the current call into the library,
-        # which the interfaces of the callback functions read when they are called
+        # the callables assigned to the callback functions, and, for every thread, the
+        # number of parameters and the exception collector of its current call into
+        # the library, which the interfaces of the callback functions read when they
+        # are called
         self._callables: Dict[str, Optional[Callable]] = {}
-        self._n_param: Optional[int] = None
-        self._exception: Dict[str, Exception] = {}
+        self._call = threading.local()
+        self._no_call_exception: Dict[str, Exception] = {}
 
         # build the C callback function of every callback function once, which calls
         # the callable currently assigned to it, so that the C settings only change
@@ -726,13 +728,33 @@ class Settings:
             for name, callback in self._callbacks.items()
         }
 
+    @property
+    def _n_param(self) -> Optional[int]:
+        return getattr(self._call, "n_param", None)
+
+    @property
+    def _exception(self) -> Dict[str, Exception]:
+        return getattr(self._call, "exception", self._no_call_exception)
+
     def prepare_call(self, n_param: Optional[int], exception: Dict[str, Exception]):
         """
         this function hands the callback functions the number of parameters and the
-        exception collector of a call into the library
+        exception collector of a call into the library in the calling thread and
+        returns those of the call it interrupts, which the call restores when it
+        returns, so that calls nested in one another or running in different threads
+        can share the settings
         """
-        self._n_param = n_param
-        self._exception = exception
+        interrupted = (self._n_param, self._exception)
+        self._call.n_param = n_param
+        self._call.exception = exception
+        return interrupted
+
+    def restore_call(self, interrupted):
+        """
+        this function hands the callback functions the number of parameters and the
+        exception collector of the call a returning call interrupted
+        """
+        self._call.n_param, self._call.exception = interrupted
 
 
 class SolverSettings(Settings):
@@ -793,10 +815,22 @@ class SolverSettings(Settings):
         """
         this function hands the callback functions of the settings and of their
         nested stability check settings the number of parameters and the exception
-        collector of a call into the library
+        collector of a call into the library and returns those of the call it
+        interrupts
         """
-        super().prepare_call(n_param, exception)
-        self.stability_settings.prepare_call(n_param, exception)
+        return (
+            super().prepare_call(n_param, exception),
+            self.stability_settings.prepare_call(n_param, exception),
+        )
+
+    def restore_call(self, interrupted):
+        """
+        this function hands the callback functions of the settings and of their
+        nested stability check settings the number of parameters and the exception
+        collector of the call a returning call interrupted
+        """
+        super().restore_call(interrupted[0])
+        self.stability_settings.restore_call(interrupted[1])
 
 
 class StabilitySettings(Settings):
@@ -1042,9 +1076,10 @@ def solver(
     )
 
     # hand the callback functions of the settings the number of parameters and the
-    # exception collector of the call
+    # exception collector of the call, and those of the call it interrupts back when it
+    # returns
     if settings is not None:
-        settings.prepare_call(n_param, exception)
+        interrupted = settings.prepare_call(n_param, exception)
 
     # define result and argument types
     lib.solver.restype = c_int
@@ -1057,13 +1092,17 @@ def solver(
     ]
 
     # call Fortran function
-    error = lib.solver(
-        update_orbs_interface,
-        obj_func_interface,
-        n_param,
-        byref(settings.settings_c) if settings is not None else None,
-        byref(state.state_c) if state is not None else None,
-    )
+    try:
+        error = lib.solver(
+            update_orbs_interface,
+            obj_func_interface,
+            n_param,
+            byref(settings.settings_c) if settings is not None else None,
+            byref(state.state_c) if state is not None else None,
+        )
+    finally:
+        if settings is not None:
+            settings.restore_call(interrupted)
 
     raise_on_failure(error, exception, "solver")
 
@@ -1084,9 +1123,10 @@ def stability_check(
     hess_x_interface = hess_x_interface_type(HessXInterface(hess_x, n_param, exception))
 
     # hand the callback functions of the settings the number of parameters and the
-    # exception collector of the call
+    # exception collector of the call, and those of the call it interrupts back when it
+    # returns
     if settings is not None:
-        settings.prepare_call(n_param, exception)
+        interrupted = settings.prepare_call(n_param, exception)
 
     # define result and argument types
     lib.stability_check.restype = c_int
@@ -1104,15 +1144,19 @@ def stability_check(
     stable = c_bool(False)
 
     # call Fortran function
-    error = lib.stability_check(
-        h_diag.ctypes.data_as(POINTER(c_real)),
-        hess_x_interface,
-        n_param,
-        byref(stable),
-        byref(settings.settings_c) if settings is not None else None,
-        byref(state.state_c) if state is not None else None,
-        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
-    )
+    try:
+        error = lib.stability_check(
+            h_diag.ctypes.data_as(POINTER(c_real)),
+            hess_x_interface,
+            n_param,
+            byref(stable),
+            byref(settings.settings_c) if settings is not None else None,
+            byref(state.state_c) if state is not None else None,
+            kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
+        )
+    finally:
+        if settings is not None:
+            settings.restore_call(interrupted)
 
     raise_on_failure(error, exception, "stability check")
 

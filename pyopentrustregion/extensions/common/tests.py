@@ -318,8 +318,7 @@ def check_wired_solver_settings(
         hess_x[:] = 4 * x
 
     solver_settings.stability_hess_x = stability_hess_x
-    solver_settings._n_param = n_param
-    solver_settings._exception = {}
+    solver_settings.prepare_call(n_param, {})
     error = hess_x_interface_type(solver_settings.settings_c.stability_hess_x)(
         x.ctypes.data_as(POINTER(c_real)),
         hess_x.ctypes.data_as(POINTER(c_real)),

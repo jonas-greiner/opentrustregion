@@ -4,7 +4,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import sys
 import unittest
+from importlib.util import find_spec
+from pathlib import Path
+
+# check if pyopentrustregion is installed or import it from the source tree
+if find_spec("pyopentrustregion") is None:
+    sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 # load standard tests
 from pyopentrustregion.tests import (

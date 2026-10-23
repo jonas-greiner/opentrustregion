@@ -7,6 +7,7 @@
 import gc
 import os
 import sys
+import threading
 import unittest
 import warnings
 import weakref
@@ -31,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-# check if pyopentrustregion is installed or import module in same directory
+# check if pyopentrustregion is installed or import it from the source tree
 try:
     from pyopentrustregion import (
         SolverSettings,
@@ -44,7 +45,7 @@ try:
         c_real,
     )
 except ImportError:
-    sys.path.insert(0, str(Path(__file__).parent.absolute()))
+    sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
     from pyopentrustregion import (
         SolverSettings,
         StabilitySettings,
@@ -488,14 +489,29 @@ class PyInterfaceUnitTests(unittest.TestCase):
             )
 
         # call solver python interface with optional arguments, the result of the mock
-        # is cleared before and read right after the call, and keep the C settings to
-        # check that the calls leave them unchanged
+        # is cleared before and read right after the call, keep the C settings to check
+        # that the calls leave them unchanged, and hand the settings the number of
+        # parameters and the exception collector of a call this one interrupts, which
+        # the call has to hand back when it returns
         c_settings = bytes(settings.settings_c)
         interface_flag = c_bool.in_dll(lib, "test_solver_interface")
         interface_flag.value = False
         state = SolverState()
+        interrupted_exception: dict = {}
+        settings.prepare_call(n_param + 1, interrupted_exception)
         solver(mock_update_orbs, mock_obj_func, n_param, settings, state=state)
         interface_passed = interface_flag.value
+        call_restored = (
+            settings._n_param == n_param + 1
+            and settings._exception is interrupted_exception
+            and settings.stability_settings._n_param == n_param + 1
+            and settings.stability_settings._exception is interrupted_exception
+        )
+        if not call_restored:
+            print(
+                " test_solver_py_interface failed: Call data of the interrupted call "
+                "not restored."
+            )
 
         # check that the state is passed, which the mock fills with the reference
         # values
@@ -587,6 +603,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         self.assertTrue(
             interface_passed
+            and call_restored
             and state_passed
             and test_logger
             and callbacks_called
@@ -635,14 +652,35 @@ class PyInterfaceUnitTests(unittest.TestCase):
         kappa = np.zeros(n_param, dtype=np.float64)
 
         # call stability check python interface with optional arguments, the result of
-        # the mock is cleared before and read right after the call
+        # the mock is cleared before and read right after the call, check that the
+        # call leaves the C settings unchanged, and hand the settings the number of
+        # parameters and the exception collector of a call this one interrupts, which
+        # the call has to hand back when it returns
         interface_flag = c_bool.in_dll(lib, "test_stability_check_interface")
         interface_flag.value = False
         state = StabilityState()
+        c_settings = bytes(settings.settings_c)
+        interrupted_exception: dict = {}
+        settings.prepare_call(n_param + 1, interrupted_exception)
         stable = stability_check(
             h_diag, mock_hess_x, n_param, settings, kappa=kappa, state=state
         )
         interface_passed = interface_flag.value
+        c_settings_kept = bytes(settings.settings_c) == c_settings
+        if not c_settings_kept:
+            print(
+                " test_stability_check_py_interface failed: C settings changed by the "
+                "call."
+            )
+        call_restored = (
+            settings._n_param == n_param + 1
+            and settings._exception is interrupted_exception
+        )
+        if not call_restored:
+            print(
+                " test_stability_check_py_interface failed: Call data of the "
+                "interrupted call not restored."
+            )
 
         # check that the state is passed, which the mock fills with the reference
         # values
@@ -747,6 +785,8 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         self.assertTrue(
             interface_passed
+            and c_settings_kept
+            and call_restored
             and state_passed
             and test_logger
             and stable
@@ -1425,6 +1465,38 @@ class PyInterfaceUnitTests(unittest.TestCase):
                     )
                     test_passed = False
             setattr(case_settings.settings_c, name, None)
+
+        # the number of parameters and the exception collector of a call are held for
+        # the calling thread, so that a call in another thread does not see them, and
+        # restoring the call another call interrupted hands back its number of
+        # parameters and exception collector, also to the nested stability check
+        # settings
+        interrupted_exception: dict = {}
+        settings.prepare_call(n_param, interrupted_exception)
+        seen_in_thread = []
+        thread = threading.Thread(
+            target=lambda: seen_in_thread.append(settings._n_param)
+        )
+        thread.start()
+        thread.join()
+        if seen_in_thread != [None]:
+            print(
+                " test_solver_settings failed: Number of parameters of a call seen in "
+                "another thread."
+            )
+            test_passed = False
+        settings.restore_call(settings.prepare_call(n_param + 1, {}))
+        if (
+            settings._n_param != n_param
+            or settings._exception is not interrupted_exception
+            or settings.stability_settings._n_param != n_param
+            or settings.stability_settings._exception is not interrupted_exception
+        ):
+            print(
+                " test_solver_settings failed: Call data of the interrupted call not "
+                "restored."
+            )
+            test_passed = False
 
         # a keyword given as bytes, as read from a C struct, is stored as well
         settings.subsystem_solver = b"davidson_ah"
