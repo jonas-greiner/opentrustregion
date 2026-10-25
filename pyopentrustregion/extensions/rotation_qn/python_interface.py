@@ -75,7 +75,7 @@ class RotationQNSettings(Settings):
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_ROTATION_QN=ON' pip install ."
+            "pip install -C cmake.define.ENABLE_ROTATION_QN=ON ."
         )
 
     callback_fields = {

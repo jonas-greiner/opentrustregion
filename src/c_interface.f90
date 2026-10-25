@@ -546,6 +546,7 @@ contains
         real(c_rp), pointer :: kappa_c(:), grad_c(:), h_diag_c(:)
         type(c_funptr) :: hess_x_c_funptr
         integer(c_ip) :: error_c
+        type(c_callbacks_type), pointer :: stability_callbacks
 
         ! convert arguments to C kind
         if (rp == c_rp) then
@@ -560,7 +561,9 @@ contains
         end if
 
         ! call update_orbs C function and keep the Hessian linear transformation it
-        ! returns in the context
+        ! returns in the context, that of the internal stability check through a
+        ! pointer to its bundle, since gfortran 16 rejects a pointer assignment
+        ! through the associate name of the context
         hess_x_c_funptr = c_null_funptr
         select type (callbacks => context)
         class is (c_callbacks_type)
@@ -569,8 +572,10 @@ contains
                                             hess_x_c_funptr, callbacks%host_context)
             if (c_associated(hess_x_c_funptr)) then
                 call c_f_procpointer(cptr=hess_x_c_funptr, fptr=callbacks%hess_x)
-                if (associated(callbacks%stability)) &
-                    callbacks%stability%hess_x => callbacks%hess_x
+                if (associated(callbacks%stability)) then
+                    stability_callbacks => callbacks%stability
+                    stability_callbacks%hess_x => callbacks%hess_x
+                end if
             end if
         class default
             error_c = 1

@@ -59,7 +59,7 @@ class MOSettings(Settings):
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_MO=ON' pip install ."
+            "pip install -C cmake.define.ENABLE_MO=ON ."
         )
 
     callback_fields = {

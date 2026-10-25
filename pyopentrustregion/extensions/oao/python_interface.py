@@ -59,7 +59,7 @@ class OAOSettings(Settings):
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_OAO=ON' pip install ."
+            "pip install -C cmake.define.ENABLE_OAO=ON ."
         )
 
     callback_fields = {

@@ -33,17 +33,41 @@ The installation can be tested by running the ```testsuite.py``` file in the ```
 A Fortran or C program has to be rebuilt against the modules or the header of the library version it links, since the settings and state types can change from one version to the next.
 
 ### Python Usage
-To install the library for use with Python:
+Released versions are available from PyPI:
+
+```sh
+pip install pyopentrustregion
+```
+
+Wheels are provided for Linux (x86_64 and aarch64) and macOS (arm64 from macOS 14, x86_64 from macOS 15); on other platforms pip builds the library from the source distribution, which needs the compilers, CMake and BLAS/LAPACK listed above. The published wheels are a Python-only distribution: they bundle the solver library with all [optional extensions](#optional-extensions) but not the C header or the CMake package files, so consumers that only call the solver from Python need nothing else. On Linux the wheels vendor OpenBLAS and the Fortran runtime; on macOS they link Apple's Accelerate framework and a static Fortran runtime instead, so they depend on nothing outside the system. Consumers that link OpenTrustRegion through `find_package(OpenTrustRegion)` should install from source as described under *Fortran or C Usage* above.
+
+To install from a source checkout instead:
 
 ```sh
 pip install .
 ```
 
-The installation can be tested by running
+The installation can be tested by running the following outside the source checkout, whose `pyopentrustregion` directory would otherwise shadow the installed package:
 
 ```sh
 python3 -m pyopentrustregion.testsuite
 ```
+
+Note that the testsuite is only available for source and editable installs since the published wheels leave it out. To check an installed wheel, run a short optimization through the public API instead:
+
+```sh
+python3 -m pyopentrustregion.verify_install
+```
+
+#### Integer Size
+
+The PyPI wheels are built with 32-bit integers (LP64). The Python interface reads the integer width out of the compiled library at import time, so no Python-side change is needed to use a 64-bit build; it only requires compiling the library accordingly. Since a wheel tag cannot express the BLAS integer width, a 64-bit (ILP64) build has to come from source and needs a Fortran compiler, CMake and an ILP64 BLAS/LAPACK:
+
+```sh
+pip install --no-binary=pyopentrustregion -C cmake.define.INTEGER_SIZE=8 pyopentrustregion
+```
+
+Any other CMake option from the table below can be passed the same way, as `-C cmake.define.<OPTION>=<VALUE>`.
 
 ### CMake Configuration Options
 
@@ -51,7 +75,7 @@ The build process can be customized using the following CMake options:
 
 | Option | Type | Default | Description |
 |--------|------|----------|------------|
-| **BUILD_SHARED_LIBS** | `BOOL` | `OFF` | Build shared libraries (`.so`, `.dylib`) instead of static ones. |
+| **BUILD_SHARED_LIBS** | `BOOL` | `OFF` | Build shared libraries (`.so`, `.dylib`) instead of static ones. On for builds through pip. |
 | **OpenTrustRegion_BUILD_TESTING** | `BOOL` | `ON` when built as the top-level project, `OFF` otherwise | Build the project’s testsuite. |
 | **OpenTrustRegion_INSTALL_TESTING_LIBRARY** | `BOOL` | `OFF` | Install the library the testsuite runs (`libotrtestsuite`) together with the library. |
 | **OpenTrustRegion_INSTALL_CMAKEDIR** | `STRING` | (auto) | Project install directory. |
@@ -60,16 +84,11 @@ The build process can be customized using the following CMake options:
 | **BLAS_LIBRARIES** | `PATH` | *(auto)* | Path(s) to BLAS libraries. If not provided, CMake attempts to locate a suitable BLAS automatically. |
 | **LAPACK_LIBRARIES** | `PATH` | *(auto)* | Path(s) to LAPACK libraries. If not provided, CMake attempts to locate a suitable LAPACK automatically. |
 | **OpenTrustRegion_HOST_PROVIDES_BLAS** | `BOOL` | `OFF` | When enabled, OpenTrustRegion will not attempt to detect or link BLAS/LAPACK and the testsuite is automatically disabled. The calling program must provide BLAS/LAPACK routines that expose the unsuffixed symbol names (for example `ddot`, `dsyev`) with an integer width matching `INTEGER_SIZE`; otherwise linking will fail loudly. |
-| **OpenTrustRegion_ENABLE_XHOST** | `BOOL` | `ON` | Optimize the Release build for the current machine's instruction set (`-march=native` for GNU, `-xHost` for Intel). Automatically disabled when cross-compiling, regardless of this setting. Turn off when building for a different machine than the one compiling (e.g. packaging/conda builds). |
+| **OpenTrustRegion_ENABLE_XHOST** | `BOOL` | `ON` | Optimize the Release build for the current machine's instruction set (`-march=native` for GNU, `-xHost` for Intel). Automatically disabled when cross-compiling, regardless of this setting. Turn off when building for a different machine than the one compiling (e.g. packaging/conda builds). Off for builds through pip, whose wheels pip caches and may install on another machine. |
 
 ### Nested and Concurrent Calls
 
-The library keeps no state of its own between calls, so a solver or stability check call can be nested inside a callback function of another call, or run concurrently with another call in a different thread, as long as each call is given its own state record and, where an extension factory wired the solver settings, its own settings object, since these own the extension object a call works with. The same holds for calculations with extensions, whose factories create a new object for every call, see [Optional Extensions](#optional-extensions), as long as each calculation has its own solver settings, state record and orbitals. A nested call re-enters procedures of the library that are still running, which Fortran only permits for procedures compiled for recursion, and a concurrent call needs their local variables on its own thread's stack. The library then has to be built with `-frecursive` for gfortran (implied by `-fopenmp`) or `-recursive` for Intel:
-
-```sh
-cmake .. -DCMAKE_Fortran_FLAGS=-frecursive                  # Fortran or C
-CMAKE_FLAGS="-DCMAKE_Fortran_FLAGS=-frecursive" pip install .  # Python
-```
+The library keeps no state of its own between calls, so a solver or stability check call can be nested inside a callback function of another call, or run concurrently with another call in a different thread, as long as each call is given its own state record and, where an extension factory wired the solver settings, its own settings object, since these own the extension object a call works with. The same holds for calculations with extensions, whose factories create a new object for every call, see [Optional Extensions](#optional-extensions), as long as each calculation has its own solver settings, state record and orbitals. A nested call re-enters procedures of the library that are still running, which Fortran only permits for procedures compiled for recursion, and a concurrent call needs their local variables on its own thread's stack. The CMake build therefore compiles the library for recursion with every compiler (`-frecursive` for gfortran, `-recursive` for Intel, the default of LLVM Flang), so every build through it, the published wheels included, allows nested and concurrent calls. A program that compiles the sources with its own build system has to pass these flags itself.
 
 Every call also reseeds the random number generator of the Fortran runtime, which the whole program shares, so a nested or concurrent call changes the random trial vectors, and with them the iterations, of the other call, though not its correctness.
 
@@ -516,7 +535,7 @@ Future versions may define more specific codes for other actionable failure mode
 
 ## Optional Extensions
 
-OpenTrustRegion (OTR) supports additional optional modules that can be enabled during installation. These include **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **rotation quasi-Newton (rotation QN)**, **density quasi-Newton (density QN)**, and **subspace gradient-enhanced kriging (S-GEK)**.
+OpenTrustRegion (OTR) supports additional optional modules: **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **rotation quasi-Newton (rotation QN)**, **density quasi-Newton (density QN)**, and **subspace gradient-enhanced kriging (S-GEK)**. The Python package, the published wheels included, contains all of them, while a Fortran or C build enables each through its CMake option, and a source install of the Python package can leave one out with `-C cmake.define.ENABLE_<NAME>=OFF`.
 
 A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the rotation QN and S-GEK factories do on settings a factory wired, Fortran accepts only the returned functions themselves, C cannot tell a wrapper from your own function, and Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
 
@@ -536,16 +555,10 @@ This extension provides orbital optimization in the molecular orbital (MO) basis
 
 #### Installation
 
-Enable the extension at build time using CMake:
+The Python package, the published wheels included, contains the extension. A Fortran or C build enables it using CMake:
 
 ```sh
 cmake -DENABLE_MO=ON ..
-```
-
-or, when installing the Python package:
-
-```sh
-CMAKE_FLAGS='-DENABLE_MO=ON' pip install .
 ```
 
 #### Usage
@@ -720,16 +733,10 @@ This extension provides orbital optimization in the orthogonalized atomic orbita
 
 #### Installation
 
-Enable the extension at build time using CMake:
+The Python package, the published wheels included, contains the extension. A Fortran or C build enables it using CMake:
 
 ```sh
 cmake -DENABLE_OAO=ON ..
-```
-
-or, when installing the Python package:
-
-```sh
-CMAKE_FLAGS='-DENABLE_OAO=ON' pip install .
 ```
 
 #### Usage
@@ -910,16 +917,10 @@ This extension provides quasi-Newton approximations of the Hessian built from th
 
 #### Installation
 
-Enable the extension at build time using CMake:
+The Python package, the published wheels included, contains the extension. A Fortran or C build enables it using CMake:
 
 ```sh
 cmake -DENABLE_ROTATION_QN=ON ..
-```
-
-or, when installing the Python package:
-
-```sh
-CMAKE_FLAGS='-DENABLE_ROTATION_QN=ON' pip install .
 ```
 
 #### Usage
@@ -1084,16 +1085,10 @@ This extension provides quasi-Newton approximations of the Hessian built from th
 
 #### Installation
 
-Enable the extension at build time using CMake:
+The Python package, the published wheels included, contains the extension. A Fortran or C build enables it using CMake:
 
 ```sh
 cmake -DENABLE_DENSITY_QN=ON ..
-```
-
-or, when installing the Python package:
-
-```sh
-CMAKE_FLAGS='-DENABLE_DENSITY_QN=ON' pip install .
 ```
 
 #### Usage
@@ -1340,16 +1335,10 @@ This extension currently provides the subspace gradient-enhanced kriging method 
 
 #### Installation
 
-Enable the extension at build time using CMake:
+The Python package, the published wheels included, contains the extension. A Fortran or C build enables it using CMake:
 
 ```sh
 cmake -DENABLE_S_GEK=ON ..
-```
-
-or, when installing the Python package:
-
-```sh
-CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install .
 ```
 
 #### Usage

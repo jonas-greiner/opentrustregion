@@ -31,7 +31,7 @@ jobs:
       run: pip install black
 
     - name: Check Python formatting
-      run: black --check --diff pyopentrustregion setup.py tools
+      run: black --check --diff pyopentrustregion tools
 
     - name: Install clang-format
       run: sudo apt-get update && sudo apt-get install -y clang-format
@@ -57,7 +57,6 @@ jobs:
             scenario: editable
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # test for cmake installation and find_package consumption
           - os: linux
@@ -71,18 +70,29 @@ jobs:
             integer-size: "32"
             cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
-          # testsuite on arm processors under linux, of the core without extensions, so
-          # that the configuration without them is built and tested
+          # testsuite of the core without the extensions, which pip builds include
+          # unless they are switched off, so that the configuration without them is
+          # built and tested
+          - os: linux
+            arch: x86_64
+            compiler: gnu
+            blas: openblas
+            runs-on: ubuntu-latest
+            build-type: test
+            scenario: core only
+            python-version: "3.10"
+            integer-size: "32"
+            cmargs: "-DENABLE_MO=OFF -DENABLE_OAO=OFF -DENABLE_DENSITY_QN=OFF -DENABLE_ROTATION_QN=OFF -DENABLE_S_GEK=OFF"
+
+          # testsuite on arm processors under linux
           - os: linux
             arch: arm64
             compiler: gnu
             blas: openblas
             runs-on: ubuntu-24.04-arm
             build-type: test
-            scenario: core only
             python-version: "3.10"
             integer-size: "32"
-            cmargs: ""
 
           # testsuite with the oldest supported gnu compiler
           - os: linux
@@ -94,7 +104,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite with 64-bit integers against the reference BLAS and LAPACK
           - os: linux
@@ -105,7 +114,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "64"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite with intel compilers and MKL
           - os: linux
@@ -116,7 +124,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite with intel compilers and MKL with 64-bit integers
           - os: linux
@@ -127,7 +134,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "64"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite with llvm flang compilers under linux
           - os: linux
@@ -139,7 +145,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite with llvm flang compilers under macos
           - os: macos
@@ -150,7 +155,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite against Apple's Accelerate
           - os: macos
@@ -161,7 +165,6 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # testsuite on intel processors under macos
           - os: macos
@@ -172,19 +175,18 @@ jobs:
             build-type: test
             python-version: "3.10"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
           # test coverage, which also runs the testsuite with gnu compilers under linux on
-          # x86 processors
+          # x86 processors and with the newest python, while every other job runs the
+          # oldest python that pyproject.toml supports
           - os: linux
             arch: x86_64
             compiler: gnu
             blas: openblas
             runs-on: ubuntu-latest
             build-type: coverage
-            python-version: "3.10"
+            python-version: "3.x"
             integer-size: "32"
-            cmargs: "-DENABLE_ROTATION_QN=ON -DENABLE_DENSITY_QN=ON -DENABLE_S_GEK=ON"
 
     name: "Repo • 🐍 ${{ matrix.python-version }} • OS ${{ matrix.os }} ${{ matrix.arch }} • Compiler ${{ matrix.compiler }}${{ matrix.compiler-version && format(' {0}', matrix.compiler-version) || '' }} • BLAS ${{ matrix.blas }} • Build Type ${{ matrix.build-type }}${{ matrix.scenario && format(' ({0})', matrix.scenario) || '' }} • ${{ matrix.integer-size }}-bit integers"
     runs-on: ${{ matrix.runs-on }}
@@ -199,7 +201,7 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v7
       with:
-        python-version: 3.x
+        python-version: ${{ matrix.python-version }}
 
     - name: Install GNU compilers on MacOS
       if: ${{ matrix.os == 'macos' && matrix.compiler == 'gnu' }}
@@ -253,9 +255,10 @@ jobs:
       if: ${{ matrix.os == 'macos' && matrix.blas == 'openblas' }}
       run: |
         brew install openblas
-        echo "PKG_CONFIG_PATH=/usr/local/opt/openblas/lib/pkgconfig" >> $GITHUB_ENV
-        echo "LDFLAGS=-L/opt/homebrew/opt/openblas/lib" >> $GITHUB_ENV
-        echo "CPPFLAGS=-I/opt/homebrew/opt/openblas/include" >> $GITHUB_ENV
+        BREW_PREFIX=$(brew --prefix)
+        echo "PKG_CONFIG_PATH=${BREW_PREFIX}/opt/openblas/lib/pkgconfig" >> $GITHUB_ENV
+        echo "LDFLAGS=-L${BREW_PREFIX}/opt/openblas/lib" >> $GITHUB_ENV
+        echo "CPPFLAGS=-I${BREW_PREFIX}/opt/openblas/include" >> $GITHUB_ENV
 
     - name: Install OpenBLAS on Linux
       if: ${{ matrix.os == 'linux' && matrix.blas == 'openblas' }}
@@ -273,15 +276,20 @@ jobs:
         source venv/bin/activate
         python -m pip install --upgrade pip
 
+    # pip takes the -D options of the matrix, which the cmake build below gets as they
+    # are, as cmake.define settings
+    - name: Convert CMake options for pip
+      run: echo "OTR_CMAKE_DEFINES=$(for a in ${{ matrix.cmargs }}; do printf -- '-C cmake.define.%s ' "${a#-D}"; done)" >> $GITHUB_ENV
+
     # the reference BLAS and Accelerate are selected explicitly, OpenBLAS and MKL are
     # the libraries the autodetection finds
     - name: Build & Install OpenTrustRegion
       if: ${{ matrix.build-type == 'test' }}
-      run: CMAKE_FLAGS="-DINTEGER_SIZE=${{ matrix.integer-size == '64' && '8' || '4' }} ${{ matrix.blas == 'netlib' && '-DBLA_VENDOR=Generic' || matrix.blas == 'accelerate' && '-DBLA_VENDOR=Apple' || '' }} ${{ matrix.cmargs }}" pip install ${{github.workspace}}
+      run: pip install -C cmake.define.INTEGER_SIZE=${{ matrix.integer-size == '64' && '8' || '4' }} ${{ matrix.blas == 'netlib' && '-C cmake.define.BLA_VENDOR=Generic' || matrix.blas == 'accelerate' && '-C cmake.define.BLA_VENDOR=Apple' || '' }} $OTR_CMAKE_DEFINES ${{github.workspace}}
 
     - name: Build & Install OpenTrustRegion (editable)
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'editable' }}
-      run: CMAKE_FLAGS="${{ matrix.cmargs }}" pip install -e ${{github.workspace}}
+      run: pip install $OTR_CMAKE_DEFINES -e ${{github.workspace}}
 
     - name: Build & Install OpenTrustRegion (cmake)
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'dev-build' }}
@@ -296,8 +304,11 @@ jobs:
         cmake --install .
         cd $GITHUB_WORKSPACE
 
+    # run from outside the checkout, or the pyopentrustregion directory in the working
+    # directory shadows the installed package
     - name: Testing pip installation
       if: ${{ matrix.build-type == 'install' && matrix.scenario == 'editable' }}
+      working-directory: ${{ runner.temp }}
       run: python -c "import pyopentrustregion.testsuite"
 
     - name: Testing dev installation
@@ -308,6 +319,7 @@ jobs:
 
     - name: Testing OpenTrustRegion
       if: ${{ matrix.build-type == 'test' }}
+      working-directory: ${{ runner.temp }}
       run: python -m pyopentrustregion.testsuite
 
     - name: Testing find_package Consumption
@@ -344,10 +356,14 @@ jobs:
       if: ${{ matrix.build-type == 'coverage' }}
       run: pip install coverage
 
+    # the build directory is kept in the checkout, where the coverage run below finds
+    # the libraries and the coverage report their data
     - name: Build & Install OpenTrustRegion with Coverage Flags
       if: ${{ matrix.build-type == 'coverage' }}
       run: |
-        CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Debug -DCMAKE_Fortran_FLAGS='--coverage -g' ${{ matrix.cmargs }}" pip install ${{github.workspace}}
+        pip install -C cmake.build-type=Debug \
+                    -C "cmake.define.CMAKE_Fortran_FLAGS=--coverage -g" \
+                    $OTR_CMAKE_DEFINES -C build-dir=build ${{github.workspace}}
 
     - name: Testing OpenTrustRegion with Coverage
       if: ${{ matrix.build-type == 'coverage' }}

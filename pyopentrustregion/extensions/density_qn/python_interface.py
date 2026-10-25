@@ -86,7 +86,7 @@ class DensityQNSettings(Settings):
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_DENSITY_QN=ON' pip install ."
+            "pip install -C cmake.define.ENABLE_DENSITY_QN=ON ."
         )
 
     callback_fields = {

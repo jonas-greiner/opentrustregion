@@ -76,7 +76,7 @@ class SGEKSettings(Settings):
     except AttributeError:
         raise AttributeError(
             "Please reinstall the package with: "
-            "CMAKE_FLAGS='-DENABLE_S_GEK=ON' pip install ."
+            "pip install -C cmake.define.ENABLE_S_GEK=ON ."
         )
 
     callback_fields = {
