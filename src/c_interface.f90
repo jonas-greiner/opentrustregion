@@ -6,7 +6,7 @@
 
 module c_interface
 
-    use opentrustregion, only: &
+    use opentrustregion_core, only: &
         rp, ip, kw_len, standard_solver => solver, &
         standard_stability_check => stability_check, default_solver_settings, &
         default_stability_settings, update_orbs_type, hess_x_type, obj_func_type, &
@@ -14,7 +14,8 @@ module c_interface
         logger_type, solver_state_type, stability_state_type
     use, intrinsic :: iso_c_binding, only: &
         c_double, c_int64_t, c_int32_t, c_bool, c_ptr, c_funptr, c_f_pointer, &
-        c_f_procpointer, c_associated, c_char, c_null_char, c_null_ptr, c_null_funptr
+        c_f_procpointer, c_associated, c_char, c_null_char, c_null_ptr, c_null_funptr, &
+        c_size_t, c_sizeof
 
     implicit none
 
@@ -216,9 +217,9 @@ contains
         !
         ! this function exposes a Fortran-implemented solver subroutine to C
         !
-        use opentrustregion, only: solver_settings_type, stderr, &
-                                   settings_uninitialized_warning_msg, &
-                                   stability_settings_uninitialized_warning_msg
+        use opentrustregion_core, only: &
+            solver_settings_type, stderr, settings_uninitialized_warning_msg, &
+            stability_settings_uninitialized_warning_msg, error_solver, verbosity_error
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
@@ -301,6 +302,16 @@ contains
             end if
         end if
 
+        ! the solver can not run without an orbital update and an objective function
+        if (.not. (c_associated(update_orbs_c_funptr) .and. &
+                   c_associated(obj_func_c_funptr))) then
+            call settings%log("Orbital update and objective function have to be "// &
+                              "given.", verbosity_error, .true.)
+            call copy_state_to_c(callbacks)
+            error_c = int(error_solver + 1, kind=c_ip)
+            return
+        end if
+
         ! call solver
         call solver(update_orbs, obj_func, n_param, error, settings, state)
 
@@ -318,8 +329,9 @@ contains
         !
         ! this function exposes a Fortran-implemented stability check subroutine to C
         !
-        use opentrustregion, only: stability_settings_type, stderr, &
-                                   settings_uninitialized_warning_msg
+        use opentrustregion_core, only: stability_settings_type, stderr, &
+                                        settings_uninitialized_warning_msg, &
+                                        error_stability_check, verbosity_error
 
         real(c_rp), intent(in), target :: h_diag_c(*)
         integer(c_ip), intent(in), value :: n_param_c
@@ -362,6 +374,28 @@ contains
             call c_f_pointer(cptr=state_c_ptr, fptr=callbacks%stability_state_c)
         end if
 
+        ! convert settings and hand the bundle to the callback wrappers as opaque
+        ! context
+        settings = local_settings_c
+        settings%context => callbacks
+
+        ! the conversion replaces settings that were not initialized by the default
+        ! settings, so the warning is printed here on stderr regardless of the
+        ! verbosity since settings that were not initialized provide no logging
+        ! function
+        if (.not. local_settings_c%initialized) &
+            write(stderr, '(A)') " "//settings_uninitialized_warning_msg
+
+        ! the stability check can not run without a Hessian linear transformation
+        if (.not. c_associated(hess_x_c_funptr)) then
+            call settings%log("Hessian linear transformation has to be given.", &
+                              verbosity_error, .true.)
+            call copy_state_to_c(callbacks)
+            stable_c = .false._c_bool
+            error_c = int(error_stability_check + 1, kind=c_ip)
+            return
+        end if
+
         ! associate procedure pointer to wrapper function
         hess_x => hess_x_f_wrapper
 
@@ -380,18 +414,6 @@ contains
                 allocate(kappa_ptr(n_param_c))
             end if
         end if
-
-        ! convert settings and hand the bundle to the callback wrappers as opaque
-        ! context
-        settings = local_settings_c
-        settings%context => callbacks
-
-        ! the conversion replaces settings that were not initialized by the default
-        ! settings, so the warning is printed here on stderr regardless of the
-        ! verbosity since settings that were not initialized provide no logging
-        ! function
-        if (.not. local_settings_c%initialized) &
-            write(stderr, '(A)') " "//settings_uninitialized_warning_msg
 
         ! call stability check
         if (c_associated(kappa_c_ptr)) then
@@ -804,7 +826,7 @@ contains
         !
         ! this subroutine initializes the C solver settings
         !
-        type(solver_settings_type_c), intent(inout) :: settings
+        type(solver_settings_type_c), intent(out) :: settings
 
         settings = default_solver_settings
 
@@ -815,17 +837,65 @@ contains
         !
         ! this subroutine initializes the C stability settings
         !
-        type(stability_settings_type_c), intent(inout) :: settings
+        type(stability_settings_type_c), intent(out) :: settings
 
         settings = default_stability_settings
 
     end subroutine init_stability_settings_c
 
+    integer(c_size_t) function solver_settings_size() bind(C)
+        !
+        ! this function returns the size of the C solver settings, which the Python
+        ! interface compares with its own to detect a library of another version and
+        ! the C layout tests with the header's
+        !
+        type(solver_settings_type_c) :: settings_c
+
+        solver_settings_size = c_sizeof(settings_c)
+
+    end function solver_settings_size
+
+    integer(c_size_t) function stability_settings_size() bind(C)
+        !
+        ! this function returns the size of the C stability check settings, which the
+        ! Python interface compares with its own to detect a library of another
+        ! version and the C layout tests with the header's
+        !
+        type(stability_settings_type_c) :: settings_c
+
+        stability_settings_size = c_sizeof(settings_c)
+
+    end function stability_settings_size
+
+    integer(c_size_t) function solver_state_size() bind(C)
+        !
+        ! this function returns the size of the C solver state, which the Python
+        ! interface compares with its own to detect a library of another version and
+        ! the C layout tests with the header's
+        !
+        type(solver_state_type_c) :: state_c
+
+        solver_state_size = c_sizeof(state_c)
+
+    end function solver_state_size
+
+    integer(c_size_t) function stability_state_size() bind(C)
+        !
+        ! this function returns the size of the C stability check state, which the
+        ! Python interface compares with its own to detect a library of another
+        ! version and the C layout tests with the header's
+        !
+        type(stability_state_type_c) :: state_c
+
+        stability_state_size = c_sizeof(state_c)
+
+    end function stability_state_size
+
     subroutine assign_solver_f_c(settings, settings_c)
         !
         ! this subroutine converts solver settings from C to Fortran
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
 
         type(solver_settings_type), intent(out) :: settings
         type(solver_settings_type_c), intent(in) :: settings_c
@@ -899,7 +969,7 @@ contains
         !
         ! this subroutine converts stability check settings from C to Fortran
         !
-        use opentrustregion, only: stability_settings_type
+        use opentrustregion_core, only: stability_settings_type
 
         type(stability_settings_type), intent(out) :: settings
         type(stability_settings_type_c), intent(in) :: settings_c
@@ -965,7 +1035,7 @@ contains
         !
         ! this subroutine converts solver settings from Fortran to C
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
 
         type(solver_settings_type_c), intent(out) :: settings_c
         type(solver_settings_type), intent(in) :: settings
@@ -1019,7 +1089,7 @@ contains
         !
         ! this subroutine converts stability settings from Fortran to C
         !
-        use opentrustregion, only: stability_settings_type
+        use opentrustregion_core, only: stability_settings_type
 
         type(stability_settings_type_c), intent(out) :: settings_c
         type(stability_settings_type), intent(in) :: settings
@@ -1114,23 +1184,22 @@ contains
 
     function character_from_c(char_c) result(char_f)
         !
-        ! this function converts a C null-terminated character array to a Fortran
-        ! character
+        ! this function converts a null-terminated keyword field of the C settings to a
+        ! Fortran character, without reading past the field, which is taken whole if
+        ! it holds no null character, so that it is rejected as no keyword fills it
         !
-        character(kind=c_char), intent(in) :: char_c(*)
+        character(kind=c_char), intent(in) :: char_c(kw_len + 1)
         character(len=:), allocatable :: char_f
 
         integer(ip) :: n
 
-        ! allocate Fortran character
-        n = 1
-        do while (char_c(n) /= c_null_char)
-            n = n + 1
-        end do
-        allocate(character(len=n - 1) :: char_f)
+        ! allocate Fortran character up to the terminating null character
+        n = findloc(char_c, c_null_char, dim=1) - 1
+        if (n < 0) n = size(char_c)
+        allocate(character(len=n) :: char_f)
 
         ! copy and convert each character
-        char_f = transfer(char_c(1:n - 1), char_f)
+        char_f = transfer(char_c(1:n), char_f)
 
     end function character_from_c
 

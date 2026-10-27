@@ -27,7 +27,7 @@ else()
 endif()
 message(STATUS "Showing option ${otr}_INSTALL_CMAKEDIR: ${${otr}_INSTALL_CMAKEDIR}")
 
-# default to not building tests
+# build the testsuite by default only as the top-level project
 option(${otr}_BUILD_TESTING "Build testsuite" ${PROJECT_IS_TOP_LEVEL})
 option(${otr}_INSTALL_TESTING_LIBRARY "Install the compiled library used for testsuite" OFF)
 message(STATUS "Showing option ${otr}_BUILD_TESTING: ${${otr}_BUILD_TESTING}")
@@ -41,13 +41,14 @@ message(STATUS "Showing option ${otr}_HOST_PROVIDES_BLAS: ${${otr}_HOST_PROVIDES
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 message(STATUS "Showing option BUILD_SHARED_LIBS: ${BUILD_SHARED_LIBS}")
 
-option(${otr}_ENABLE_XHOST "Optimize for current machine's instruction set" ON)
+option(${otr}_ENABLE_XHOST "Optimize for current machine's instruction set" OFF)
 message(STATUS "Showing option ${otr}_ENABLE_XHOST: ${${otr}_ENABLE_XHOST}")
 
 # ====  Build  ==================================================================
 
-# default build type
-if(NOT CMAKE_BUILD_TYPE)
+# default build type of a top-level build, a parent project that adds this one as a
+# subdirectory chooses its own
+if(PROJECT_IS_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
@@ -112,6 +113,12 @@ endif()
 
 # user-supplied integer size
 set(INTEGER_SIZE "" CACHE STRING "Size of integers for library (4=32-bit, 8=64-bit)")
+if(INTEGER_SIZE AND NOT INTEGER_SIZE MATCHES "^(4|8)$")
+    message(FATAL_ERROR
+        "INTEGER_SIZE is ${INTEGER_SIZE}. "
+        "Please set INTEGER_SIZE to 4 (LP64) or 8 (ILP64), or leave it unset to autodetect."
+    )
+endif()
 
 # user-supplied BLAS and LAPACK libraries
 set(BLAS_LIBRARIES "" CACHE STRING "User-specified BLAS library path(s)")
@@ -215,8 +222,10 @@ set_target_properties(
     EXPORT_NAME "opentrustregion${LIB_SUFFIX}"
     # library version
     VERSION ${PROJECT_VERSION}
-    # interface version
-    SOVERSION ${PROJECT_VERSION_MAJOR}
+    # interface version, which includes the minor version since a minor version can
+    # change the settings and state types, so that a program built against another
+    # minor version does not load the library
+    SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     # position-independent code - not automatically enabled for static libraries, but
     # required when linking a static library into a shared library
     POSITION_INDEPENDENT_CODE ON
@@ -248,9 +257,14 @@ if(NOT ${otr}_HOST_PROVIDES_BLAS)
 endif()
 
 # set include directories
+set(module_dir ${CMAKE_CURRENT_BINARY_DIR}/modules)
+set(module_install_dir ${CMAKE_INSTALL_INCLUDEDIR}/opentrustregion_${LIB_SUFFIX})
+set_target_properties(opentrustregion PROPERTIES Fortran_MODULE_DIRECTORY ${module_dir})
 target_include_directories(opentrustregion PUBLIC
                            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                           $<BUILD_INTERFACE:${module_dir}>
                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+                           $<INSTALL_INTERFACE:${module_install_dir}>
 )
 
 # option to build testsuite but skip when the host provides BLAS/LAPACK (tests require 
@@ -292,7 +306,7 @@ endif()
 
 # create targets file in the build tree for build-tree usage
 export(TARGETS opentrustregion
-       FILE "${CMAKE_CURRENT_BINARY_DIR}/${otr}Targets.cmake"
+       FILE "${CMAKE_CURRENT_BINARY_DIR}/${otr}Targets-${LIB_SUFFIX}.cmake"
        NAMESPACE "${otr}::"
 )
 
@@ -303,11 +317,12 @@ configure_package_config_file(
     INSTALL_DESTINATION ${${otr}_INSTALL_CMAKEDIR}
 )
 
-# generate version file
+# generate version file, which accepts only the requested minor version, since a
+# program has to be rebuilt for another one
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/${otr}ConfigVersion.cmake
     VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion
+    COMPATIBILITY SameMinorVersion
 )
 
 # install library
@@ -324,6 +339,13 @@ install(TARGETS opentrustregion
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT ${runtime_component}
+)
+
+# install Fortran modules
+install(DIRECTORY ${module_dir}/
+        DESTINATION ${module_install_dir}
+        COMPONENT ${runtime_component}
+        FILES_MATCHING PATTERN "*.mod"
 )
 
 # install targets
