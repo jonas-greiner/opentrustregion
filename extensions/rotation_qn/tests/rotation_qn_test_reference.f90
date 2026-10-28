@@ -9,10 +9,10 @@ module otr_rotation_qn_test_reference
     use opentrustregion_core, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use otr_rotation_qn, only: rotation_qn_settings_type
-    use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: &
-        c_size_t, c_sizeof, c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, &
-        c_associated, c_intptr_t, c_null_char, c_null_funptr, c_null_ptr
+    use test_reference, only: n_param, is_close
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
+                                           c_f_procpointer, c_associated, c_intptr_t, &
+                                           c_null_char, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -78,7 +78,7 @@ contains
         end if
 
         ! check tangent vector
-        if (any(abs(tangent_vector - expected) > tol)) then
+        if (.not. all(is_close(tangent_vector, expected))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
                 message//" wrong."
@@ -137,7 +137,7 @@ contains
         end if
 
         ! check tangent vector
-        if (any(abs(tangent_vector - expected) > tol_c)) then
+        if (.not. all(is_close(tangent_vector, expected))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
                 message//" wrong."
@@ -191,7 +191,7 @@ contains
         end if
 
         ! check vector
-        if (any(abs(vector - expected) > tol)) then
+        if (.not. all(is_close(vector, expected))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Vector returned"//message// &
                 " wrong."
@@ -249,7 +249,7 @@ contains
         end if
 
         ! check vector
-        if (any(abs(vector - expected) > tol_c)) then
+        if (.not. all(is_close(vector, expected))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Vector returned"//message// &
                 " wrong."
@@ -338,19 +338,6 @@ contains
             .not. c_associated(settings_c%context)
 
     end function is_default_rotation_qn_settings
-
-    integer(c_size_t) function rotation_qn_settings_size() bind(C)
-        !
-        ! this function returns the size of the C rotation QN settings, so that the
-        ! layout tests detect a field missing from the C or Python settings
-        !
-        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
-
-        type(rotation_qn_settings_type_c) :: settings_c
-
-        rotation_qn_settings_size = c_sizeof(settings_c)
-
-    end function rotation_qn_settings_size
 
     logical function equal_rotation_qn(lhs, rhs)
         !

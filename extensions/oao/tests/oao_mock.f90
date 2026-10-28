@@ -9,7 +9,7 @@ module otr_oao_mock
     use opentrustregion_core, only: rp, ip, stderr, obj_func_type
     use c_interface, only: c_ip, c_rp
     use otr_oao, only: oao_factory_cs, oao_factory_os
-    use test_reference, only: tol
+    use test_reference, only: is_close
     use otr_oao_test_reference, only: ref_oao_settings, operator(/=)
 
     implicit none
@@ -140,9 +140,9 @@ contains
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
                 "matrix for closed-shell case shaped wrong."
-        else if (any(abs(dm_ao - reshape( &
+        else if (.not. all(is_close(dm_ao, reshape( &
             real(density_pattern(int(n_ao_ref, kind=c_ip), 1_c_ip, 0.0_c_rp), &
-                 kind=rp), [n_ao_ref, n_ao_ref])) > tol)) then
+                 kind=rp), [n_ao_ref, n_ao_ref])))) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
                 "matrix for closed-shell case wrong."
@@ -211,8 +211,8 @@ contains
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
                 "matrix for open-shell case shaped wrong."
-        else if (any(abs(dm_ao - real(density_pattern( &
-            int(n_ao_ref, kind=c_ip), 2_c_ip, 0.0_c_rp), kind=rp)) > tol)) then
+        else if (.not. all(is_close(dm_ao, real(density_pattern( &
+            int(n_ao_ref, kind=c_ip), 2_c_ip, 0.0_c_rp), kind=rp)))) then
             test_passed = .false.
             write(stderr, *) "test_oao_factory_c_wrapper failed: Passed AO density "// &
                 "matrix for open-shell case wrong."

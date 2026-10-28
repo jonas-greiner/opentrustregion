@@ -11,9 +11,10 @@ module otr_density_qn_test_reference
     use otr_density_qn, only: density_qn_settings_type, &
                               density_qn_settings_uninitialized_warning_msg
     use otr_common_test_reference, only: ref_orbital_settings
-    use, intrinsic :: iso_c_binding, only: &
-        c_size_t, c_sizeof, c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, &
-        c_associated, c_intptr_t, c_null_char, c_null_funptr, c_null_ptr
+    use test_reference, only: is_close
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
+                                           c_f_procpointer, c_associated, c_intptr_t, &
+                                           c_null_char, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -80,7 +81,6 @@ contains
         !
         use otr_density_qn, only: density_qn_evaluate_dm_cs_type
         use otr_common_test_reference, only: n_ao, request_label
-        use test_reference, only: tol
 
         procedure(density_qn_evaluate_dm_cs_type), intent(in), pointer :: &
             evaluate_dm_funptr
@@ -135,7 +135,7 @@ contains
             end if
 
             ! check energy
-            if (abs(energy - sum(dm_ao)) > tol) then
+            if (.not. is_close(energy, sum(dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
                     message//" for closed-shell case wrong"//requested//"."
                 test_passed = .false.
@@ -143,9 +143,8 @@ contains
 
             ! check requested outputs
             do i = 1, size(density_qn_evaluate_dm_outputs)
-                if (btest(request, i - 1) .and. &
-                    any(abs(outputs(:, :, i) - &
-                            density_qn_evaluate_dm_factors(i) * dm_ao) > tol)) then
+                if (btest(request, i - 1) .and. .not. all(is_close( &
+                    outputs(:, :, i), density_qn_evaluate_dm_factors(i) * dm_ao))) then
                     write(stderr, *) "test_"//test_name//" failed: "// &
                         trim(capitalized(density_qn_evaluate_dm_outputs(i)))// &
                         " returned"//message//" for closed-shell case wrong"// &
@@ -166,7 +165,6 @@ contains
         !
         use otr_density_qn, only: density_qn_evaluate_dm_os_type
         use otr_common_test_reference, only: n_ao, n_particle, request_label
-        use test_reference, only: tol
 
         procedure(density_qn_evaluate_dm_os_type), intent(in), pointer :: &
             evaluate_dm_funptr
@@ -222,7 +220,7 @@ contains
             end if
 
             ! check energy
-            if (abs(energy - sum(dm_ao)) > tol) then
+            if (.not. is_close(energy, sum(dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
                     message//" for open-shell case wrong"//requested//"."
                 test_passed = .false.
@@ -230,9 +228,9 @@ contains
 
             ! check requested outputs
             do i = 1, size(density_qn_evaluate_dm_outputs)
-                if (btest(request, i - 1) .and. &
-                    any(abs(outputs(:, :, :, i) - &
-                            density_qn_evaluate_dm_factors(i) * dm_ao) > tol)) then
+                if (btest(request, i - 1) .and. .not. all(is_close( &
+                    outputs(:, :, :, i), density_qn_evaluate_dm_factors(i) * dm_ao))) &
+                    then
                     write(stderr, *) "test_"//test_name//" failed: "// &
                         trim(capitalized(density_qn_evaluate_dm_outputs(i)))// &
                         " returned"//message//" for open-shell case wrong"// &
@@ -255,7 +253,6 @@ contains
         !
         use otr_density_qn_c_interface, only: density_qn_evaluate_dm_c_type
         use otr_common_test_reference, only: n_ao, request_label, shell_names
-        use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         integer(ip), intent(in) :: n_particle
@@ -319,7 +316,7 @@ contains
             end if
 
             ! check energy
-            if (abs(energy - sum(dm_ao)) > tol_c) then
+            if (.not. is_close(energy, sum(dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
                     message//" for "//shell//" case wrong"//requested//"."
                 test_passed = .false.
@@ -327,9 +324,9 @@ contains
 
             ! check requested outputs
             do i = 1, size(density_qn_evaluate_dm_outputs)
-                if (btest(request, i - 1) .and. &
-                    any(abs(outputs(:, :, :, i) - &
-                            density_qn_evaluate_dm_factors(i) * dm_ao) > tol_c)) then
+                if (btest(request, i - 1) .and. .not. all(is_close( &
+                    outputs(:, :, :, i), density_qn_evaluate_dm_factors(i) * dm_ao))) &
+                    then
                     write(stderr, *) "test_"//test_name//" failed: "// &
                         trim(capitalized(density_qn_evaluate_dm_outputs(i)))// &
                         " returned"//message//" for "//shell//" case wrong"// &
@@ -416,19 +413,6 @@ contains
             .not. c_associated(settings_c%context)
 
     end function is_default_density_qn_settings
-
-    integer(c_size_t) function density_qn_settings_size() bind(C)
-        !
-        ! this function returns the size of the C density QN settings, so that the
-        ! layout tests detect a field missing from the C or Python settings
-        !
-        use otr_density_qn_c_interface, only: density_qn_settings_type_c
-
-        type(density_qn_settings_type_c) :: settings_c
-
-        density_qn_settings_size = c_sizeof(settings_c)
-
-    end function density_qn_settings_size
 
     logical function equal_density_qn(lhs, rhs)
         !

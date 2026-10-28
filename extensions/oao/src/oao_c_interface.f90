@@ -10,9 +10,9 @@ module otr_oao_c_interface
     use c_interface, only: c_ip, c_rp
     use otr_oao, only: standard_oao_factory_cs => oao_factory_cs, &
                        standard_oao_factory_os => oao_factory_os
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_loc, &
-                                           c_f_pointer, c_f_procpointer, c_associated, &
-                                           c_null_funptr, c_null_ptr
+    use, intrinsic :: iso_c_binding, only: &
+        c_size_t, c_sizeof, c_bool, c_ptr, c_funptr, c_loc, c_f_pointer, &
+        c_f_procpointer, c_associated, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -103,18 +103,9 @@ contains
         if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
             settings, oao_settings_uninitialized_warning_msg)
 
-        ! the object updates the host's density matrix in place or, if the real kind
-        ! differs from C's, a copy of it, which the orbital update copies back
-        if (rp == c_rp) then
-            call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d, [n_ao, n_ao, n_particle])
-            call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
-        else
-            allocate(dm_ao_3d(n_ao, n_ao, n_particle))
-            dm_ao_3d = reshape(real(dm_ao_c(:(n_ao_c**2 * n_particle_c)), kind=rp), &
-                               [n_ao, n_ao, n_particle])
-            allocate(ao_overlap(n_ao, n_ao))
-            ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
-        end if
+        ! the object updates the host's density matrix in place
+        call c_f_pointer(c_loc(dm_ao_c(1)), dm_ao_3d, [n_ao, n_ao, n_particle])
+        call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
 
         ! create the holder, whose bundle hands the density matrix evaluating function,
         ! if one is given, and the logging function with the host context of
@@ -161,14 +152,6 @@ contains
             end if
         end if
 
-        ! the orbital update copies the density matrix back to the host's array if the
-        ! object updates a copy of it
-        if (error == 0 .and. rp /= c_rp) then
-            holder%solver_level%orbitals => dm_ao_3d
-            call c_f_pointer(c_loc(dm_ao_c(1)), holder%solver_level%orbitals_c, &
-                             [n_ao, n_ao, n_particle])
-        end if
-
         ! write the wired solver settings back and return the C wrappers of the orbital
         ! update and the objective function of the object and the holder, or free the
         ! holder if the factory failed
@@ -192,6 +175,18 @@ contains
         settings_c = default_oao_settings
 
     end subroutine init_oao_settings_c
+
+    integer(c_size_t) function oao_settings_size() bind(C)
+        !
+        ! this function returns the size of the C OAO settings, which the Python
+        ! interface compares with its own to detect a library of another version and
+        ! the C layout tests with the header's
+        !
+        type(oao_settings_type_c) :: settings_c
+
+        oao_settings_size = c_sizeof(settings_c)
+
+    end function oao_settings_size
 
     subroutine assign_oao_f_c(settings, settings_c)
         !

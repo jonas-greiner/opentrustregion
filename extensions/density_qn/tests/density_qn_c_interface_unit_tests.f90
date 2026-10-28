@@ -10,7 +10,8 @@ module otr_density_qn_c_interface_unit_tests
     use c_interface, only: c_rp, c_ip
     use otr_density_qn_c_interface, only: density_qn_evaluate_dm_c_type
     use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_ptr, c_funptr, &
-                                           c_funloc, c_loc, c_f_pointer, c_null_ptr
+                                           c_funloc, c_loc, c_f_pointer, c_null_ptr, &
+                                           c_null_funptr
 
     implicit none
 
@@ -112,7 +113,7 @@ contains
         ! closed-shell MO object and an open-shell OAO object, held by holders whose
         ! level of the solver is the context of the C solver settings
         !
-        use opentrustregion_core, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings, verbosity_error
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
         use otr_common, only: extension_type, orbital_basis_type
@@ -141,13 +142,14 @@ contains
         type(solver_state_type_c), target :: state_c
         type(c_ptr) :: extension_c
         type(extension_holder_type), pointer :: holder
-        real(rp), target :: copy(1, 1, 1)
-        real(c_rp), target :: host_array(1, 1, 1)
         integer(ip) :: n_particle, i_case
-        integer(c_ip) :: error_c
+        integer(c_ip) :: error_c, verbose
         character(len=:), allocatable :: case_name
         character(len=34), parameter :: default_cases(2) = &
             [character(len=34) :: "settings that were not initialized", "no settings"]
+        character(len=*), parameter :: missing_input_names(2) = &
+            [character(len=38) :: "a record of the state", &
+             "a density matrix evaluating function"]
 
         ! assume tests pass
         test_density_qn_factory_c_wrapper = .true.
@@ -160,8 +162,7 @@ contains
         settings_c%logger = c_funloc(mock_logger)
 
         ! the factory builds on a closed-shell MO object and on an open-shell OAO
-        ! object, whose holders hold the copy of the orbitals the orbital update copies
-        ! back
+        ! object
         do n_particle = 1, 2
             if (allocated(orbitals)) deallocate(orbitals)
             if (n_particle == 1) then
@@ -179,8 +180,6 @@ contains
             end select
             orbitals%solver_level%extension => orbitals
             orbitals_holder%solver_level%level => orbitals%solver_level
-            orbitals_holder%solver_level%orbitals => copy
-            orbitals_holder%solver_level%orbitals_c => host_array
 
             ! arm the host context of the density QN settings, which the logging and
             ! density matrix evaluating functions receive
@@ -223,7 +222,7 @@ contains
             call c_f_pointer(extension_c, holder)
 
             ! check that the holder holds the bundle of the density matrix evaluating
-            ! function and the copy of the orbitals of the orbital basis object
+            ! function
             select type (callbacks => holder%extension_callbacks)
             type is (density_qn_c_callbacks_type)
                 if (.not. (associated(callbacks%evaluate_dm, &
@@ -240,13 +239,6 @@ contains
                     "of the callback functions not held for the "//case_name//" case."
                 test_density_qn_factory_c_wrapper = .false.
             end select
-            if (.not. (associated(holder%solver_level%orbitals, copy) .and. &
-                       associated(holder%solver_level%orbitals_c, host_array))) then
-                write(stderr, *) "test_density_qn_factory_c_wrapper failed: Copy "// &
-                    "of the orbitals of the orbital basis object not held for the "// &
-                    case_name//" case."
-                test_density_qn_factory_c_wrapper = .false.
-            end if
 
             ! check that the factory wired the settings of the holder with an object,
             ! which reads the state of the holder, that the holder holds the host's
@@ -345,25 +337,40 @@ contains
             deallocate(holder)
         end if
 
-        ! call the factory without a record of the state, which has to produce an error
-        ! without calling the factory or returning functions or an extension, which are
-        ! set beforehand
-        solver_settings_c = default_solver_settings
-        update_orbs_c_funptr = c_funloc(mock_update_orbs)
-        obj_func_c_funptr = c_funloc(mock_obj_func)
-        extension_c = c_loc(state_c)
-        solver_settings_c%context = c_loc(orbitals_holder%solver_level)
-        test_passed = .false.
-        error_c = density_qn_factory_c_wrapper( &
-            evaluate_dm_c_funptr, update_orbs_c_funptr, obj_func_c_funptr, &
-            extension_c, solver_settings_c, c_null_ptr, settings_c)
-        if (error_c /= error_density_qn + 1 .or. test_passed .or. &
-            c_associated(update_orbs_c_funptr) .or. &
-            c_associated(obj_func_c_funptr) .or. c_associated(extension_c)) then
-            write(stderr, *) "test_density_qn_factory_c_wrapper failed: No error "// &
-                "produced without a record of the state."
-            test_density_qn_factory_c_wrapper = .false.
-        end if
+        ! call the factory without a record of the state and without the density matrix
+        ! evaluating function in turn, with only error messages passed to the logging
+        ! function, which has to produce an error with an error message without calling
+        ! the factory or returning functions or an extension, which are set beforehand
+        verbose = settings_c%verbose
+        settings_c%verbose = int(verbosity_error, kind=c_ip)
+        do i_case = 1, size(missing_input_names)
+            call arm_host_context_c(settings_c%context)
+            solver_settings_c = default_solver_settings
+            update_orbs_c_funptr = c_funloc(mock_update_orbs)
+            obj_func_c_funptr = c_funloc(mock_obj_func)
+            extension_c = c_loc(state_c)
+            solver_settings_c%context = c_loc(orbitals_holder%solver_level)
+            test_passed = .false.
+            error_c = density_qn_factory_c_wrapper( &
+                merge(c_null_funptr, evaluate_dm_c_funptr, i_case == 2), &
+                update_orbs_c_funptr, obj_func_c_funptr, extension_c, &
+                solver_settings_c, merge(c_null_ptr, c_loc(state_c), i_case == 1), &
+                settings_c)
+            if (error_c /= error_density_qn + 1 .or. test_passed .or. &
+                c_associated(update_orbs_c_funptr) .or. &
+                c_associated(obj_func_c_funptr) .or. c_associated(extension_c)) then
+                write(stderr, *) "test_density_qn_factory_c_wrapper failed: No "// &
+                    "error produced without "//trim(missing_input_names(i_case))//"."
+                test_density_qn_factory_c_wrapper = .false.
+            end if
+            if (host_context%n_messages == 0) then
+                write(stderr, *) "test_density_qn_factory_c_wrapper failed: No "// &
+                    "error message printed without "// &
+                    trim(missing_input_names(i_case))//"."
+                test_density_qn_factory_c_wrapper = .false.
+            end if
+        end do
+        settings_c%verbose = verbose
         deallocate(orbitals)
 
         ! restore the procedure pointer so later tests do not inherit the mock

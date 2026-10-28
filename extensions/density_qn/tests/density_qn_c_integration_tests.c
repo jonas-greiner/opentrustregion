@@ -155,7 +155,7 @@ bool test_density_qn_factory_c(void) {
 
       // solve with density QN, which reaches the same minimum
       ok &= toy_run_solve(&run, test_name, case_name);
-      if (fabs(run.state.func - exact_energy) > 1e-8) {
+      if (!(fabs(run.state.func - exact_energy) <= 1e-8)) {
         fprintf(stderr,
                 "%s failed: Minimum differs from the one of the exact Hessian "
                 "for the %s case.\n",

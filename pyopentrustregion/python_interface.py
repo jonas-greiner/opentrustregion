@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Any, Dict, Type, Union
+    from typing import Tuple, Callable, Optional, Any, Dict, Type, Union, Sequence
 
 
 # load the opentrustregion library, fallback to testsuite in case opentrustregion was
@@ -732,19 +732,16 @@ class SolverStateC(Structure):
     ]
 
 
-def check_struct_sizes(library: CDLL) -> None:
+def check_struct_sizes(
+    library: CDLL, structures: Sequence[Tuple[str, Type[Structure]]]
+) -> None:
     """
-    this function checks that the settings and state structures have the sizes the
-    library exports, so that a library of another version, such as a separately
-    installed one or a stale build, is not read and written with the wrong layout,
-    only a layout change that keeps the sizes goes undetected
+    this function checks that the given settings and state structures have the sizes
+    the library exports under their names, so that a library of another version, such
+    as a separately installed one or a stale build, is not read and written with the
+    wrong layout, only a layout change that keeps the sizes goes undetected
     """
-    for name, structure in [
-        ("solver_settings", SolverSettingsC),
-        ("stability_settings", StabilitySettingsC),
-        ("solver_state", SolverStateC),
-        ("stability_state", StabilityStateC),
-    ]:
+    for name, structure in structures:
         # a library older than this check exports no sizes
         size_function = getattr(library, f"{name}_size", None)
         if size_function is not None:
@@ -758,7 +755,15 @@ def check_struct_sizes(library: CDLL) -> None:
             )
 
 
-check_struct_sizes(lib)
+check_struct_sizes(
+    lib,
+    [
+        ("solver_settings", SolverSettingsC),
+        ("stability_settings", StabilitySettingsC),
+        ("solver_state", SolverStateC),
+        ("stability_state", StabilityStateC),
+    ],
+)
 
 
 # define classes for settings

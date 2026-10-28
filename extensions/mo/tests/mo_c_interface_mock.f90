@@ -10,6 +10,7 @@ module otr_mo_c_interface_mock
     use c_interface, only: c_rp, c_ip, update_orbs_c_type
     use otr_mo_c_interface, only: mo_factory_c_wrapper, init_mo_settings_c
     use otr_mo_test_reference, only: ref_mo_settings
+    use test_reference, only: is_close
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_f_pointer, c_loc, &
                                            c_null_funptr, c_null_ptr, c_associated
@@ -81,7 +82,6 @@ contains
         !
         use otr_mo_c_interface, only: mo_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
-        use test_reference, only: tol_c
         use otr_mo_test_reference, only: n_mo_c_ref => n_mo_c, n_occ_c_ref => n_occ_c, &
                                          orbsym_c_ref => orbsym_c, mo_coeff_pattern, &
                                          operator(/=)
@@ -138,14 +138,14 @@ contains
                          [n_ao_c, n_mo_c, n_particle_c])
 
         ! check passed arrays, whose index pattern verifies column-major order
-        if (any(abs(mo_coeff_3d_c - mo_coeff_pattern(n_ao_c, n_mo_c, n_particle_c, &
-                                                     0.0_c_rp)) > tol_c)) then
+        if (.not. all(is_close(mo_coeff_3d_c, mo_coeff_pattern( &
+            n_ao_c, n_mo_c, n_particle_c, 0.0_c_rp)))) then
             write(stderr, *) "test_mo_factory_py_interface failed: Passed MO "// &
                 "coefficients wrong."
             test_mo_factory_interface = .false.
         end if
-        if (any(abs(ao_overlap_c(:n_ao_c**2) - &
-                    reshape(ao_overlap_pattern(n_ao_c), [n_ao_c**2])) > tol_c)) then
+        if (.not. all(is_close(ao_overlap_c(:n_ao_c**2), &
+                               reshape(ao_overlap_pattern(n_ao_c), [n_ao_c**2])))) then
             write(stderr, *) "test_mo_factory_py_interface failed: Passed AO "// &
                 "overlap matrix wrong."
             test_mo_factory_interface = .false.

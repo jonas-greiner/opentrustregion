@@ -9,9 +9,10 @@ module otr_oao
     use opentrustregion_core, only: rp, ip, settings_type, obj_func_type, &
                                     update_orbs_type, hess_x_type, solver_state_type, &
                                     add_error_origin
-    use otr_common, only: orbital_settings_type, orbital_basis_type, &
-                          evaluate_dm_cs_type, evaluate_dm_os_type, &
-                          extension_solver_settings_type
+    use otr_common, only: &
+        orbital_settings_type, orbital_basis_type, evaluate_dm_cs_type, &
+        evaluate_dm_os_type, extension_solver_settings_type, invoke_evaluate_dm_cs, &
+        invoke_evaluate_dm_os, invoke_get_response_cs, invoke_get_response_os
 
     implicit none
 
@@ -304,11 +305,11 @@ contains
 
         ! calculate the mean-field energy
         if (associated(self%evaluate_dm_cs)) then
-            call self%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, error=error, &
-                                     context=self%settings%context)
+            call invoke_evaluate_dm_cs(self%evaluate_dm_cs, rot_dm_ao(:, :, 1), &
+                                       energy, self%settings, self%error_origin, error)
         else
-            call self%evaluate_dm_os(rot_dm_ao, energy, error=error, &
-                                     context=self%settings%context)
+            call invoke_evaluate_dm_os(self%evaluate_dm_os, rot_dm_ao, energy, &
+                                       self%settings, self%error_origin, error)
         end if
         if (error /= 0) return
 
@@ -358,13 +359,14 @@ contains
             ! get energy, Fock matrix, and response function
             allocate(fock_ao(n_ao, n_ao, n_particle))
             if (associated(self%evaluate_dm_cs)) then
-                call self%evaluate_dm_cs(self%dm_ao(:, :, 1), self%energy, &
-                                         fock_ao(:, :, 1), self%get_response_cs, &
-                                         error, self%settings%context)
+                call invoke_evaluate_dm_cs(self%evaluate_dm_cs, self%dm_ao(:, :, 1), &
+                                           self%energy, self%settings, &
+                                           self%error_origin, error, fock_ao(:, :, 1), &
+                                           self%get_response_cs)
             else
-                call self%evaluate_dm_os(self%dm_ao, self%energy, fock_ao, &
-                                         self%get_response_os, error, &
-                                         self%settings%context)
+                call invoke_evaluate_dm_os( &
+                    self%evaluate_dm_os, self%dm_ao, self%energy, self%settings, &
+                    self%error_origin, error, fock_ao, self%get_response_os)
             end if
             if (error /= 0) then
                 deallocate(fock_ao)
@@ -447,11 +449,13 @@ contains
         ! get response of Fock matrix to density matrix response
         allocate(fock_response(n_ao, n_ao, n_particle))
         if (associated(self%get_response_os)) then
-            call self%get_response_os(dm_response, fock_response, error, &
-                                      self%settings%context)
+            call invoke_get_response_os(self%get_response_os, dm_response, &
+                                        fock_response, self%settings, &
+                                        self%error_origin, error)
         else
-            call self%get_response_cs(dm_response(:, :, 1), fock_response(:, :, 1), &
-                                      error, self%settings%context)
+            call invoke_get_response_cs(self%get_response_cs, dm_response(:, :, 1), &
+                                        fock_response(:, :, 1), self%settings, &
+                                        self%error_origin, error)
         end if
         if (error /= 0) return
 

@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import POINTER, c_bool, c_size_t
+from ctypes import POINTER, c_bool
 from unittest.mock import patch
 
 import numpy as np
@@ -95,6 +95,8 @@ fortran_tests = {
         "history_step_mask",
         "history_window",
         "inv_hess_x_density_qn",
+        "invoke_density_qn_evaluate_dm_cs",
+        "invoke_density_qn_evaluate_dm_os",
         "obj_func_density_qn",
         "packed_channel_rows_density_qn_mo",
         "packed_channel_rows_density_qn_oao",
@@ -573,11 +575,10 @@ class DensityQNPyIntegrationTests(unittest.TestCase):
                     case_name,
                     density_qn=True,
                 )
-                if abs(run.state.func - exact_energy) > 1e-8:
+                if not np.isclose(run.state.func, exact_energy, rtol=0.0, atol=1e-8):
                     print(
                         " test_density_qn_factory_py failed: Minimum differs from the "
-                        "one of "
-                        f"the exact Hessian for the {case_name} case."
+                        f"one of the exact Hessian for the {case_name} case."
                     )
                     test_passed = False
                 del run, update_orbs, obj_func, update_orbs_basis, hess_x
@@ -590,18 +591,16 @@ class DensityQNPyIntegrationTests(unittest.TestCase):
 
     def test_density_qn_settings_layout(self):
         """
-        this function checks that the Python density QN settings structure has the size
-        of the bind(C) settings type and that every field is read back under its own
-        name from settings whose fields Fortran sets one by one to the reference values
+        this function checks that every field of the Python density QN settings
+        structure is read back under its own name from settings whose fields Fortran
+        sets one by one to the reference values
         """
-        lib.density_qn_settings_size.restype = c_size_t
         self.assertTrue(
             check_settings_layout(
                 "test_density_qn_settings_layout",
                 DensityQNSettings,
                 lib.get_reference_density_qn_values,
                 lib.reference_density_qn_field,
-                lib.density_qn_settings_size(),
             ),
             "test_density_qn_settings_layout failed",
         )

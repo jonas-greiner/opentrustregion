@@ -11,6 +11,7 @@ import numpy as np
 from ctypes import POINTER, byref, c_bool, c_void_p, Structure
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
+    check_struct_sizes,
     lib,
     c_int,
     c_real,
@@ -72,6 +73,9 @@ class OAOSettings(Settings):
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(OAOSettings)
 bind_callback_fields(OAOSettings)
+
+# check that the settings structure has the size the library exports for it
+check_struct_sizes(lib, [("oao_settings", OAOSettingsC)])
 
 
 def check_dm_ao(

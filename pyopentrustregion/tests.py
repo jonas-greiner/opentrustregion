@@ -111,6 +111,13 @@ fortran_tests = {
         "inherit_solver_callbacks",
         "init_defaults",
         "init_rng",
+        "invoke_get_extra_trial_vectors",
+        "invoke_hess_x",
+        "invoke_obj_func",
+        "invoke_precond",
+        "invoke_precond_pd",
+        "invoke_project",
+        "invoke_update_orbs",
         "jacobi_davidson_correction",
         "level_shifted_davidson",
         "level_shifted_diag_precond",
@@ -1876,12 +1883,13 @@ class PyInterfaceUnitTests(unittest.TestCase):
         error for one whose structure differs in size or which exports no sizes
         """
         test_passed = True
-        sizes = {
-            "solver_settings": sizeof(SolverSettings.c_struct),
-            "stability_settings": sizeof(StabilitySettings.c_struct),
-            "solver_state": sizeof(SolverState.c_struct),
-            "stability_state": sizeof(StabilityState.c_struct),
-        }
+        structures = [
+            ("solver_settings", SolverSettings.c_struct),
+            ("stability_settings", StabilitySettings.c_struct),
+            ("solver_state", SolverState.c_struct),
+            ("stability_state", StabilityState.c_struct),
+        ]
+        sizes = {name: sizeof(structure) for name, structure in structures}
 
         def mock_library(sizes):
             """
@@ -1897,7 +1905,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         # the check passes for the sizes of the Python structures
         try:
-            check_struct_sizes(mock_library(sizes))
+            check_struct_sizes(mock_library(sizes), structures)
         except ImportError:
             print(" test_check_struct_sizes failed: Raised for matching sizes.")
             test_passed = False
@@ -1912,7 +1920,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 ),
             ]:
                 try:
-                    check_struct_sizes(mock_library(wrong_sizes))
+                    check_struct_sizes(mock_library(wrong_sizes), structures)
                     print(f" test_check_struct_sizes failed: Not raised {case}.")
                     test_passed = False
                 except ImportError:
@@ -2832,7 +2840,7 @@ class PyIntegrationTests(unittest.TestCase):
                 "counter was not populated."
             )
             test_passed = False
-        if stability_state.min_eigval <= 0.0:
+        if not stability_state.min_eigval > 0.0:
             print(
                 " test_stability_check_py failed: State does not hold a positive "
                 "lowest eigenvalue for minimum."
@@ -2879,19 +2887,19 @@ class PyIntegrationTests(unittest.TestCase):
                 "stability of saddle point."
             )
             test_passed = False
-        if stability_state.min_eigval >= 0.0:
+        if not stability_state.min_eigval < 0.0:
             print(
                 " test_stability_check_py failed: State does not hold a negative "
                 "lowest eigenvalue for saddle point."
             )
             test_passed = False
-        if abs(np.linalg.norm(kappa) - 1.0) > 1e-6:
+        if not np.isclose(np.linalg.norm(kappa), 1.0, rtol=0.0, atol=1e-6):
             print(
                 " test_stability_check_py failed: Stability check does not return a "
                 "normalized direction for saddle point."
             )
             test_passed = False
-        if kappa @ H @ kappa >= 0.0:
+        if not kappa @ H @ kappa < 0.0:
             print(
                 " test_stability_check_py failed: Stability check does not return a "
                 "direction of negative curvature for saddle point."

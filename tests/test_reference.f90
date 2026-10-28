@@ -19,7 +19,6 @@ module test_reference
 
     ! tolerance for real comparisons
     real(rp), parameter :: tol = 1e-10_rp
-    real(c_rp), parameter :: tol_c = real(tol, kind=c_rp)
 
     ! number of parameters
     integer(ip), parameter :: n_param = 3_ip
@@ -95,9 +94,12 @@ module test_reference
     ! callback functions report, which the Fortran mocks of the extensions return from
     ! the call numbered failing_call or, while it is 0, from every call, the
     ! bookkeeping of the C logging function includes the number of messages it
-    ! received
+    ! received, and the position among the real outputs of a Fortran mock of the
+    ! extensions, in the order of its argument list, at which the same calls return a
+    ! value that is not a number, every position while it is negative and none while
+    ! it is 0
     type :: host_context_type
-        integer(ip) :: n_calls = 0, failing_call = 0, n_messages = 0
+        integer(ip) :: n_calls = 0, failing_call = 0, n_messages = 0, nan_output = 0
         logical :: logger_called = .false., stability_warning_logged = .false.
         integer(c_ip) :: mock_error = 0
     end type
@@ -112,6 +114,13 @@ module test_reference
     type(solver_state_type), target :: armed_state
     type(solver_state_type_c), target :: armed_state_c
     logical :: state_armed = .false., state_not_copied = .false.
+
+    ! comparison of a real or complex value with a reference value within a tolerance,
+    ! which a value that is not a number fails
+    interface is_close
+        module procedure is_close_real
+        module procedure is_close_complex
+    end interface
 
     ! checks and operations on all callback functions of settings and callback bundles,
     ! so that a new callback function only needs to be added here
@@ -152,6 +161,98 @@ module test_reference
     end interface
 
 contains
+
+    elemental logical function is_close_real(x, ref, tolerance)
+        !
+        ! this function checks whether a value agrees with a finite reference value
+        ! within a tolerance, by default tol, which a value that is not a number or
+        ! infinite never does, since every comparison with a value that is not a
+        ! number is false
+        !
+        real(rp), intent(in) :: x, ref
+        real(rp), intent(in), optional :: tolerance
+
+        ! compare the difference with the given or the default tolerance
+        if (present(tolerance)) then
+            is_close_real = abs(x - ref) <= tolerance
+        else
+            is_close_real = abs(x - ref) <= tol
+        end if
+
+    end function is_close_real
+
+    elemental logical function is_close_complex(x, ref, tolerance)
+        !
+        ! this function checks whether a complex value agrees with a finite reference
+        ! value within a tolerance, by default tol, as is_close_real does for a real one
+        !
+        complex(rp), intent(in) :: x, ref
+        real(rp), intent(in), optional :: tolerance
+
+        ! compare the modulus of the difference with the given or the default tolerance
+        if (present(tolerance)) then
+            is_close_complex = abs(x - ref) <= tolerance
+        else
+            is_close_complex = abs(x - ref) <= tol
+        end if
+
+    end function is_close_complex
+
+    elemental logical function is_below(x, bound)
+        !
+        ! this function checks whether a value is finite and below a finite bound,
+        ! which a value that is not a number or infinite never is
+        !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        real(rp), intent(in) :: x, bound
+
+        ! compare a finite value with the bound
+        is_below = ieee_is_finite(x) .and. x < bound
+
+    end function is_below
+
+    elemental logical function is_at_most(x, bound)
+        !
+        ! this function checks whether a value is finite and at most a finite bound,
+        ! which a value that is not a number or infinite never is
+        !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        real(rp), intent(in) :: x, bound
+
+        ! compare a finite value with the bound
+        is_at_most = ieee_is_finite(x) .and. x <= bound
+
+    end function is_at_most
+
+    elemental logical function is_above(x, bound)
+        !
+        ! this function checks whether a value is finite and above a finite bound,
+        ! which a value that is not a number or infinite never is
+        !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        real(rp), intent(in) :: x, bound
+
+        ! compare a finite value with the bound
+        is_above = ieee_is_finite(x) .and. x > bound
+
+    end function is_above
+
+    elemental logical function is_at_least(x, bound)
+        !
+        ! this function checks whether a value is finite and at least a finite bound,
+        ! which a value that is not a number or infinite never is
+        !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        real(rp), intent(in) :: x, bound
+
+        ! compare a finite value with the bound
+        is_at_least = ieee_is_finite(x) .and. x >= bound
+
+    end function is_at_least
 
     subroutine check_host_context(context)
         !
@@ -279,6 +380,7 @@ contains
         host_context%stability_warning_logged = .false.
         host_context%mock_error = 0
         host_context%failing_call = 0
+        host_context%nan_output = 0
         host_context_armed = .true.
         host_context_wrong = .false.
         host_context_missing = .false.
@@ -810,24 +912,24 @@ contains
         !
         type(solver_settings_type), intent(in) :: lhs, rhs
 
-        equal_solver = &
-            (lhs%stability .eqv. rhs%stability) .and. &
-            (lhs%line_search .eqv. rhs%line_search) .and. &
-            (lhs%refresh_hess .eqv. rhs%refresh_hess) .and. &
-            (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
-            (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
-            abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
-            abs(lhs%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
-            abs(lhs%global_red_factor - rhs%global_red_factor) <= tol .and. &
-            abs(lhs%local_red_factor - rhs%local_red_factor) <= tol .and. &
-            lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
-            lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
-            lhs%n_macro == rhs%n_macro .and. lhs%n_micro == rhs%n_micro .and. &
-            lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
-            lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
-            lhs%subsystem_solver == rhs%subsystem_solver .and. &
-            lhs%trust_region_shape == rhs%trust_region_shape .and. &
-            lhs%stability_settings == rhs%stability_settings
+        equal_solver = (lhs%stability .eqv. rhs%stability) .and. &
+                       (lhs%line_search .eqv. rhs%line_search) .and. &
+                       (lhs%refresh_hess .eqv. rhs%refresh_hess) .and. &
+                       (lhs%grad_noise .eqv. rhs%grad_noise) .and. &
+                       (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
+                       is_close(lhs%conv_tol, rhs%conv_tol) .and. &
+                       is_close(lhs%start_trust_radius, rhs%start_trust_radius) .and. &
+                       is_close(lhs%global_red_factor, rhs%global_red_factor) .and. &
+                       is_close(lhs%local_red_factor, rhs%local_red_factor) .and. &
+                       lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
+                       lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
+                       lhs%n_macro == rhs%n_macro .and. &
+                       lhs%n_micro == rhs%n_micro .and. &
+                       lhs%jacobi_davidson_start == rhs%jacobi_davidson_start .and. &
+                       lhs%seed == rhs%seed .and. lhs%verbose == rhs%verbose .and. &
+                       lhs%subsystem_solver == rhs%subsystem_solver .and. &
+                       lhs%trust_region_shape == rhs%trust_region_shape .and. &
+                       lhs%stability_settings == rhs%stability_settings
 
     end function equal_solver
 
@@ -852,8 +954,8 @@ contains
         equal_stability = &
             (lhs%hess_symm .eqv. rhs%hess_symm) .and. &
             (lhs%stop_on_instability .eqv. rhs%stop_on_instability) .and. &
-            abs(lhs%conv_tol - rhs%conv_tol) <= tol .and. &
-            abs(lhs%stability_thresh - rhs%stability_thresh) <= tol .and. &
+            is_close(lhs%conv_tol, rhs%conv_tol) .and. &
+            is_close(lhs%stability_thresh, rhs%stability_thresh) .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_iter == rhs%n_iter .and. &
@@ -891,10 +993,10 @@ contains
             (lhs_c%refresh_hess .eqv. logical(rhs%refresh_hess, kind=c_bool)) .and. &
             (lhs_c%grad_noise .eqv. logical(rhs%grad_noise, kind=c_bool)) .and. &
             (lhs_c%hess_symm .eqv. logical(rhs%hess_symm, kind=c_bool)) .and. &
-            lhs_c%initialized .and. abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
-            abs(lhs_c%start_trust_radius - rhs%start_trust_radius) <= tol .and. &
-            abs(lhs_c%global_red_factor - rhs%global_red_factor) <= tol .and. &
-            abs(lhs_c%local_red_factor - rhs%local_red_factor) <= tol .and. &
+            lhs_c%initialized .and. is_close(lhs_c%conv_tol, rhs%conv_tol) .and. &
+            is_close(lhs_c%start_trust_radius, rhs%start_trust_radius) .and. &
+            is_close(lhs_c%global_red_factor, rhs%global_red_factor) .and. &
+            is_close(lhs_c%local_red_factor, rhs%local_red_factor) .and. &
             lhs_c%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs_c%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs_c%n_macro == rhs%n_macro .and. lhs_c%n_micro == rhs%n_micro .and. &
@@ -937,8 +1039,8 @@ contains
             (lhs_c%hess_symm .eqv. logical(rhs%hess_symm, kind=c_bool)) .and. &
             (lhs_c%stop_on_instability .eqv. &
              logical(rhs%stop_on_instability, kind=c_bool)) .and. &
-            lhs_c%initialized .and. abs(lhs_c%conv_tol - rhs%conv_tol) <= tol .and. &
-            abs(lhs_c%stability_thresh - rhs%stability_thresh) <= tol .and. &
+            lhs_c%initialized .and. is_close(lhs_c%conv_tol, rhs%conv_tol) .and. &
+            is_close(lhs_c%stability_thresh, rhs%stability_thresh) .and. &
             lhs_c%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs_c%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs_c%n_iter == rhs%n_iter .and. &
@@ -974,12 +1076,12 @@ contains
         equal_solver_state_c = &
             (lhs_c%max_precision_reached .eqv. &
              logical(rhs%max_precision_reached, kind=c_bool)) .and. &
-            abs(lhs_c%func - rhs%func) <= tol .and. &
-            abs(lhs_c%grad_rms - rhs%grad_rms) <= tol .and. &
-            abs(lhs_c%trust_radius - rhs%trust_radius) <= tol .and. &
-            abs(lhs_c%relative_residual - rhs%relative_residual) <= tol .and. &
-            abs(lhs_c%level_shift - rhs%level_shift) <= tol .and. &
-            abs(lhs_c%step_size - rhs%step_size) <= tol .and. &
+            is_close(lhs_c%func, rhs%func) .and. &
+            is_close(lhs_c%grad_rms, rhs%grad_rms) .and. &
+            is_close(lhs_c%trust_radius, rhs%trust_radius) .and. &
+            is_close(lhs_c%relative_residual, rhs%relative_residual) .and. &
+            is_close(lhs_c%level_shift, rhs%level_shift) .and. &
+            is_close(lhs_c%step_size, rhs%step_size) .and. &
             lhs_c%macro_iteration == rhs%macro_iteration .and. &
             lhs_c%micro_iteration == rhs%micro_iteration .and. &
             lhs_c%jacobi_davidson_iteration == rhs%jacobi_davidson_iteration .and. &
@@ -1013,10 +1115,10 @@ contains
         type(stability_state_type_c), intent(in) :: lhs_c
         type(stability_state_type), intent(in) :: rhs
 
-        equal_stability_state_c = &
-            abs(lhs_c%min_eigval - rhs%min_eigval) <= tol .and. &
-            abs(lhs_c%residual_rms - rhs%residual_rms) <= tol .and. &
-            lhs_c%iteration == rhs%iteration .and. lhs_c%n_hess_x == rhs%n_hess_x
+        equal_stability_state_c = is_close(lhs_c%min_eigval, rhs%min_eigval) .and. &
+                                  is_close(lhs_c%residual_rms, rhs%residual_rms) .and. &
+                                  lhs_c%iteration == rhs%iteration .and. &
+                                  lhs_c%n_hess_x == rhs%n_hess_x
 
     end function equal_stability_state_c
 
@@ -1336,21 +1438,21 @@ contains
         end if
 
         ! check objective function value
-        if (abs(func - 3.0_rp) > tol) then
+        if (.not. is_close(func, 3.0_rp)) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Objective function value returned"//message//" wrong."
             test_passed = .false.
         end if
 
         ! check gradient
-        if (any(abs(grad - 2.0_rp) > tol)) then
+        if (.not. all(is_close(grad, 2.0_rp))) then
             write(stderr, *) "test_"//test_name//" failed: Gradient returned"// &
                 message//" wrong."
             test_passed = .false.
         end if
 
         ! check Hessian diagonal
-        if (any(abs(h_diag - 3.0_rp) > tol)) then
+        if (.not. all(is_close(h_diag, 3.0_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Hessian diagonal returned"//message//" wrong."
             test_passed = .false.
@@ -1418,21 +1520,21 @@ contains
         end if
 
         ! check objective function value
-        if (abs(func - 3.0_c_rp) > tol_c) then
+        if (.not. is_close(func, 3.0_c_rp)) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Objective function value returned"//message//" wrong."
             test_passed = .false.
         end if
 
         ! check gradient
-        if (any(abs(grad - 2.0_c_rp) > tol_c)) then
+        if (.not. all(is_close(grad, 2.0_c_rp))) then
             write(stderr, *) "test_"//test_name//" failed: Gradient returned"// &
                 message//" wrong."
             test_passed = .false.
         end if
 
         ! check Hessian diagonal
-        if (any(abs(h_diag - 3.0_c_rp) > tol_c)) then
+        if (.not. all(is_close(h_diag, 3.0_c_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Hessian diagonal returned"//message//" wrong."
             test_passed = .false.
@@ -1499,7 +1601,7 @@ contains
         ! check Hessian linear transformation
         expected_factor = 4.0_rp
         if (present(factor)) expected_factor = factor
-        if (any(abs(hess_x - expected_factor) > tol)) then
+        if (.not. all(is_close(hess_x, expected_factor))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Hessian linear transformation returned"//message//" wrong."
             test_passed = .false.
@@ -1558,7 +1660,7 @@ contains
         end if
 
         ! check Hessian linear transformation
-        if (any(abs(hess_x - 4.0_c_rp) > tol_c)) then
+        if (.not. all(is_close(hess_x, 4.0_c_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Hessian linear transformation returned"//message//" wrong."
             test_passed = .false.
@@ -1612,7 +1714,7 @@ contains
         end if
 
         ! check objective function
-        if (abs(func - 3.0_rp) > tol) then
+        if (.not. is_close(func, 3.0_rp)) then
             write(stderr, *) "test_"//test_name//" failed: Function value returned"// &
                 message//" wrong."
             test_passed = .false.
@@ -1670,7 +1772,7 @@ contains
         end if
 
         ! check objective function
-        if (abs(func - 3.0_c_rp) > tol_c) then
+        if (.not. is_close(func, 3.0_c_rp)) then
             write(stderr, *) "test_"//test_name//" failed: Function value returned"// &
                 message//" wrong."
             test_passed = .false.
@@ -1723,7 +1825,7 @@ contains
         end if
 
         ! check preconditioned residual
-        if (any(abs(precond_residual - 5.0_rp) > tol)) then
+        if (.not. all(is_close(precond_residual, 5.0_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Preconditioned residual returned"//message//" wrong."
             test_passed = .false.
@@ -1780,7 +1882,7 @@ contains
         end if
 
         ! check preconditioned residual
-        if (any(abs(precond_residual - 5.0_c_rp) > tol_c)) then
+        if (.not. all(is_close(precond_residual, 5.0_c_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Preconditioned residual returned"//message//" wrong."
             test_passed = .false.
@@ -1835,7 +1937,7 @@ contains
         end if
 
         ! check preconditioned residual
-        if (any(abs(precond_residual - 3.0_rp) > tol)) then
+        if (.not. all(is_close(precond_residual, 3.0_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Preconditioned residual returned"//message//" wrong."
             test_passed = .false.
@@ -1894,7 +1996,7 @@ contains
         end if
 
         ! check preconditioned residual
-        if (any(abs(precond_residual - 3.0_c_rp) > tol_c)) then
+        if (.not. all(is_close(precond_residual, 3.0_c_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Preconditioned residual returned"//message//" wrong."
             test_passed = .false.
@@ -1947,7 +2049,7 @@ contains
         end if
 
         ! check projected vector
-        if (any(abs(vector - 2.0_rp) > tol)) then
+        if (.not. all(is_close(vector, 2.0_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Projected vector returned"//message//" wrong."
             test_passed = .false.
@@ -2004,7 +2106,7 @@ contains
         end if
 
         ! check projected vector
-        if (any(abs(vector - 2.0_c_rp) > tol_c)) then
+        if (.not. all(is_close(vector, 2.0_c_rp))) then
             write(stderr, *) "test_"//test_name// &
                 " failed: Projected vector returned"//message//" wrong."
             test_passed = .false.
@@ -2055,8 +2157,8 @@ contains
         end if
 
         ! check returned trial space
-        if (any(abs(trial_vectors - spread( &
-            [(real(i, kind=rp), i=1, n_extra_trial_vectors)], 1, n_param)) > tol)) then
+        if (.not. all(is_close(trial_vectors, spread( &
+            [(real(i, kind=rp), i=1, n_extra_trial_vectors)], 1, n_param)))) then
             write(stderr, *) "test_"//test_name//" failed: Returned trial vectors"// &
                 message//" wrong."
             test_passed = .false.
@@ -2112,9 +2214,8 @@ contains
         end if
 
         ! check returned trial space
-        if (any(abs(trial_vectors - &
-                    spread([(real(i, kind=c_rp), i=1, n_extra_trial_vectors)], 1, &
-                           n_param)) > tol_c)) then
+        if (.not. all(is_close(trial_vectors, spread( &
+            [(real(i, kind=c_rp), i=1, n_extra_trial_vectors)], 1, n_param)))) then
             write(stderr, *) "test_"//test_name//" failed: Returned trial vectors"// &
                 message//" wrong."
             test_passed = .false.

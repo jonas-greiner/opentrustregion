@@ -9,7 +9,7 @@ module otr_common_c_interface_unit_tests
     use opentrustregion_core, only: rp, ip, stderr, solver_state_type
     use c_interface, only: c_rp, c_ip, solver_state_type_c
     use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
-    use test_reference, only: tol_c, n_param
+    use test_reference, only: n_param, is_close
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, c_loc, &
                                            c_associated, c_null_ptr, c_null_funptr, &
                                            c_null_char
@@ -966,8 +966,7 @@ contains
         ! callback function with the level of an extension object held at the address
         ! it receives as context, or the host's C function for an object that does not
         ! perform it, whose Hessian linear transformation it keeps in the bundles of
-        ! both levels, returns the C wrapper of the Hessian linear transformation and
-        ! copies the orbitals back to the host's array if the object updates a copy
+        ! both levels, and returns the C wrapper of the Hessian linear transformation
         !
         use c_interface_unit_tests, only: mock_update_orbs, &
                                           mock_update_orbs_no_hess_x, mock_hess_x
@@ -981,8 +980,6 @@ contains
         real(c_rp) :: kappa_c(n_param + 1), func_c, grad_c(n_param + 1), &
                       h_diag_c(n_param + 1)
         type(c_funptr) :: hess_x_c_funptr
-        real(rp), target :: orbitals(2, 2, 1)
-        real(c_rp), target :: orbitals_c(2, 2, 1)
         integer(c_ip) :: error_c
         integer(ip) :: i_case
         character(len=*), parameter :: no_hess_x_case_names(3) = &
@@ -1016,16 +1013,17 @@ contains
             if (.not. check_role_c_wrapper("update_orbs_c_wrapper", extension, &
                                            "update_orbs", i_case, 1_ip, error_c)) &
                 test_update_orbs_c_wrapper = .false.
-            if (abs(func_c - sum(kappa_c(:n_param))) > tol_c .or. &
-                any(abs(grad_c(:n_param) - 2.0_c_rp * kappa_c(:n_param)) > tol_c) .or. &
-                any(abs(h_diag_c(:n_param) - 3.0_c_rp * kappa_c(:n_param)) > tol_c)) &
+            if (.not. is_close(func_c, sum(kappa_c(:n_param))) .or. &
+                .not. all(is_close(grad_c(:n_param), &
+                                   2.0_c_rp * kappa_c(:n_param))) .or. &
+                .not. all(is_close(h_diag_c(:n_param), 3.0_c_rp * kappa_c(:n_param)))) &
                 then
                 write(stderr, *) "test_update_orbs_c_wrapper failed: Results not "// &
                     "returned for an object "//trim(role_case_names(i_case))//"."
                 test_update_orbs_c_wrapper = .false.
             end if
-            if (abs(grad_c(n_param + 1) + 1.0_c_rp) > tol_c .or. &
-                abs(h_diag_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+            if (.not. is_close(grad_c(n_param + 1), -1.0_c_rp) .or. &
+                .not. is_close(h_diag_c(n_param + 1), -1.0_c_rp)) then
                 write(stderr, *) "test_update_orbs_c_wrapper failed: Arrays "// &
                     "written beyond the number of parameters for an object "// &
                     trim(role_case_names(i_case))//"."
@@ -1093,24 +1091,6 @@ contains
             end if
         end do
 
-        ! call the orbital update of an object performing it whose holder holds a copy
-        ! of the host's orbitals of another real kind and the host's array, as the C
-        ! factories of the orbital bases hold them if the real kinds differ, and
-        ! determine if the orbitals are copied back to the host's array
-        extension%provides%update_orbs = .true.
-        call setup_mock_extension_holder(holder, extension, 1_ip)
-        call random_number(orbitals)
-        orbitals_c = 0.0_c_rp
-        holder%solver_level%orbitals => orbitals
-        holder%solver_level%orbitals_c => orbitals_c
-        error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
-                                        hess_x_c_funptr, c_loc(holder%solver_level))
-        if (any(abs(orbitals_c - real(orbitals, kind=c_rp)) > tol_c)) then
-            write(stderr, *) "test_update_orbs_c_wrapper failed: Orbitals not "// &
-                "copied back to the host's array."
-            test_update_orbs_c_wrapper = .false.
-        end if
-
         ! call the orbital update without a holder, which has to produce an error and
         ! no Hessian linear transformation
         error_c = update_orbs_c_wrapper(kappa_c, func_c, grad_c, h_diag_c, &
@@ -1172,7 +1152,7 @@ contains
                 if (.not. check_role_c_wrapper("obj_func_c_wrapper", extension, &
                                                "obj_func", i_case, i_level, error_c)) &
                     test_obj_func_c_wrapper = .false.
-                if (abs(func_c - sum(kappa_c(:n_param))) > tol_c) then
+                if (.not. is_close(func_c, sum(kappa_c(:n_param)))) then
                     write(stderr, *) "test_obj_func_c_wrapper failed: Result not "// &
                         "returned for the "//trim(level_names(i_level))// &
                         " of an object "//trim(role_case_names(i_case))//"."
@@ -1236,14 +1216,14 @@ contains
                 if (.not. check_role_c_wrapper("hess_x_c_wrapper", extension, &
                                                "hess_x", i_case, i_level, error_c)) &
                     test_hess_x_c_wrapper = .false.
-                if (any(abs(hess_x_c(:n_param) - 4.0_c_rp * x_c(:n_param)) > tol_c)) &
+                if (.not. all(is_close(hess_x_c(:n_param), 4.0_c_rp * x_c(:n_param)))) &
                     then
                     write(stderr, *) "test_hess_x_c_wrapper failed: Result not "// &
                         "returned for the "//trim(level_names(i_level))// &
                         " of an object "//trim(role_case_names(i_case))//"."
                     test_hess_x_c_wrapper = .false.
                 end if
-                if (abs(hess_x_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                if (.not. is_close(hess_x_c(n_param + 1), -1.0_c_rp)) then
                     write(stderr, *) "test_hess_x_c_wrapper failed: Array written "// &
                         "beyond the number of parameters for the "// &
                         trim(level_names(i_level))//" of an object "// &
@@ -1309,14 +1289,14 @@ contains
                 if (.not. check_role_c_wrapper("precond_c_wrapper", extension, &
                                                "precond", i_case, i_level, error_c)) &
                     test_precond_c_wrapper = .false.
-                if (any(abs(precond_residual_c(:n_param) - &
-                            2.0_c_rp * residual_c(:n_param)) > tol_c)) then
+                if (.not. all(is_close(precond_residual_c(:n_param), &
+                                       2.0_c_rp * residual_c(:n_param)))) then
                     write(stderr, *) "test_precond_c_wrapper failed: Result not "// &
                         "returned for the "//trim(level_names(i_level))// &
                         " of an object "//trim(role_case_names(i_case))//"."
                     test_precond_c_wrapper = .false.
                 end if
-                if (abs(precond_residual_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                if (.not. is_close(precond_residual_c(n_param + 1), -1.0_c_rp)) then
                     write(stderr, *) "test_precond_c_wrapper failed: Array written "// &
                         "beyond the number of parameters for the "// &
                         trim(level_names(i_level))//" of an object "// &
@@ -1383,14 +1363,14 @@ contains
                 if (.not. check_role_c_wrapper( &
                     "precond_pd_c_wrapper", extension, "precond_pd", i_case, i_level, &
                     error_c)) test_precond_pd_c_wrapper = .false.
-                if (any(abs(precond_residual_c(:n_param) - &
-                            3.0_c_rp * residual_c(:n_param)) > tol_c)) then
+                if (.not. all(is_close(precond_residual_c(:n_param), &
+                                       3.0_c_rp * residual_c(:n_param)))) then
                     write(stderr, *) "test_precond_pd_c_wrapper failed: Result not "// &
                         "returned for the "//trim(level_names(i_level))// &
                         " of an object "//trim(role_case_names(i_case))//"."
                     test_precond_pd_c_wrapper = .false.
                 end if
-                if (abs(precond_residual_c(n_param + 1) + 1.0_c_rp) > tol_c) then
+                if (.not. is_close(precond_residual_c(n_param + 1), -1.0_c_rp)) then
                     write(stderr, *) "test_precond_pd_c_wrapper failed: Array "// &
                         "written beyond the number of parameters for the "// &
                         trim(level_names(i_level))//" of an object "// &
@@ -1455,14 +1435,15 @@ contains
                 if (.not. check_role_c_wrapper("project_c_wrapper", extension, &
                                                "project", i_case, i_level, error_c)) &
                     test_project_c_wrapper = .false.
-                if (any(abs(projected_c(:n_param) - 2.0_c_rp * vector_c(:n_param)) > &
-                        tol_c)) then
+                if (.not. all(is_close(projected_c(:n_param), &
+                                       2.0_c_rp * vector_c(:n_param)))) then
                     write(stderr, *) "test_project_c_wrapper failed: Result not "// &
                         "returned for the "//trim(level_names(i_level))// &
                         " of an object "//trim(role_case_names(i_case))//"."
                     test_project_c_wrapper = .false.
                 end if
-                if (abs(projected_c(n_param + 1) - vector_c(n_param + 1)) > tol_c) then
+                if (.not. is_close(projected_c(n_param + 1), vector_c(n_param + 1))) &
+                    then
                     write(stderr, *) "test_project_c_wrapper failed: Array written "// &
                         "beyond the number of parameters for the "// &
                         trim(level_names(i_level))//" of an object "// &
@@ -1530,16 +1511,15 @@ contains
                                                extension, "get_extra_trial_vectors", &
                                                i_case, i_level, error_c)) &
                     test_get_extra_trial_vectors_c_wrapper = .false.
-                if (any( &
-                    abs(trial_vectors_c(n_param + 1:2 * n_param) - 2.0_c_rp) > tol_c)) &
-                    then
+                if (.not. all(is_close(trial_vectors_c(n_param + 1:2 * n_param), &
+                                       2.0_c_rp))) then
                     write(stderr, *) "test_get_extra_trial_vectors_c_wrapper "// &
                         "failed: Result not returned for the "// &
                         trim(level_names(i_level))//" of an object "// &
                         trim(role_case_names(i_case))//"."
                     test_get_extra_trial_vectors_c_wrapper = .false.
                 end if
-                if (abs(trial_vectors_c(2 * n_param + 1) + 1.0_c_rp) > tol_c) then
+                if (.not. is_close(trial_vectors_c(2 * n_param + 1), -1.0_c_rp)) then
                     write(stderr, *) "test_get_extra_trial_vectors_c_wrapper "// &
                         "failed: Array written beyond the number of parameters for "// &
                         "the "//trim(level_names(i_level))//" of an object "// &
@@ -1659,7 +1639,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_stability_hess_x_c_wrapper = .false.
             end if
-            if (any(abs(hess_x_c - 5.0_c_rp * x_c) > tol_c)) then
+            if (.not. all(is_close(hess_x_c, 5.0_c_rp * x_c))) then
                 write(stderr, *) "test_stability_hess_x_c_wrapper failed: Result "// &
                     "of the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1721,7 +1701,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_approx_hess_x_c_wrapper = .false.
             end if
-            if (any(abs(hess_x_c - 6.0_c_rp * x_c) > tol_c)) then
+            if (.not. all(is_close(hess_x_c, 6.0_c_rp * x_c))) then
                 write(stderr, *) "test_approx_hess_x_c_wrapper failed: Result of "// &
                     "the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."

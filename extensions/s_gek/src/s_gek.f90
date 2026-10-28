@@ -180,6 +180,44 @@ contains
 
     end subroutine s_gek_sanity_check
 
+    subroutine invoke_change_reference(change_reference, new_ref, n_points, &
+                                       kappa_list, local_grad_list, grad_list, &
+                                       settings, error_origin, error)
+        !
+        ! this subroutine calls the host's change of reference function with the host
+        ! context of the settings and passes on its error, and returns an error of its
+        ! own with the origin of the object if the function returns values that are not
+        ! finite for the stored points
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        procedure(change_reference_type), intent(in), pointer :: change_reference
+        real(rp), intent(in), target :: new_ref(:)
+        integer(ip), intent(in) :: n_points
+        real(rp), intent(inout), target :: kappa_list(:, :), local_grad_list(:, :), &
+                                           grad_list(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! call the change of reference function
+        call change_reference(new_ref, n_points, kappa_list, local_grad_list, &
+                              grad_list, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. (all(ieee_is_finite(kappa_list(:, :n_points))) .and. &
+                   all(ieee_is_finite(local_grad_list(:, :n_points))) .and. &
+                   all(ieee_is_finite(grad_list(:, :n_points))))) then
+            call settings%log("Change of reference function returned values that "// &
+                              "are not finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_change_reference
+
     recursive subroutine update_orbs_s_gek(self, kappa, func, grad, h_diag, &
                                            hess_x_funptr, error, context)
         !
@@ -315,9 +353,10 @@ contains
         end if
 
         ! move displacement and gradient to current reference
-        call self%change_reference(kappa, self%n_points, self%kappa_list, &
-                                   self%local_grad_list, self%grad_list, error, &
-                                   self%settings%context)
+        call invoke_change_reference(self%change_reference, kappa, self%n_points, &
+                                     self%kappa_list, self%local_grad_list, &
+                                     self%grad_list, self%settings, self%error_origin, &
+                                     error)
         if (error /= 0) return
 
         ! set Hessian diagonal

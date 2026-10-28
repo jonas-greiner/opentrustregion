@@ -7,7 +7,7 @@
 module otr_common_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
-    use test_reference, only: tol
+    use test_reference, only: tol, is_close, is_at_most
     use otr_common, only: extension_type, orbital_basis_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
@@ -475,16 +475,18 @@ contains
         !
         ! this subroutine is a mock response function for the closed-shell case
         !
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out), target, contiguous :: response(:, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context and fail with the error code set in it
+        ! check host context and fail with the error code set in it or return a value
+        ! that is not a number
         error = record_host_call("get_response", context)
         response = mock_response_factor * dm
+        call inject_host_nan(context, 1_ip, response(1, 1))
 
     end subroutine mock_get_response_cs
 
@@ -492,16 +494,18 @@ contains
         !
         ! this subroutine is a mock response function for the open-shell case
         !
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        ! check host context and fail with the error code set in it
+        ! check host context and fail with the error code set in it or return a value
+        ! that is not a number
         error = record_host_call("get_response", context)
         response = mock_response_factor * dm
+        call inject_host_nan(context, 1_ip, response(1, 1, 1))
 
     end subroutine mock_get_response_os
 
@@ -557,7 +561,7 @@ contains
         ! every channel is the multiple of the mock response function of its own
         ! density matrix displacement plus a multiple of those of the other channels
         !
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
@@ -572,6 +576,7 @@ contains
             response(:, :, k) = mock_response_factor * dm(:, :, k) + &
                                 mock_response_coupling * (sum(dm, dim=3) - dm(:, :, k))
         end do
+        call inject_host_nan(context, 1_ip, response(1, 1, 1))
 
     end subroutine mock_get_coupled_response_os
 
@@ -583,7 +588,7 @@ contains
         ! changes between calls so that non-vanishing differences are produced
         !
         use otr_common, only: get_response_cs_type
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -610,6 +615,11 @@ contains
         if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
         if (present(get_response_funptr)) get_response_funptr => mock_get_response_cs
 
+        ! return a value that is not a number in the energy or the Fock matrix if the
+        ! host context asks for it
+        call inject_host_nan(context, 1_ip, energy)
+        if (present(fock)) call inject_host_nan(context, 2_ip, fock(1, 1))
+
     end subroutine mock_evaluate_dm_cs
 
     subroutine mock_evaluate_dm_os(dm, energy, fock, get_response_funptr, error, &
@@ -620,7 +630,7 @@ contains
         ! between calls so that non-vanishing differences are produced
         !
         use otr_common, only: get_response_os_type
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -646,6 +656,11 @@ contains
         energy = sum(dm)
         if (present(fock)) fock = mock_factor(mock_fock_factor) * dm
         if (present(get_response_funptr)) get_response_funptr => mock_get_response_os
+
+        ! return a value that is not a number in the energy or the Fock matrix if the
+        ! host context asks for it
+        call inject_host_nan(context, 1_ip, energy)
+        if (present(fock)) call inject_host_nan(context, 2_ip, fock(1, 1, 1))
 
     end subroutine mock_evaluate_dm_os
 
@@ -1109,8 +1124,8 @@ contains
             passed = .false.
             write(stderr, *) test_name// &
                 " failed: Passed AO overlap matrix shaped wrong."
-        else if (any(abs(ao_overlap - real( &
-            ao_overlap_pattern(int(n_ao_ref, kind=c_ip)), kind=rp)) > tol)) then
+        else if (.not. all(is_close(ao_overlap, real( &
+            ao_overlap_pattern(int(n_ao_ref, kind=c_ip)), kind=rp)))) then
             passed = .false.
             write(stderr, *) test_name//" failed: Passed AO overlap matrix wrong."
         end if
@@ -1120,6 +1135,241 @@ contains
         end if
 
     end function check_mock_factory_ao_overlap
+
+    logical function check_invoke_evaluate_dm(test_name, i_shell) result(test_passed)
+        !
+        ! this function tests the subroutine which calls the density matrix evaluating
+        ! function of an orbital basis of the closed-shell (i_shell = 1) or the
+        ! open-shell case (i_shell = 2)
+        !
+        use otr_common, only: orbital_settings_type, evaluate_dm_cs_type, &
+                              evaluate_dm_os_type, get_response_cs_type, &
+                              get_response_os_type, invoke_evaluate_dm_cs, &
+                              invoke_evaluate_dm_os
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use otr_common_test_reference, only: n_ao, shell_names
+        use test_reference, only: arm_host_context, host_context_reached
+
+        character(len=*), intent(in) :: test_name
+        integer(ip), intent(in) :: i_shell
+
+        integer(ip), parameter :: error_origin = 4200
+        type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(evaluate_dm_cs_type), pointer :: evaluate_dm_cs
+        procedure(evaluate_dm_os_type), pointer :: evaluate_dm_os
+        procedure(get_response_cs_type), pointer :: get_response_cs
+        procedure(get_response_os_type), pointer :: get_response_os
+        real(rp), target :: dm(n_ao, n_ao, i_shell), fock(n_ao, n_ao, i_shell)
+        real(rp) :: energy
+        integer(ip) :: error
+        logical :: response_set
+        character(len=:), allocatable :: suffix
+
+        ! assume tests pass
+        test_passed = .true.
+        suffix = " for the "//trim(shell_names(i_shell))//" case."
+
+        ! call a density matrix evaluating function with a random density matrix and
+        ! check that it receives the density matrix and the host context and that its
+        ! energy, Fock matrix and response function are returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        evaluate_dm_cs => mock_evaluate_dm_cs
+        evaluate_dm_os => mock_evaluate_dm_os
+        get_response_cs => null()
+        get_response_os => null()
+        call random_number(dm)
+        mock_requests = [integer(ip) :: ]
+        call evaluate()
+        if (error /= 0) then
+            write(stderr, *) "test_"//test_name//" failed: Produced error"//suffix
+            test_passed = .false.
+        end if
+        if (.not. is_close(energy, sum(dm))) then
+            write(stderr, *) "test_"//test_name//" failed: Energy not returned"//suffix
+            test_passed = .false.
+        end if
+        if (.not. all(is_close(fock, mock_fock_factor(1) * dm))) then
+            write(stderr, *) "test_"//test_name//" failed: Fock matrix not returned"// &
+                suffix
+            test_passed = .false.
+        end if
+        if (i_shell == 1) then
+            response_set = associated(get_response_cs, mock_get_response_cs)
+        else
+            response_set = associated(get_response_os, mock_get_response_os)
+        end if
+        if (.not. response_set) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Response function not returned"//suffix
+            test_passed = .false.
+        end if
+        if (.not. host_context_reached(test_name, context)) test_passed = .false.
+
+        ! let the function fail and check that its error is passed on unchanged
+        context%mock_error = 3
+        call evaluate()
+        if (error /= 3) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Error of the function not passed on unchanged"//suffix
+            test_passed = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return a Fock matrix that is not finite at a finite energy,
+        ! which has to be reported with the origin of the object and an error message
+        call setup_error_logging(settings, context)
+        context%nan_output = 2
+        call evaluate()
+        if (error /= error_origin + 1) then
+            write(stderr, *) "test_"//test_name//" failed: Fock matrix that is not "// &
+                "finite not reported with the origin of the object"//suffix
+            test_passed = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_"//test_name//" failed: No error message "// &
+                "printed for a Fock matrix that is not finite"//suffix
+            test_passed = .false.
+        end if
+
+        ! let the function return an energy that is not a number, alone and together
+        ! with a Fock matrix that is not a number, which has to be returned as a
+        ! positive infinite value without an error, since an infinite energy rejects
+        ! the point and leaves the Fock matrix unused
+        context%nan_output = 1
+        call evaluate()
+        if (error /= 0 .or. .not. energy > huge(energy)) then
+            write(stderr, *) "test_"//test_name//" failed: Energy that is not a "// &
+                "number not returned as a positive infinite value without an error"// &
+                suffix
+            test_passed = .false.
+        end if
+        context%nan_output = -1
+        call evaluate()
+        if (error /= 0 .or. .not. energy > huge(energy)) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Fock matrix checked at an infinite energy"//suffix
+            test_passed = .false.
+        end if
+        context%nan_output = 0
+
+    contains
+
+        subroutine evaluate()
+            !
+            ! this subroutine calls the routine under test for the case, asking for the
+            ! Fock matrix and the response function
+            !
+            if (i_shell == 1) then
+                call invoke_evaluate_dm_cs(evaluate_dm_cs, dm(:, :, 1), energy, &
+                                           settings, error_origin, error, &
+                                           fock(:, :, 1), get_response_cs)
+            else
+                call invoke_evaluate_dm_os(evaluate_dm_os, dm, energy, settings, &
+                                           error_origin, error, fock, get_response_os)
+            end if
+
+        end subroutine evaluate
+
+    end function check_invoke_evaluate_dm
+
+    logical function check_invoke_get_response(test_name, i_shell) result(test_passed)
+        !
+        ! this function tests the subroutine which calls the response function of an
+        ! orbital basis of the closed-shell (i_shell = 1) or the open-shell case
+        ! (i_shell = 2)
+        !
+        use otr_common, only: orbital_settings_type, get_response_cs_type, &
+                              get_response_os_type, invoke_get_response_cs, &
+                              invoke_get_response_os
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use otr_common_test_reference, only: n_ao, shell_names
+        use test_reference, only: arm_host_context, host_context_reached
+
+        character(len=*), intent(in) :: test_name
+        integer(ip), intent(in) :: i_shell
+
+        integer(ip), parameter :: error_origin = 4200
+        type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(get_response_cs_type), pointer :: get_response_cs
+        procedure(get_response_os_type), pointer :: get_response_os
+        real(rp), target :: dm(n_ao, n_ao, i_shell), response(n_ao, n_ao, i_shell)
+        integer(ip) :: error
+        character(len=:), allocatable :: suffix
+
+        ! assume tests pass
+        test_passed = .true.
+        suffix = " for the "//trim(shell_names(i_shell))//" case."
+
+        ! call a response function with a random density matrix displacement and check
+        ! that it receives the displacement and the host context and that its response
+        ! is returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        get_response_cs => mock_get_response_cs
+        get_response_os => mock_get_response_os
+        call random_number(dm)
+        call respond()
+        if (error /= 0) then
+            write(stderr, *) "test_"//test_name//" failed: Produced error"//suffix
+            test_passed = .false.
+        end if
+        if (.not. all(is_close(response, mock_response_factor * dm))) then
+            write(stderr, *) "test_"//test_name//" failed: Response not returned"// &
+                suffix
+            test_passed = .false.
+        end if
+        if (.not. host_context_reached(test_name, context)) test_passed = .false.
+
+        ! let the function fail and check that its error is passed on unchanged
+        context%mock_error = 3
+        call respond()
+        if (error /= 3) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Error of the function not passed on unchanged"//suffix
+            test_passed = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return a response that is not finite, which has to be
+        ! reported with the origin of the object and an error message
+        call setup_error_logging(settings, context)
+        context%nan_output = 1
+        call respond()
+        context%nan_output = 0
+        if (error /= error_origin + 1) then
+            write(stderr, *) "test_"//test_name//" failed: Response that is not "// &
+                "finite not reported with the origin of the object"//suffix
+            test_passed = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_"//test_name//" failed: No error message "// &
+                "printed for a response that is not finite"//suffix
+            test_passed = .false.
+        end if
+
+    contains
+
+        subroutine respond()
+            !
+            ! this subroutine calls the routine under test for the case
+            !
+            if (i_shell == 1) then
+                call invoke_get_response_cs(get_response_cs, dm(:, :, 1), &
+                                            response(:, :, 1), settings, error_origin, &
+                                            error)
+            else
+                call invoke_get_response_os(get_response_os, dm, response, settings, &
+                                            error_origin, error)
+            end if
+
+        end subroutine respond
+
+    end function check_invoke_get_response
 
     logical(c_bool) function test_wire_solver_settings_extension() bind(C)
         !
@@ -1654,9 +1904,9 @@ contains
                     trim(case_names(i_case))//"."
                 test_update_orbs_extension = .false.
             end if
-            if (abs(func - sum(kappa)) > tol .or. &
-                any(abs(grad - 2.0_rp * kappa) > tol) .or. &
-                any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+            if (.not. is_close(func, sum(kappa)) .or. &
+                .not. all(is_close(grad, 2.0_rp * kappa)) .or. &
+                .not. all(is_close(h_diag, 3.0_rp * kappa))) then
                 write(stderr, *) "test_update_orbs_extension failed: Results of "// &
                     "the host's callback function not returned for "// &
                     trim(case_names(i_case))//"."
@@ -1726,7 +1976,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_obj_func_extension = .false.
             end if
-            if (abs(func - sum(kappa)) > tol) then
+            if (.not. is_close(func, sum(kappa))) then
                 write(stderr, *) "test_obj_func_extension failed: Result of the "// &
                     "host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1776,7 +2026,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_hess_x_extension = .false.
             end if
-            if (any(abs(hess_x - 4.0_rp * x) > tol)) then
+            if (.not. all(is_close(hess_x, 4.0_rp * x))) then
                 write(stderr, *) "test_hess_x_extension failed: Result of the "// &
                     "host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1827,7 +2077,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_precond_extension = .false.
             end if
-            if (any(abs(precond_residual - 2.0_rp * residual) > tol)) then
+            if (.not. all(is_close(precond_residual, 2.0_rp * residual))) then
                 write(stderr, *) "test_precond_extension failed: Result of the "// &
                     "host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1879,7 +2129,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_precond_pd_extension = .false.
             end if
-            if (any(abs(precond_residual - 3.0_rp * residual) > tol)) then
+            if (.not. all(is_close(precond_residual, 3.0_rp * residual))) then
                 write(stderr, *) "test_precond_pd_extension failed: Result of the "// &
                     "host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1931,7 +2181,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_project_extension = .false.
             end if
-            if (any(abs(projected - 2.0_rp * vector) > tol)) then
+            if (.not. all(is_close(projected, 2.0_rp * vector))) then
                 write(stderr, *) "test_project_extension failed: Result of the "// &
                     "host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -1981,7 +2231,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_get_extra_trial_vectors_extension = .false.
             end if
-            if (any(abs(trial_vectors(:, 2) - 2.0_rp) > tol)) then
+            if (.not. all(is_close(trial_vectors(:, 2), 2.0_rp))) then
                 write(stderr, *) "test_get_extra_trial_vectors_extension failed: "// &
                     "Result of the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -2070,9 +2320,9 @@ contains
                 "object not passed on."
             test_update_orbs_callback = .false.
         end if
-        if (abs(func - sum(kappa)) > tol .or. &
-            any(abs(grad - 2.0_rp * kappa) > tol) .or. &
-            any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+        if (.not. is_close(func, sum(kappa)) .or. &
+            .not. all(is_close(grad, 2.0_rp * kappa)) .or. &
+            .not. all(is_close(h_diag, 3.0_rp * kappa))) then
             write(stderr, *) "test_update_orbs_callback failed: Results of the "// &
                 "object not returned."
             test_update_orbs_callback = .false.
@@ -2138,7 +2388,7 @@ contains
                     "object not passed on for the "//trim(level_names(i_level))//"."
                 test_obj_func_callback = .false.
             end if
-            if (abs(func - sum(kappa)) > tol) then
+            if (.not. is_close(func, sum(kappa))) then
                 write(stderr, *) "test_obj_func_callback failed: Result of the "// &
                     "object not returned for the "//trim(level_names(i_level))//"."
                 test_obj_func_callback = .false.
@@ -2193,7 +2443,7 @@ contains
                     "not passed on for the "//trim(level_names(i_level))//"."
                 test_hess_x_callback = .false.
             end if
-            if (any(abs(hess_x - 4.0_rp * x) > tol)) then
+            if (.not. all(is_close(hess_x, 4.0_rp * x))) then
                 write(stderr, *) "test_hess_x_callback failed: Result of the "// &
                     "object not returned for the "//trim(level_names(i_level))//"."
                 test_hess_x_callback = .false.
@@ -2249,7 +2499,7 @@ contains
                     "object not passed on for the "//trim(level_names(i_level))//"."
                 test_precond_callback = .false.
             end if
-            if (any(abs(precond_residual - 2.0_rp * residual) > tol)) then
+            if (.not. all(is_close(precond_residual, 2.0_rp * residual))) then
                 write(stderr, *) "test_precond_callback failed: Result of the "// &
                     "object not returned for the "//trim(level_names(i_level))//"."
                 test_precond_callback = .false.
@@ -2305,7 +2555,7 @@ contains
                     "object not passed on for the "//trim(level_names(i_level))//"."
                 test_precond_pd_callback = .false.
             end if
-            if (any(abs(precond_residual - 3.0_rp * residual) > tol)) then
+            if (.not. all(is_close(precond_residual, 3.0_rp * residual))) then
                 write(stderr, *) "test_precond_pd_callback failed: Result of the "// &
                     "object not returned for the "//trim(level_names(i_level))//"."
                 test_precond_pd_callback = .false.
@@ -2362,7 +2612,7 @@ contains
                     "object not passed on for the "//trim(level_names(i_level))//"."
                 test_project_callback = .false.
             end if
-            if (any(abs(projected - 2.0_rp * vector) > tol)) then
+            if (.not. all(is_close(projected, 2.0_rp * vector))) then
                 write(stderr, *) "test_project_callback failed: Result of the "// &
                     "object not returned for the "//trim(level_names(i_level))//"."
                 test_project_callback = .false.
@@ -2417,7 +2667,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_get_extra_trial_vectors_callback = .false.
             end if
-            if (any(abs(trial_vectors(:, 2) - 2.0_rp) > tol)) then
+            if (.not. all(is_close(trial_vectors(:, 2), 2.0_rp))) then
                 write(stderr, *) "test_get_extra_trial_vectors_callback failed: "// &
                     "Result of the object not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -2531,7 +2781,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_stability_hess_x_callback = .false.
             end if
-            if (any(abs(hess_x - 4.0_rp * x) > tol)) then
+            if (.not. all(is_close(hess_x, 4.0_rp * x))) then
                 write(stderr, *) "test_stability_hess_x_callback failed: Result of "// &
                     "the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -2593,7 +2843,7 @@ contains
                     trim(level_names(i_level))//"."
                 test_approx_hess_x_callback = .false.
             end if
-            if (any(abs(hess_x - 4.0_rp * x) > tol)) then
+            if (.not. all(is_close(hess_x, 4.0_rp * x))) then
                 write(stderr, *) "test_approx_hess_x_callback failed: Result of "// &
                     "the host's callback function not returned for the "// &
                     trim(level_names(i_level))//"."
@@ -2658,6 +2908,46 @@ contains
         call logger_callback("message", context)
 
     end function test_logger_callback
+
+    logical(c_bool) function test_invoke_evaluate_dm_cs() bind(C)
+        !
+        ! this function tests the subroutine which calls the closed-shell density
+        ! matrix evaluating function of an orbital basis
+        !
+        test_invoke_evaluate_dm_cs = &
+            check_invoke_evaluate_dm("invoke_evaluate_dm_cs", 1_ip)
+
+    end function test_invoke_evaluate_dm_cs
+
+    logical(c_bool) function test_invoke_evaluate_dm_os() bind(C)
+        !
+        ! this function tests the subroutine which calls the open-shell density matrix
+        ! evaluating function of an orbital basis
+        !
+        test_invoke_evaluate_dm_os = &
+            check_invoke_evaluate_dm("invoke_evaluate_dm_os", 2_ip)
+
+    end function test_invoke_evaluate_dm_os
+
+    logical(c_bool) function test_invoke_get_response_cs() bind(C)
+        !
+        ! this function tests the subroutine which calls the closed-shell response
+        ! function of an orbital basis
+        !
+        test_invoke_get_response_cs = &
+            check_invoke_get_response("invoke_get_response_cs", 1_ip)
+
+    end function test_invoke_get_response_cs
+
+    logical(c_bool) function test_invoke_get_response_os() bind(C)
+        !
+        ! this function tests the subroutine which calls the open-shell response
+        ! function of an orbital basis
+        !
+        test_invoke_get_response_os = &
+            check_invoke_get_response("invoke_get_response_os", 2_ip)
+
+    end function test_invoke_get_response_os
 
     logical(c_bool) function test_check_evaluate_dm_orbital_basis() bind(C)
         !
@@ -2771,7 +3061,7 @@ contains
                     "Produced error for the "//case_name//" case."
                 test_refresh_response_orbital_basis = .false.
             end if
-            if (abs(mock_dm_sum - sum(dm_ao(:, :, :i_shell))) > tol) then
+            if (.not. is_close(mock_dm_sum, sum(dm_ao(:, :, :i_shell)))) then
                 write(stderr, *) "test_refresh_response_orbital_basis failed: "// &
                     "Stored density matrix not evaluated for the "//case_name//" case."
                 test_refresh_response_orbital_basis = .false.
@@ -2869,7 +3159,7 @@ contains
             write(stderr, *) "test_precond_orbital_basis failed: Produced error."
             test_precond_orbital_basis = .false.
         end if
-        if (norm2(precond_residual - expected) > tol) then
+        if (.not. is_at_most(norm2(precond_residual - expected), tol)) then
             write(stderr, *) "test_precond_orbital_basis failed: Incorrect "// &
                 "preconditioned residual."
             test_precond_orbital_basis = .false.
@@ -2918,7 +3208,7 @@ contains
             write(stderr, *) "test_precond_pd_orbital_basis failed: Produced error."
             test_precond_pd_orbital_basis = .false.
         end if
-        if (norm2(precond_residual - expected) > tol) then
+        if (.not. is_at_most(norm2(precond_residual - expected), tol)) then
             write(stderr, *) "test_precond_pd_orbital_basis failed: Incorrect "// &
                 "preconditioned residual."
             test_precond_pd_orbital_basis = .false.
@@ -2952,13 +3242,15 @@ contains
         ! in increasing order of the pairs, and if the slot of the positive pair
         ! vanishes
         call basis%fill_extra_trial_vectors(eigval_pairs, trial_vectors)
-        if (norm2(trial_vectors(:, 1) - basis%eigvecs(:, 3)) > tol .or. &
-            norm2(trial_vectors(:, 2) - basis%eigvecs(:, 1)) > tol) then
+        if (.not. is_at_most(norm2(trial_vectors(:, 1) - basis%eigvecs(:, 3)), &
+                             tol) .or. &
+            .not. is_at_most(norm2(trial_vectors(:, 2) - basis%eigvecs(:, 1)), tol)) &
+            then
             write(stderr, *) "test_fill_extra_trial_vectors_orbital_basis failed: "// &
                 "Incorrect extra trial vectors."
             test_fill_extra_trial_vectors_orbital_basis = .false.
         end if
-        if (norm2(trial_vectors(:, 3)) > tol) then
+        if (.not. is_at_most(norm2(trial_vectors(:, 3)), tol)) then
             write(stderr, *) "test_fill_extra_trial_vectors_orbital_basis failed: "// &
                 "Slot without a negative eigenvalue pair does not vanish."
             test_fill_extra_trial_vectors_orbital_basis = .false.
@@ -3002,22 +3294,23 @@ contains
             test_compute_sqrt_and_inv_sqrt = .false.
             return
         end if
-        if (norm2(matmul(sqrt_a, sqrt_a) - a) > tol) then
+        if (.not. is_at_most(norm2(matmul(sqrt_a, sqrt_a) - a), tol)) then
             write(stderr, *) "test_compute_sqrt_and_inv_sqrt failed: Square root "// &
                 "does not reproduce the matrix."
             test_compute_sqrt_and_inv_sqrt = .false.
         end if
-        if (norm2(matmul(inv_sqrt_a, sqrt_a) - identity_matrix(n)) > tol) then
+        if (.not. is_at_most(norm2(matmul(inv_sqrt_a, sqrt_a) - identity_matrix(n)), &
+                             tol)) then
             write(stderr, *) "test_compute_sqrt_and_inv_sqrt failed: Inverse "// &
                 "square root is not the inverse of the square root."
             test_compute_sqrt_and_inv_sqrt = .false.
         end if
-        if (norm2(sqrt_a - transpose(sqrt_a)) > tol) then
+        if (.not. is_at_most(norm2(sqrt_a - transpose(sqrt_a)), tol)) then
             write(stderr, *) "test_compute_sqrt_and_inv_sqrt failed: Returned "// &
                 "square root is not symmetric."
             test_compute_sqrt_and_inv_sqrt = .false.
         end if
-        if (norm2(inv_sqrt_a - transpose(inv_sqrt_a)) > tol) then
+        if (.not. is_at_most(norm2(inv_sqrt_a - transpose(inv_sqrt_a)), tol)) then
             write(stderr, *) "test_compute_sqrt_and_inv_sqrt failed: Returned "// &
                 "inverse square root is not symmetric."
             test_compute_sqrt_and_inv_sqrt = .false.
@@ -3083,7 +3376,7 @@ contains
                 test_matrix_exponential = .false.
                 cycle
             end if
-            if (norm2(exp_a - expected) > tol) then
+            if (.not. is_at_most(norm2(exp_a - expected), tol)) then
                 write(stderr, *) "test_matrix_exponential failed: Incorrect matrix "// &
                     "values for "//trim(case_names(i))//" angle."
                 test_matrix_exponential = .false.
@@ -3147,8 +3440,8 @@ contains
             [2.0_rp - mu, -1.0_rp - mu, precond_floor, precond_floor, precond_floor]
 
         ! call function and determine if the divisors are correct
-        if (any(abs(level_shifted_divisors(eigval_pairs, mu) - expected) > &
-                tol * abs(expected))) then
+        if (.not. all(is_close(level_shifted_divisors(eigval_pairs, mu), expected, &
+                               tol * abs(expected)))) then
             write(stderr, *) "test_level_shifted_divisors failed: Returned "// &
                 "divisors wrong."
             test_level_shifted_divisors = .false.
@@ -3185,8 +3478,8 @@ contains
         expected = [largest, 0.5_rp * largest, rel_floor, rel_floor, rel_floor]
 
         ! call function and determine if the divisors are correct
-        if (any(abs(positive_definite_divisors(eigval_pairs) - expected) > &
-                tol * abs(expected))) then
+        if (.not. all(is_close(positive_definite_divisors(eigval_pairs), expected, &
+                               tol * abs(expected)))) then
             write(stderr, *) "test_positive_definite_divisors failed: Returned "// &
                 "divisors wrong for relative floor."
             test_positive_definite_divisors = .false.
@@ -3196,8 +3489,8 @@ contains
         ! takes over once the relative floor falls below it
         eigval_pairs = &
             [0.5_rp * precond_floor, -0.1_rp * precond_floor, 0.0_rp, 0.0_rp, 0.0_rp]
-        if (any(abs(positive_definite_divisors(eigval_pairs) - precond_floor) > &
-                tol * precond_floor)) then
+        if (.not. all(is_close(positive_definite_divisors(eigval_pairs), &
+                               precond_floor, tol * precond_floor))) then
             write(stderr, *) "test_positive_definite_divisors failed: Returned "// &
                 "divisors wrong for absolute floor."
             test_positive_definite_divisors = .false.

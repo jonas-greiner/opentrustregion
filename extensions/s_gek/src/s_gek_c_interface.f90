@@ -9,8 +9,9 @@ module otr_s_gek_c_interface
     use opentrustregion_core, only: ip, rp, update_orbs_type, obj_func_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
     use otr_s_gek, only: change_reference_type, standard_s_gek_factory => s_gek_factory
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
-                                           c_associated, c_null_funptr, c_null_ptr
+    use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_ptr, &
+                                           c_funptr, c_f_procpointer, c_associated, &
+                                           c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -74,7 +75,8 @@ contains
         ! of the solver state, and writes the solver settings the factory wired back
         ! into the C solver settings
         !
-        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin, &
+                                        verbosity_error
         use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
                                obj_func_f_wrapper
         use otr_s_gek, only: s_gek_settings_type, default_s_gek_settings, &
@@ -141,6 +143,17 @@ contains
         call setup_extension_holder(holder, solver_settings_c, solver_state_c, &
                                     settings, error, update_orbs_c_funptr, &
                                     obj_func_c_funptr)
+
+        ! the object can not run without the host's orbital update, objective function
+        ! and change of reference function
+        if (error == 0 .and. .not. (c_associated(update_orbs_c_funptr) .and. &
+                                    c_associated(obj_func_c_funptr) .and. &
+                                    c_associated(change_reference_c_funptr))) then
+            call settings%log("Orbital update, objective function and change of "// &
+                              "reference function have to be given.", verbosity_error, &
+                              .true.)
+            error = 1
+        end if
         call add_error_origin(error, error_s_gek, settings)
 
         ! the factory wires the solver settings of the holder, which then own the
@@ -172,9 +185,8 @@ contains
     subroutine change_reference_f_wrapper(new_ref, n_points, kappa_list, &
                                           local_grad_list, grad_list, error, context)
         !
-        ! this subroutine wraps the change reference subroutine to convert Fortran
-        ! variables to C variables, finding the C function and the host context in the
-        ! bundle it receives as context
+        ! this subroutine exposes the change reference C function to Fortran, finding
+        ! the C function and the host context in the bundle it receives as context
         !
         real(rp), intent(in), target :: new_ref(:)
         integer(ip), intent(in) :: n_points
@@ -183,51 +195,20 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(c_rp), pointer :: new_ref_c(:), kappa_list_c(:, :), &
-                               local_grad_list_c(:, :), grad_list_c(:, :)
-        integer(c_ip) :: n_points_c, error_c
+        integer(c_ip) :: error_c
 
         ! the bundle holds the C function
         error = 1
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (s_gek_c_callbacks_type)
-            ! convert arguments to C kind
-            if (rp == c_rp) then
-                new_ref_c => new_ref
-                n_points_c = n_points
-                kappa_list_c => kappa_list
-                local_grad_list_c => local_grad_list
-                grad_list_c => grad_list
-            else
-                allocate(new_ref_c(size(new_ref, 1)))
-                allocate(kappa_list_c(size(kappa_list, 1), size(kappa_list, 2)))
-                allocate(local_grad_list_c(size(local_grad_list, 1), &
-                                           size(local_grad_list, 2)))
-                allocate(grad_list_c(size(grad_list, 1), size(grad_list, 2)))
-                new_ref_c = real(new_ref, kind=c_rp)
-                n_points_c = int(n_points, kind=c_ip)
-                kappa_list_c = real(kappa_list, kind=c_rp)
-                local_grad_list_c = real(local_grad_list, kind=c_rp)
-                grad_list_c = real(grad_list, kind=c_rp)
-            end if
-
             ! call change reference C function
-            error_c = callbacks%change_reference(new_ref_c, n_points_c, kappa_list_c, &
-                                                 local_grad_list_c, grad_list_c, &
-                                                 callbacks%host_context)
+            error_c = callbacks%change_reference(new_ref, int(n_points, kind=c_ip), &
+                                                 kappa_list, local_grad_list, &
+                                                 grad_list, callbacks%host_context)
 
-            ! convert arguments to Fortran kind
+            ! convert error code to Fortran kind
             error = int(error_c, kind=ip)
-            if (rp /= c_rp) then
-                kappa_list = real(kappa_list_c, kind=rp)
-                local_grad_list = real(local_grad_list_c, kind=rp)
-                grad_list = real(grad_list_c, kind=rp)
-                deallocate(new_ref_c)
-                deallocate(kappa_list_c)
-                deallocate(local_grad_list_c)
-                deallocate(grad_list_c)
-            end if
         end select
 
     end subroutine change_reference_f_wrapper
@@ -243,6 +224,18 @@ contains
         settings_c = default_s_gek_settings
 
     end subroutine init_s_gek_settings_c
+
+    integer(c_size_t) function s_gek_settings_size() bind(C)
+        !
+        ! this function returns the size of the C S-GEK settings, which the Python
+        ! interface compares with its own to detect a library of another version and
+        ! the C layout tests with the header's
+        !
+        type(s_gek_settings_type_c) :: settings_c
+
+        s_gek_settings_size = c_sizeof(settings_c)
+
+    end function s_gek_settings_size
 
     subroutine assign_s_gek_f_c(settings, settings_c)
         !

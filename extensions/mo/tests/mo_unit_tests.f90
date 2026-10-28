@@ -7,7 +7,7 @@
 module otr_mo_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
-    use test_reference, only: tol
+    use test_reference, only: tol, is_close, is_at_most, is_at_least
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -584,8 +584,8 @@ contains
             else
                 rotated = mo%rotate_from_hess_eigenbasis(x)
             end if
-            if (norm2(rotated - ref_rotate_eigenbasis_mo(x, mo%mo_channels, n_mo, &
-                                                         to_eigenbasis)) > tol) then
+            if (.not. is_at_most(norm2(rotated - ref_rotate_eigenbasis_mo( &
+                x, mo%mo_channels, n_mo, to_eigenbasis)), tol)) then
                 write(stderr, *) test_name//" failed: Incorrect rotation for the "// &
                     trim(case_names(i_case))//" case."
                 passed = .false.
@@ -683,7 +683,8 @@ contains
                     test_mo_factory_cs = .false.
                 else
                     mo_coeff(1, 1) = mo_coeff(1, 1) + 1.0_rp
-                    if (norm2(mo%mo_coeff(:, :, 1) - mo_coeff) > tol) then
+                    if (.not. is_at_most(norm2(mo%mo_coeff(:, :, 1) - mo_coeff), tol)) &
+                        then
                         write(stderr, *) "test_mo_factory_cs failed: MO "// &
                             "coefficients of the caller not taken over."
                         test_mo_factory_cs = .false.
@@ -1046,7 +1047,7 @@ contains
                             test_mo_factory_common = .false.
                         end if
                     end do
-                    if (norm2(mo%ao_overlap - ao_overlap) > tol) then
+                    if (.not. is_at_most(norm2(mo%ao_overlap - ao_overlap), tol)) then
                         write(stderr, *) "test_mo_factory_common failed: AO "// &
                             "overlap matrix not stored "// &
                             trim(case_names_factory(i_case))//"."
@@ -1065,9 +1066,9 @@ contains
                         test_mo_factory_common = .false.
                     end if
                     do k = 1, n_particle
-                        if (norm2(mo%dm_ao(:, :, k) - matmul( &
+                        if (.not. is_at_most(norm2(mo%dm_ao(:, :, k) - matmul( &
                             mo_coeff(:, :n_occ(k), k), &
-                            transpose(mo_coeff(:, :n_occ(k), k)))) > tol) then
+                            transpose(mo_coeff(:, :n_occ(k), k)))), tol)) then
                             write(stderr, *) "test_mo_factory_common failed: "// &
                                 "Density matrix not constructed from the occupied "// &
                                 "orbitals "//trim(case_names_factory(i_case))//"."
@@ -1476,7 +1477,7 @@ contains
                     "an orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
             end if
-            if (abs(energy - sum(mo%dm_ao)) > tol) then
+            if (.not. is_close(energy, sum(mo%dm_ao))) then
                 write(stderr, *) "test_obj_func_mo failed: Incorrect energy "// &
                     "without an orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
@@ -1515,7 +1516,7 @@ contains
                     "orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
             end if
-            if (abs(energy - expected_energy) > tol) then
+            if (.not. is_close(energy, expected_energy)) then
                 write(stderr, *) "test_obj_func_mo failed: Incorrect energy for an "// &
                     "orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
@@ -1526,12 +1527,12 @@ contains
                     "orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
             end if
-            if (norm2(mo_coeff - mo_coeff_start) > tol) then
+            if (.not. is_at_most(norm2(mo_coeff - mo_coeff_start), tol)) then
                 write(stderr, *) "test_obj_func_mo failed: Current orbitals "// &
                     "changed by an orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
             end if
-            if (norm2(mo%dm_ao - dm_ao_start) > tol) then
+            if (.not. is_at_most(norm2(mo%dm_ao - dm_ao_start), tol)) then
                 write(stderr, *) "test_obj_func_mo failed: Current density matrix "// &
                     "changed by an orbital rotation for the "//case_name//" case."
                 test_obj_func_mo = .false.
@@ -1552,6 +1553,19 @@ contains
                 test_obj_func_mo = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with a density matrix evaluating function that returns an
+            ! energy that is not a number and determine if a positive infinite value,
+            ! which rejects the step, is returned without an error
+            context%nan_output = 1
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
+            context%nan_output = 0
+            if (error /= 0 .or. .not. energy > huge(energy)) then
+                write(stderr, *) "test_obj_func_mo failed: Energy that is not a "// &
+                    "number not returned as a positive infinite value for the "// &
+                    case_name//" case."
+                test_obj_func_mo = .false.
+            end if
 
             ! call routine with a rotation that is not finite, which the matrix
             ! exponential refuses, and determine if its error is returned with the
@@ -1645,7 +1659,7 @@ contains
             mo%response_stale = .false.
             if (.not. check_update_orbs_mo_stage(1_ip, "starting orbitals")) &
                 test_update_orbs_mo = .false.
-            if (abs(func - sum(mo%dm_ao)) > tol) then
+            if (.not. is_close(func, sum(mo%dm_ao))) then
                 write(stderr, *) "test_update_orbs_mo failed: Incorrect energy for "// &
                     "the "//case_name//" case."
                 test_update_orbs_mo = .false.
@@ -1653,21 +1667,23 @@ contains
             do i = 1, n_particle
                 fock_mo = ref_mo_transform(mo_coeff(:, :, i), &
                                            mock_fock_factor(1) * mo%dm_ao(:, :, i))
-                if (norm2(mo%mo_channels(i)%fock_oo - fock_mo(:n_occ(i), :n_occ(i))) > &
-                    tol .or. norm2(mo%mo_channels(i)%fock_vv - &
-                                   fock_mo(n_occ(i) + 1:, n_occ(i) + 1:)) > tol) then
+                if (.not. is_at_most(norm2(mo%mo_channels(i)%fock_oo - &
+                                           fock_mo(:n_occ(i), :n_occ(i))), tol) .or. &
+                    .not. is_at_most(norm2(mo%mo_channels(i)%fock_vv - &
+                                           fock_mo(n_occ(i) + 1:, n_occ(i) + 1:)), &
+                                     tol)) then
                     write(stderr, *) "test_update_orbs_mo failed: Static Hessian "// &
                         "part not built from the Fock matrix in the MO basis for "// &
                         "the "//case_name//" case."
                     test_update_orbs_mo = .false.
                 end if
             end do
-            if (norm2(grad - mo%grad) > tol) then
+            if (.not. is_at_most(norm2(grad - mo%grad), tol)) then
                 write(stderr, *) "test_update_orbs_mo failed: Gradient not "// &
                     "returned for the "//case_name//" case."
                 test_update_orbs_mo = .false.
             end if
-            if (norm2(h_diag - mo%h_diag) > tol) then
+            if (.not. is_at_most(norm2(h_diag - mo%h_diag), tol)) then
                 write(stderr, *) "test_update_orbs_mo failed: Hessian diagonal not "// &
                     "returned for the "//case_name//" case."
                 test_update_orbs_mo = .false.
@@ -1703,17 +1719,17 @@ contains
             h_diag = 0.0_rp
             if (.not. check_update_orbs_mo_stage(1_ip, "evaluated orbitals")) &
                 test_update_orbs_mo = .false.
-            if (abs(func) > tol) then
+            if (.not. is_close(func, 0.0_rp)) then
                 write(stderr, *) "test_update_orbs_mo failed: Stored energy not "// &
                     "returned for evaluated orbitals for the "//case_name//" case."
                 test_update_orbs_mo = .false.
             end if
-            if (norm2(grad - mo%grad) > tol) then
+            if (.not. is_at_most(norm2(grad - mo%grad), tol)) then
                 write(stderr, *) "test_update_orbs_mo failed: Stored gradient not "// &
                     "returned for evaluated orbitals for the "//case_name//" case."
                 test_update_orbs_mo = .false.
             end if
-            if (norm2(h_diag - mo%h_diag) > tol) then
+            if (.not. is_at_most(norm2(h_diag - mo%h_diag), tol)) then
                 write(stderr, *) "test_update_orbs_mo failed: Stored Hessian "// &
                     "diagonal not returned for evaluated orbitals for the "// &
                     case_name//" case."
@@ -1757,16 +1773,16 @@ contains
             mo_coeff_start = mo%mo_coeff
             if (.not. check_update_orbs_mo_stage(4_ip, "an orbital rotation")) &
                 test_update_orbs_mo = .false.
-            if (norm2(mo%mo_coeff - ref_rotate_mo_coeff(kappa, mo_coeff_start, &
-                                                        mo%mo_channels)) > tol) then
+            if (.not. is_at_most(norm2(mo%mo_coeff - ref_rotate_mo_coeff( &
+                kappa, mo_coeff_start, mo%mo_channels)), tol)) then
                 write(stderr, *) "test_update_orbs_mo failed: Orbitals not rotated "// &
                     "correctly by an orbital rotation for the "//case_name//" case."
                 test_update_orbs_mo = .false.
             end if
             do i = 1, n_particle
-                if (norm2(mo%dm_ao(:, :, i) - &
-                          matmul(mo%mo_coeff(:, :n_occ(i), i), &
-                                 transpose(mo%mo_coeff(:, :n_occ(i), i)))) > tol) then
+                if (.not. is_at_most(norm2(mo%dm_ao(:, :, i) - matmul( &
+                    mo%mo_coeff(:, :n_occ(i), i), &
+                    transpose(mo%mo_coeff(:, :n_occ(i), i)))), tol)) then
                     write(stderr, *) "test_update_orbs_mo failed: Density matrix "// &
                         "not moved consistently with the orbitals for the "// &
                         case_name//" case."
@@ -1799,6 +1815,27 @@ contains
                 test_update_orbs_mo = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with the orbital rotation again, whose evaluation returns a
+            ! Fock matrix that is not finite, and determine if this is reported with
+            ! the origin of the object and the rotated orbitals are marked as not
+            ! evaluated
+            context%nan_output = 2
+            call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                level_context(mo, 1_ip))
+            context%nan_output = 0
+            if (error /= error_mo + 1) then
+                write(stderr, *) "test_update_orbs_mo failed: Fock matrix that is "// &
+                    "not finite not reported with the origin of the object for the "// &
+                    case_name//" case."
+                test_update_orbs_mo = .false.
+            end if
+            if (.not. mo%evaluation_stale) then
+                write(stderr, *) "test_update_orbs_mo failed: Evaluation not "// &
+                    "marked stale after a Fock matrix that is not finite for the "// &
+                    case_name//" case."
+                test_update_orbs_mo = .false.
+            end if
 
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
@@ -1935,7 +1972,7 @@ contains
                     case_name//" case."
                 test_hess_x_mo = .false.
             end if
-            if (norm2(hess_x - expected_hess_x) > tol) then
+            if (.not. is_at_most(norm2(hess_x - expected_hess_x), tol)) then
                 write(stderr, *) "test_hess_x_mo failed: Incorrect Hessian linear "// &
                     "transformation for the "//case_name//" case."
                 test_hess_x_mo = .false.
@@ -1955,6 +1992,18 @@ contains
                 test_hess_x_mo = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with a response function that returns values that are not
+            ! finite and determine if this is reported with the origin of the object
+            context%nan_output = 1
+            call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
+            context%nan_output = 0
+            if (error /= error_mo + 1) then
+                write(stderr, *) "test_hess_x_mo failed: Response that is not "// &
+                    "finite not reported with the origin of the object for the "// &
+                    case_name//" case."
+                test_hess_x_mo = .false.
+            end if
 
             deallocate(mo, x, hess_x)
         end do
@@ -1997,7 +2046,7 @@ contains
                 "after being refreshed."
             test_hess_x_mo = .false.
         end if
-        if (norm2(hess_x - expected_hess_x) > tol) then
+        if (.not. is_at_most(norm2(hess_x - expected_hess_x), tol)) then
             write(stderr, *) "test_hess_x_mo failed: Incorrect Hessian linear "// &
                 "transformation with a refreshed response."
             test_hess_x_mo = .false.
@@ -2058,8 +2107,8 @@ contains
             end if
             second_diff = (model_energy(step * x) - 2.0_rp * &
                            model_energy(0.0_rp * x) + model_energy(-step * x)) / step**2
-            if (abs(dot_product(x, hess_x) - second_diff) > &
-                fd_tol * max(1.0_rp, abs(second_diff))) then
+            if (.not. is_close(dot_product(x, hess_x), second_diff, &
+                               fd_tol * max(1.0_rp, abs(second_diff)))) then
                 write(stderr, *) "test_hess_x_mo failed: Hessian linear "// &
                     "transformation does not match the finite difference of the "// &
                     "quadratic model energy for the "//case_name//" case."
@@ -2143,15 +2192,15 @@ contains
                 "stale."
             test_rotate_orbitals_mo = .false.
         end if
-        if (norm2(mo_coeff - expected) > tol) then
+        if (.not. is_at_most(norm2(mo_coeff - expected), tol)) then
             write(stderr, *) "test_rotate_orbitals_mo failed: MO coefficients not "// &
                 "rotated in place."
             test_rotate_orbitals_mo = .false.
         end if
         do k = 1, n_particle
-            if (norm2(mo%dm_ao(:, :, k) - matmul( &
-                expected(:, :n_occ(k), k), transpose(expected(:, :n_occ(k), k)))) > &
-                tol) then
+            if (.not. is_at_most(norm2(mo%dm_ao(:, :, k) - matmul( &
+                expected(:, :n_occ(k), k), transpose(expected(:, :n_occ(k), k)))), &
+                                 tol)) then
                 write(stderr, *) "test_rotate_orbitals_mo failed: Density matrix "// &
                     "not updated."
                 test_rotate_orbitals_mo = .false.
@@ -2169,7 +2218,7 @@ contains
                 "that is not finite not returned with the origin of the object."
             test_rotate_orbitals_mo = .false.
         end if
-        if (norm2(mo_coeff - expected) > tol) then
+        if (.not. is_at_most(norm2(mo_coeff - expected), tol)) then
             write(stderr, *) "test_rotate_orbitals_mo failed: Orbitals moved by a "// &
                 "rotation that is not finite."
             test_rotate_orbitals_mo = .false.
@@ -2244,28 +2293,29 @@ contains
             ! matrix blocks are obtained in the MO basis and the eigendecomposition is
             ! marked stale
             call mo%calculate_grad_h_diag(fock_ao(:, :, :n_particle))
-            if (norm2(mo%grad - shell_scale * ref_pack_ov(fock_mo(:, :, :n_particle), &
-                                                          mo%mo_channels)) > tol) then
+            if (.not. is_at_most(norm2(mo%grad - shell_scale * ref_pack_ov( &
+                fock_mo(:, :, :n_particle), mo%mo_channels)), tol)) then
                 write(stderr, *) "test_calculate_grad_h_diag_mo failed: Incorrect "// &
                     "gradient for the "//case_name//" case."
                 test_calculate_grad_h_diag_mo = .false.
             end if
-            if (norm2(mo%h_diag - expected_h_diag) > tol) then
+            if (.not. is_at_most(norm2(mo%h_diag - expected_h_diag), tol)) then
                 write(stderr, *) "test_calculate_grad_h_diag_mo failed: Incorrect "// &
                     "Hessian diagonal for the "//case_name//" case."
                 test_calculate_grad_h_diag_mo = .false.
             end if
             do k = 1, n_particle
                 n_occ_k = n_occ(k)
-                if (norm2(mo%mo_channels(k)%fock_oo - &
-                          fock_mo(:n_occ_k, :n_occ_k, k)) > tol) then
+                if (.not. is_at_most(norm2(mo%mo_channels(k)%fock_oo - &
+                                           fock_mo(:n_occ_k, :n_occ_k, k)), tol)) then
                     write(stderr, *) "test_calculate_grad_h_diag_mo failed: "// &
                         "Incorrect occupied-occupied Fock matrix block for the "// &
                         case_name//" case."
                     test_calculate_grad_h_diag_mo = .false.
                 end if
-                if (norm2(mo%mo_channels(k)%fock_vv - &
-                          fock_mo(n_occ_k + 1:, n_occ_k + 1:, k)) > tol) then
+                if (.not. is_at_most(norm2(mo%mo_channels(k)%fock_vv - &
+                                           fock_mo(n_occ_k + 1:, n_occ_k + 1:, k)), &
+                                     tol)) then
                     write(stderr, *) "test_calculate_grad_h_diag_mo failed: "// &
                         "Incorrect virtual-virtual Fock matrix block for the "// &
                         case_name//" case."
@@ -2306,7 +2356,7 @@ contains
                 fd_grad(k) = fd_grad(k) + i_sign * energy / (2.0_rp * fd_step)
             end do
         end do
-        if (norm2(mo%grad - fd_grad) > 1e-6_rp * norm2(fd_grad)) then
+        if (.not. is_at_most(norm2(mo%grad - fd_grad), 1e-6_rp * norm2(fd_grad))) then
             write(stderr, *) "test_calculate_grad_h_diag_mo failed: Gradient not "// &
                 "the derivative of the energy."
             test_calculate_grad_h_diag_mo = .false.
@@ -2374,18 +2424,19 @@ contains
                 associate (channel => mo%mo_channels(k))
                     n_occ = channel%n_occ
                     n_virt = channel%n_virt
-                    if (norm2(matmul(transpose(channel%occ_eigvecs), matmul( &
-                        same_irrep_part(channel%fock_oo, channel%irreps(:n_occ)), &
-                        channel%occ_eigvecs)) - &
-                              diagonal_matrix(channel%occ_eigvals)) > tol) then
+                    if (.not. is_at_most( &
+                        norm2(matmul(transpose(channel%occ_eigvecs), matmul( &
+                            same_irrep_part(channel%fock_oo, channel%irreps(:n_occ)), &
+                            channel%occ_eigvecs)) - &
+                              diagonal_matrix(channel%occ_eigvals)), tol)) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Occupied-occupied block not diagonalized for the "// &
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
-                    if (norm2(matmul(transpose(channel%occ_eigvecs), &
-                                     channel%occ_eigvecs) - identity_matrix(n_occ)) > &
-                        tol) then
+                    if (.not. is_at_most(norm2( &
+                        matmul(transpose(channel%occ_eigvecs), channel%occ_eigvecs) - &
+                        identity_matrix(n_occ)), tol)) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Occupied eigenvectors not orthonormal for the "// &
                             case_name//" case."
@@ -2397,18 +2448,19 @@ contains
                             " case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
-                    if (norm2(matmul(transpose(channel%virt_eigvecs), matmul( &
-                        same_irrep_part(channel%fock_vv, channel%irreps(n_occ + 1:)), &
-                        channel%virt_eigvecs)) - &
-                              diagonal_matrix(channel%virt_eigvals)) > tol) then
+                    if (.not. is_at_most(norm2(matmul( &
+                        transpose(channel%virt_eigvecs), matmul(same_irrep_part( &
+                            channel%fock_vv, channel%irreps(n_occ + 1:)), &
+                            channel%virt_eigvecs)) - &
+                        diagonal_matrix(channel%virt_eigvals)), tol)) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Virtual-virtual block not diagonalized for the "// &
                             case_name//" case."
                         test_refresh_hess_eigen_mo = .false.
                     end if
-                    if (norm2(matmul(transpose(channel%virt_eigvecs), &
-                                     channel%virt_eigvecs) - &
-                              identity_matrix(n_virt)) > tol) then
+                    if (.not. is_at_most(norm2(matmul(transpose(channel%virt_eigvecs), &
+                                                      channel%virt_eigvecs) - &
+                                               identity_matrix(n_virt)), tol)) then
                         write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                             "Virtual eigenvectors not orthonormal for the "// &
                             case_name//" case."
@@ -2436,7 +2488,8 @@ contains
                     " case."
                 test_refresh_hess_eigen_mo = .false.
             end if
-            if (norm2(mo%mo_channels(1)%occ_eigvals - eigvals_before) > tol) then
+            if (.not. is_at_most( &
+                norm2(mo%mo_channels(1)%occ_eigvals - eigvals_before), tol)) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                     "Eigendecomposition recomputed although not stale for the "// &
                     case_name//" case."
@@ -2453,8 +2506,8 @@ contains
                     " case."
                 test_refresh_hess_eigen_mo = .false.
             end if
-            if (norm2(mo%mo_channels(1)%occ_eigvals - 2.0_rp * eigvals_before) > tol) &
-                then
+            if (.not. is_at_most(norm2(mo%mo_channels(1)%occ_eigvals - &
+                                       2.0_rp * eigvals_before), tol)) then
                 write(stderr, *) "test_refresh_hess_eigen_mo failed: "// &
                     "Eigendecomposition not replaced for the "//case_name//" case."
                 test_refresh_hess_eigen_mo = .false.
@@ -2486,8 +2539,9 @@ contains
             real(rp), intent(in) :: eigvecs(:, :)
             integer(ip), intent(in) :: block_irreps(:)
 
-            mixes_irreps = any(abs(eigvecs) > tol .and. spread(block_irreps, 1, size( &
-                eigvecs, 1)) /= spread(block_irreps, 2, size(eigvecs, 1)))
+            mixes_irreps = .not. all(is_close(eigvecs, 0.0_rp) .or. &
+                                     spread(block_irreps, 1, size(eigvecs, 1)) == &
+                                     spread(block_irreps, 2, size(eigvecs, 1)))
 
         end function mixes_irreps
 
@@ -2532,8 +2586,9 @@ contains
             call setup_minimal_mo_object( &
                 mo, case_n_occ(:case_n_particle(i_case), i_case), &
                 case_irreps(:, :case_n_particle(i_case), i_case))
-            if (norm2(mo%get_hess_eigval_pairs() - &
-                      ref_hess_eigval_pairs_mo(mo%mo_channels)) > tol) then
+            if (.not. is_at_most(norm2(mo%get_hess_eigval_pairs() - &
+                                       ref_hess_eigval_pairs_mo(mo%mo_channels)), &
+                                 tol)) then
                 write(stderr, *) "test_get_hess_eigval_pairs_mo failed: Incorrect "// &
                     "eigenvalue differences for the "//trim(case_names(i_case))// &
                     " case."
@@ -2591,7 +2646,8 @@ contains
                 ref_rotate_eigenbasis_mo(unit_vector, mo%mo_channels, n_mo, .false.)
             pairs(min_idx) = huge(1.0_rp)
         end do
-        if (norm2(expected(:, n_extra)) > tol .or. norm2(expected(:, 2)) < tol) then
+        if (.not. is_at_most(norm2(expected(:, n_extra)), tol) .or. &
+            .not. is_at_least(norm2(expected(:, 2)), tol)) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Test fixture "// &
                 "does not have exactly two negative eigenvalue pairs."
             test_get_extra_trial_vectors_mo = .false.
@@ -2604,7 +2660,7 @@ contains
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Produced error."
             test_get_extra_trial_vectors_mo = .false.
         end if
-        if (norm2(trial_vectors - expected) > tol) then
+        if (.not. is_at_most(norm2(trial_vectors - expected), tol)) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Incorrect "// &
                 "trial vectors."
             test_get_extra_trial_vectors_mo = .false.
@@ -2636,7 +2692,7 @@ contains
                 "error for a stale eigendecomposition."
             test_get_extra_trial_vectors_mo = .false.
         end if
-        if (norm2(abs(trial_vectors) - expected) > tol) then
+        if (.not. is_at_most(norm2(abs(trial_vectors) - expected), tol)) then
             write(stderr, *) "test_get_extra_trial_vectors_mo failed: Incorrect "// &
                 "trial vectors for a stale eigendecomposition."
             test_get_extra_trial_vectors_mo = .false.
@@ -2707,16 +2763,16 @@ contains
                     "the "//case_name//" case."
                 test_rotate_mo_coeff = .false.
             end if
-            if (norm2(rot_mo_coeff(:, :, :n_particle) - expected(:, :, :n_particle)) > &
-                tol) then
+            if (.not. is_at_most(norm2(rot_mo_coeff(:, :, :n_particle) - &
+                                       expected(:, :, :n_particle)), tol)) then
                 write(stderr, *) "test_rotate_mo_coeff failed: Incorrect rotated "// &
                     "MO coefficients for the "//case_name//" case."
                 test_rotate_mo_coeff = .false.
             end if
             do k = 1, n_particle
-                if (norm2(rot_dm_ao(:, :, k) - &
-                          matmul(expected(:, :n_occ(k), k), &
-                                 transpose(expected(:, :n_occ(k), k)))) > tol) then
+                if (.not. is_at_most(norm2(rot_dm_ao(:, :, k) - matmul( &
+                    expected(:, :n_occ(k), k), transpose(expected(:, :n_occ(k), k)))), &
+                                     tol)) then
                     write(stderr, *) "test_rotate_mo_coeff failed: Incorrect "// &
                         "rotated density matrix for the "//case_name//" case."
                     test_rotate_mo_coeff = .false.
@@ -2742,8 +2798,9 @@ contains
                 "coefficients off orthonormality."
             test_rotate_mo_coeff = .false.
         end if
-        if (norm2(rot_mo_coeff(:, :, 1) - &
-                  ref_lowdin_orthonormalize(mo_coeff(:, :, 1))) > tol) then
+        if (.not. is_at_most(norm2(rot_mo_coeff(:, :, 1) - &
+                                   ref_lowdin_orthonormalize(mo_coeff(:, :, 1))), &
+                             tol)) then
             write(stderr, *) "test_rotate_mo_coeff failed: MO coefficients not "// &
                 "symmetrically reorthonormalized."
             test_rotate_mo_coeff = .false.
@@ -2806,8 +2863,9 @@ contains
                 case_irreps(:, :case_n_particle(i_case), i_case))
             allocate(x(mo%n_param))
             call random_number(x)
-            if (norm2(hess_x_static_mo(x, mo%mo_channels) - &
-                      ref_hess_x_static_mo(x, mo%mo_channels)) > tol) then
+            if (.not. is_at_most(norm2(hess_x_static_mo(x, mo%mo_channels) - &
+                                       ref_hess_x_static_mo(x, mo%mo_channels)), tol)) &
+                then
                 write(stderr, *) "test_hess_x_static_mo failed: Incorrect static "// &
                     "part for the "//trim(case_names(i_case))//" case."
                 test_hess_x_static_mo = .false.
@@ -2842,7 +2900,8 @@ contains
         if (size(transformed, 1) /= n_mo .or. size(transformed, 2) /= n_mo) then
             write(stderr, *) "test_mo_transform failed: Incorrect dimensions."
             test_mo_transform = .false.
-        else if (norm2(transformed - ref_mo_transform(coeff, matrix)) > tol) then
+        else if (.not. is_at_most( &
+            norm2(transformed - ref_mo_transform(coeff, matrix)), tol)) then
             write(stderr, *) "test_mo_transform failed: Incorrect transformed matrix."
             test_mo_transform = .false.
         end if
@@ -2953,8 +3012,9 @@ contains
             do k = 1, n_particle
                 n_occ = case_n_occ(k, i_case)
                 call random_number(matrix)
-                if (norm2(pack_ov(matrix(:n_occ, n_occ + 1:, 1), mo_channels(k)) - &
-                          ref_pack_ov(matrix, mo_channels(k:k))) > tol) then
+                if (.not. is_at_most( &
+                    norm2(pack_ov(matrix(:n_occ, n_occ + 1:, 1), mo_channels(k)) - &
+                          ref_pack_ov(matrix, mo_channels(k:k))), tol)) then
                     write(stderr, *) "test_pack_ov failed: Incorrect parameters "// &
                         "for the "//trim(case_names(i_case))//" case."
                     test_pack_ov = .false.
@@ -2993,8 +3053,8 @@ contains
                 allocate(packed(count(mo_channels(k)%param_mask)))
                 call random_number(packed)
                 expected = ref_unpack_ov(packed, mo_channels(k:k))
-                if (norm2(unpack_ov(packed, mo_channels(k)) - &
-                          expected(:n_occ, n_occ + 1:, 1)) > tol) then
+                if (.not. is_at_most(norm2(unpack_ov(packed, mo_channels(k)) - &
+                                           expected(:n_occ, n_occ + 1:, 1)), tol)) then
                     write(stderr, *) "test_unpack_ov failed: Incorrect "// &
                         "occupied-virtual block for the "//trim(case_names(i_case))// &
                         " case."
@@ -3066,19 +3126,19 @@ contains
                     "error for "//name//"."
                 test_diagonalize_per_irrep = .false.
             end if
-            if (norm2(matmul(transpose(eigvecs), matmul(same_irrep_part, eigvecs)) - &
-                      diagonal_matrix(eigvals)) > tol) then
+            if (.not. is_at_most(norm2(matmul(transpose(eigvecs), matmul( &
+                same_irrep_part, eigvecs)) - diagonal_matrix(eigvals)), tol)) then
                 write(stderr, *) "test_diagonalize_per_irrep failed: Matrix not "// &
                     "diagonalized for "//name//"."
                 test_diagonalize_per_irrep = .false.
             end if
-            if (norm2(matmul(transpose(eigvecs), eigvecs) - identity_matrix(n)) > tol) &
-                then
+            if (.not. is_at_most(norm2(matmul(transpose(eigvecs), eigvecs) - &
+                                       identity_matrix(n)), tol)) then
                 write(stderr, *) "test_diagonalize_per_irrep failed: Eigenvectors "// &
                     "not orthonormal for "//name//"."
                 test_diagonalize_per_irrep = .false.
             end if
-            if (any(abs(eigvecs) > tol .and. .not. same_irrep)) then
+            if (.not. all(is_close(eigvecs, 0.0_rp) .or. same_irrep)) then
                 write(stderr, *) "test_diagonalize_per_irrep failed: Eigenvectors "// &
                     "mix irreps for "//name//"."
                 test_diagonalize_per_irrep = .false.

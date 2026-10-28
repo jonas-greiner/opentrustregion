@@ -10,9 +10,9 @@ module otr_mo_c_interface
     use c_interface, only: c_ip, c_rp
     use otr_mo, only: standard_mo_factory_cs => mo_factory_cs, &
                       standard_mo_factory_os => mo_factory_os
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_loc, &
-                                           c_f_pointer, c_f_procpointer, c_associated, &
-                                           c_null_funptr, c_null_ptr
+    use, intrinsic :: iso_c_binding, only: &
+        c_size_t, c_sizeof, c_bool, c_ptr, c_funptr, c_loc, c_f_pointer, &
+        c_f_procpointer, c_associated, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -124,19 +124,9 @@ contains
             if (n_particle == 1) orbsym_1d = orbsym(:, 1)
         end if
 
-        ! the object rotates the host's MO coefficients in place or, if the real kind
-        ! differs from C's, a copy of them, which the orbital update copies back
-        if (rp == c_rp) then
-            call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d, &
-                             [n_ao, n_mo, n_particle])
-            call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
-        else
-            allocate(mo_coeff_3d(n_ao, n_mo, n_particle))
-            mo_coeff_3d = reshape(real(mo_coeff_c(:n_ao * n_mo * n_particle), &
-                                       kind=rp), [n_ao, n_mo, n_particle])
-            allocate(ao_overlap(n_ao, n_ao))
-            ao_overlap = reshape(real(ao_overlap_c(:n_ao**2), kind=rp), [n_ao, n_ao])
-        end if
+        ! the object rotates the host's MO coefficients in place
+        call c_f_pointer(c_loc(mo_coeff_c(1)), mo_coeff_3d, [n_ao, n_mo, n_particle])
+        call c_f_pointer(c_loc(ao_overlap_c(1)), ao_overlap, [n_ao, n_ao])
 
         ! create the holder, whose bundle hands the density matrix evaluating function,
         ! if one is given, and the logging function with the host context of
@@ -183,14 +173,6 @@ contains
             end if
         end if
 
-        ! the orbital update copies the MO coefficients back to the host's array if the
-        ! object rotates a copy of them
-        if (error == 0 .and. rp /= c_rp) then
-            holder%solver_level%orbitals => mo_coeff_3d
-            call c_f_pointer(c_loc(mo_coeff_c(1)), holder%solver_level%orbitals_c, &
-                             [n_ao, n_mo, n_particle])
-        end if
-
         ! write the wired solver settings back and return the C wrappers of the orbital
         ! update and the objective function of the object and the holder, or free the
         ! holder if the factory failed
@@ -214,6 +196,18 @@ contains
         settings_c = default_mo_settings
 
     end subroutine init_mo_settings_c
+
+    integer(c_size_t) function mo_settings_size() bind(C)
+        !
+        ! this function returns the size of the C MO settings, which the Python
+        ! interface compares with its own to detect a library of another version and
+        ! the C layout tests with the header's
+        !
+        type(mo_settings_type_c) :: settings_c
+
+        mo_settings_size = c_sizeof(settings_c)
+
+    end function mo_settings_size
 
     subroutine assign_mo_f_c(settings, settings_c)
         !

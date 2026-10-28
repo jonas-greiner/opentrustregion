@@ -11,6 +11,7 @@ from ctypes import POINTER, c_bool, c_void_p, c_char, Structure, byref
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
+    check_struct_sizes,
     lib,
     c_int,
     c_real,
@@ -99,6 +100,9 @@ class DensityQNSettings(Settings):
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(DensityQNSettings)
 bind_callback_fields(DensityQNSettings)
+
+# check that the settings structure has the size the library exports for it
+check_struct_sizes(lib, [("density_qn_settings", DensityQNSettingsC)])
 
 
 # define interface factories

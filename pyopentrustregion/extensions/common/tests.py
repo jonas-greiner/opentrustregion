@@ -16,7 +16,6 @@ from ctypes import (
     c_char,
     c_void_p,
     cast,
-    sizeof,
     string_at,
 )
 from types import SimpleNamespace
@@ -68,6 +67,10 @@ fortran_tests = {
         "get_extra_trial_vectors_extension",
         "hess_x_callback",
         "hess_x_extension",
+        "invoke_evaluate_dm_cs",
+        "invoke_evaluate_dm_os",
+        "invoke_get_response_cs",
+        "invoke_get_response_os",
         "level_shifted_divisors",
         "logger_callback",
         "matrix_exponential",
@@ -395,20 +398,14 @@ def settings_hold_reference(test_name, settings, lookup):
     return test_passed
 
 
-def check_settings_layout(test_name, settings, export, lookup, size):
+def check_settings_layout(test_name, settings, export, lookup):
     """
-    this function checks that the ctypes structure of the settings of an extension has
-    the size of the bind(C) settings type and that every field is read back under its
-    own name from C settings whose fields Fortran sets one by one to the reference
-    values, compared against the value the lookup function returns for the field's
-    name, so that a stray field is caught as well as a misplaced one
+    this function checks that every field of the ctypes structure of the settings of
+    an extension is read back under its own name from C settings whose fields Fortran
+    sets one by one to the reference values, compared against the value the lookup
+    function returns for the field's name, so that a stray field is caught as well as
+    a misplaced one
     """
-    if sizeof(settings.c_struct) != size:
-        print(
-            f" {test_name} failed: Size of {settings.__name__} structure differs from "
-            "the library's."
-        )
-        return False
     settings_c = settings.c_struct()
     export(byref(settings_c))
     test_passed = True
@@ -686,7 +683,7 @@ class ToyRun:
 
         # the orbitals of the caller moved and stayed orthonormal: C^T S C = I in the MO
         # basis, D S D = D in the OAO basis
-        if np.max(np.abs(self.orbitals - self.start_orbitals)) < 1e-3:
+        if not np.max(np.abs(self.orbitals - self.start_orbitals)) >= 1e-3:
             print(
                 f" {test_name} failed: Orbitals of the caller not moved for the "
                 f"{case_name} case."
@@ -695,7 +692,7 @@ class ToyRun:
         s = toy_model().s
         for x in self.orbitals.reshape((self.n_particle,) + self.orbitals.shape[-2:]):
             target = np.eye(x.shape[1]) if self.mo_basis else x
-            if np.max(np.abs(x.T @ s @ x - target)) > 1e-8:
+            if not np.allclose(x.T @ s @ x, target, rtol=0.0, atol=1e-8):
                 print(
                     f" {test_name} failed: Orbitals of the caller not orthonormal for "
                     f"the {case_name} case."

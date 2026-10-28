@@ -11,6 +11,7 @@ from ctypes import POINTER, byref, c_bool, c_void_p, c_char, Structure
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
+    check_struct_sizes,
     lib,
     c_int,
     c_real,
@@ -88,6 +89,9 @@ class RotationQNSettings(Settings):
 # ensure that appropriate fields are automatically set in settings_c object
 auto_bind_fields(RotationQNSettings)
 bind_callback_fields(RotationQNSettings)
+
+# check that the settings structure has the size the library exports for it
+check_struct_sizes(lib, [("rotation_qn_settings", RotationQNSettingsC)])
 
 
 # define interface factories

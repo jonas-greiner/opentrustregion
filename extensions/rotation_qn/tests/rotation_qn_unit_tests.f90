@@ -7,7 +7,7 @@
 module otr_rotation_qn_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
-    use test_reference, only: n_param, tol
+    use test_reference, only: n_param, tol, is_close, is_at_most
     use otr_rotation_qn, only: transport_type, init_hess_type, sr1_updating_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
@@ -32,9 +32,9 @@ contains
         !
         ! this subroutine is a mock of the host's transport function, which leaves the
         ! tangent vector unchanged, records its call, checks the host context and
-        ! returns the error code set in it
+        ! returns the error code set in it or a value that is not a number
         !
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target :: geodesic(:)
         real(rp), intent(inout), target :: tangent_vector(:)
@@ -42,6 +42,7 @@ contains
         class(*), intent(in), pointer :: context
 
         error = record_host_call("transport", context)
+        call inject_host_nan(context, 1_ip, tangent_vector(1))
 
     end subroutine mock_transport
 
@@ -49,15 +50,16 @@ contains
         !
         ! this subroutine is a mock of the host's initial Hessian function, which
         ! applies the identity, records its call, checks the host context and returns
-        ! the error code set in it
+        ! the error code set in it or a value that is not a number
         !
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
         error = record_host_call("init_hess", context)
+        call inject_host_nan(context, 1_ip, vector(1))
 
     end subroutine mock_init_hess
 
@@ -442,6 +444,148 @@ contains
 
     end function test_rotation_qn_sanity_check
 
+    logical(c_bool) function test_invoke_transport() bind(C)
+        !
+        ! this function tests the subroutine which calls the host's transport function
+        !
+        use otr_rotation_qn, only: rotation_qn_settings_type, invoke_transport
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use test_reference, only: arm_host_context, host_context_reached
+
+        integer(ip), parameter :: error_origin = 4200
+        type(rotation_qn_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(transport_type), pointer :: transport_funptr
+        real(rp) :: geodesic(n_param), vector(n_param), expected(n_param)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_invoke_transport = .true.
+
+        ! call a transport function, which leaves the tangent vector unchanged, with a
+        ! random geodesic and tangent vector and check that it receives the host
+        ! context and that the tangent vector is returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        transport_funptr => mock_transport
+        call random_number(geodesic)
+        call random_number(vector)
+        expected = vector
+        call invoke_transport(transport_funptr, geodesic, vector, settings, &
+                              error_origin, error)
+        if (error /= 0) then
+            write(stderr, *) "test_invoke_transport failed: Produced error."
+            test_invoke_transport = .false.
+        end if
+        if (.not. all(is_close(vector, expected))) then
+            write(stderr, *) "test_invoke_transport failed: Tangent vector not "// &
+                "returned."
+            test_invoke_transport = .false.
+        end if
+        if (.not. host_context_reached("invoke_transport", context)) &
+            test_invoke_transport = .false.
+
+        ! let the function fail and check that its error is passed on unchanged
+        context%mock_error = 3
+        call invoke_transport(transport_funptr, geodesic, vector, settings, &
+                              error_origin, error)
+        if (error /= 3) then
+            write(stderr, *) "test_invoke_transport failed: Error of the function "// &
+                "not passed on unchanged."
+            test_invoke_transport = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return a value that is not a number, which has to be
+        ! reported with the origin of the object and an error message
+        call setup_error_logging(settings, context)
+        context%nan_output = 1
+        call invoke_transport(transport_funptr, geodesic, vector, settings, &
+                              error_origin, error)
+        context%nan_output = 0
+        if (error /= error_origin + 1) then
+            write(stderr, *) "test_invoke_transport failed: Tangent vector that is "// &
+                "not finite not reported with the origin of the object."
+            test_invoke_transport = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_invoke_transport failed: No error message "// &
+                "printed for a tangent vector that is not finite."
+            test_invoke_transport = .false.
+        end if
+
+    end function test_invoke_transport
+
+    logical(c_bool) function test_invoke_init_hess() bind(C)
+        !
+        ! this function tests the subroutine which calls the host's initial Hessian
+        ! function
+        !
+        use otr_rotation_qn, only: rotation_qn_settings_type, invoke_init_hess
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use test_reference, only: arm_host_context, host_context_reached
+
+        integer(ip), parameter :: error_origin = 4200
+        type(rotation_qn_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(init_hess_type), pointer :: init_hess_funptr
+        real(rp) :: vector(n_param), expected(n_param)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_invoke_init_hess = .true.
+
+        ! call an initial Hessian function, which applies the identity, with a random
+        ! vector and check that it receives the host context and that the vector is
+        ! returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        init_hess_funptr => mock_init_hess
+        call random_number(vector)
+        expected = vector
+        call invoke_init_hess(init_hess_funptr, vector, settings, error_origin, error)
+        if (error /= 0) then
+            write(stderr, *) "test_invoke_init_hess failed: Produced error."
+            test_invoke_init_hess = .false.
+        end if
+        if (.not. all(is_close(vector, expected))) then
+            write(stderr, *) "test_invoke_init_hess failed: Vector not returned."
+            test_invoke_init_hess = .false.
+        end if
+        if (.not. host_context_reached("invoke_init_hess", context)) &
+            test_invoke_init_hess = .false.
+
+        ! let the function fail and check that its error is passed on unchanged
+        context%mock_error = 3
+        call invoke_init_hess(init_hess_funptr, vector, settings, error_origin, error)
+        if (error /= 3) then
+            write(stderr, *) "test_invoke_init_hess failed: Error of the function "// &
+                "not passed on unchanged."
+            test_invoke_init_hess = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return a value that is not a number, which has to be
+        ! reported with the origin of the object and an error message
+        call setup_error_logging(settings, context)
+        context%nan_output = 1
+        call invoke_init_hess(init_hess_funptr, vector, settings, error_origin, error)
+        context%nan_output = 0
+        if (error /= error_origin + 1) then
+            write(stderr, *) "test_invoke_init_hess failed: Vector that is not "// &
+                "finite not reported with the origin of the object."
+            test_invoke_init_hess = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_invoke_init_hess failed: No error message "// &
+                "printed for a vector that is not finite."
+            test_invoke_init_hess = .false.
+        end if
+
+    end function test_invoke_init_hess
+
     logical(c_bool) function test_update_orbs_rotation_qn() bind(C)
         !
         ! this function tests the rotation QN orbital update, which forwards to the
@@ -456,7 +600,7 @@ contains
         use otr_common, only: hess_x_callback
         use otr_common_mock, only: mock_update_orbs
         use otr_rotation_qn, only: default_rotation_qn_settings, error_rotation_qn
-        use test_reference, only: tol, arm_host_context, host_context_reached
+        use test_reference, only: arm_host_context, host_context_reached
 
         type(recording_rotation_qn_type), target :: object
         type(test_context_type), target :: contexts(2)
@@ -511,9 +655,9 @@ contains
                     "error code wrong for "//trim(case_names(i_case))//"."
                 test_update_orbs_rotation_qn = .false.
             end if
-            if (abs(func - sum(kappa)) > tol .or. &
-                any(abs(grad - 2.0_rp * kappa) > tol) .or. &
-                any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+            if (.not. is_close(func, sum(kappa)) .or. &
+                .not. all(is_close(grad, 2.0_rp * kappa)) .or. &
+                .not. all(is_close(h_diag, 3.0_rp * kappa))) then
                 write(stderr, *) "test_update_orbs_rotation_qn failed: Results of "// &
                     "the host's orbital update not returned for "// &
                     trim(case_names(i_case))//"."
@@ -538,8 +682,8 @@ contains
                     "wrongly for "//trim(case_names(i_case))//"."
                 test_update_orbs_rotation_qn = .false.
             else if (case_adds(i_case)) then
-                if (any(abs(object%added_kappa - kappa) > tol) .or. &
-                    any(abs(object%added_grad - grad) > tol)) then
+                if (.not. all(is_close(object%added_kappa, kappa)) .or. &
+                    .not. all(is_close(object%added_grad, grad))) then
                     write(stderr, *) "test_update_orbs_rotation_qn failed: Step or "// &
                         "gradient of the added point wrong for "// &
                         trim(case_names(i_case))//"."
@@ -607,16 +751,17 @@ contains
         ! this function tests the subroutine which adds a new point to the history of a
         ! rotation QN object, so far only that it hands every call of the host's
         ! transport function the host context of its settings and passes on the error
-        ! of every call and that a pair the skipping criterion rejects leaves the
-        ! history unchanged while the gradient becomes the last one, while its numerics
-        ! are left to later tests
+        ! of every call, reports a value of every call that is not a number with the
+        ! origin of the object and that a pair the skipping criterion rejects leaves
+        ! the history unchanged while the gradient becomes the last one, while its
+        ! numerics are left to later tests
         !
-        use otr_rotation_qn, only: bfgs_updating_type
+        use otr_rotation_qn, only: bfgs_updating_type, error_rotation_qn
         use test_reference, only: host_context, host_context_reached
 
         type(bfgs_updating_type) :: object
         real(rp) :: kappa(n_param), grad(n_param), orthogonal(n_param)
-        integer(ip) :: error, n_calls, i_call
+        integer(ip) :: error, n_calls, i_call, i_kind
         character(len=8) :: call_number
 
         ! assume tests pass
@@ -643,19 +788,28 @@ contains
         if (.not. host_context_reached("add_rotation_qn")) &
             test_add_rotation_qn = .false.
 
-        ! let every call of the transport function fail in turn, whose error the
-        ! routine has to pass on
+        ! let every call of the transport function fail in turn, by returning an error,
+        ! which the routine has to pass on, and a value that is not a number, which it
+        ! has to report with the origin of the object
         do i_call = 1, n_calls
-            call setup_updating_object(object)
-            host_context%failing_call = i_call
-            host_context%mock_error = 7
-            call object%add(kappa, grad, error)
-            if (error /= 7) then
-                write(call_number, '(I0)') i_call
-                write(stderr, *) "test_add_rotation_qn failed: Error of call "// &
-                    trim(call_number)//" of the transport function not passed on."
-                test_add_rotation_qn = .false.
-            end if
+            write(call_number, '(I0)') i_call
+            do i_kind = 1, 2
+                call setup_updating_object(object)
+                host_context%failing_call = i_call
+                if (i_kind == 1) host_context%mock_error = 7
+                if (i_kind == 2) host_context%nan_output = 1
+                call object%add(kappa, grad, error)
+                if (i_kind == 1 .and. error /= 7) then
+                    write(stderr, *) "test_add_rotation_qn failed: Error of call "// &
+                        trim(call_number)//" of the transport function not passed on."
+                    test_add_rotation_qn = .false.
+                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                    write(stderr, *) "test_add_rotation_qn failed: Value that is "// &
+                        "not a number at call "//trim(call_number)//" of the "// &
+                        "transport function not reported with the origin of the object."
+                    test_add_rotation_qn = .false.
+                end if
+            end do
         end do
 
         ! add a point whose gradient differs from the last one, which the mock transport
@@ -674,7 +828,7 @@ contains
                 "history changed for a pair the skipping criterion rejects."
             test_add_rotation_qn = .false.
         end if
-        if (norm2(object%last_grad - grad) > tol) then
+        if (.not. is_at_most(norm2(object%last_grad - grad), tol)) then
             write(stderr, *) "test_add_rotation_qn failed: Gradient not the last "// &
                 "one after a pair the skipping criterion rejects."
             test_add_rotation_qn = .false.
@@ -687,15 +841,16 @@ contains
         ! this function tests the function which decides whether the SR1 updating
         ! scheme skips a new point, so far only that it hands the host's initial
         ! Hessian function the host context of its settings and passes on the error of
-        ! every call, while its numerics are left to later tests
+        ! every call, reports a value of every call that is not a number with the
+        ! origin of the object, while its numerics are left to later tests
         !
-        use otr_rotation_qn, only: sr1_updating_type
+        use otr_rotation_qn, only: sr1_updating_type, error_rotation_qn
         use test_reference, only: host_context, host_context_reached
 
         type(sr1_updating_type) :: object
         real(rp) :: kappa(n_param), grad_diff(n_param)
         logical :: skip
-        integer(ip) :: error, n_calls, i_call
+        integer(ip) :: error, n_calls, i_call, i_kind
         character(len=8) :: call_number
 
         ! assume tests pass
@@ -718,19 +873,29 @@ contains
         end if
         if (.not. host_context_reached("sr1_skip_add")) test_sr1_skip_add = .false.
 
-        ! let every call of the initial Hessian function fail in turn, whose error the
-        ! routine has to pass on
+        ! let every call of the initial Hessian function fail in turn, by returning an
+        ! error, which the routine has to pass on, and a value that is not a number,
+        ! which it has to report with the origin of the object
         do i_call = 1, n_calls
-            call setup_updating_object(object)
-            host_context%failing_call = i_call
-            host_context%mock_error = 7
-            skip = object%skip_add(kappa, grad_diff, error)
-            if (error /= 7) then
-                write(call_number, '(I0)') i_call
-                write(stderr, *) "test_sr1_skip_add failed: Error of call "// &
-                    trim(call_number)//" of the initial Hessian function not passed on."
-                test_sr1_skip_add = .false.
-            end if
+            write(call_number, '(I0)') i_call
+            do i_kind = 1, 2
+                call setup_updating_object(object)
+                host_context%failing_call = i_call
+                if (i_kind == 1) host_context%mock_error = 7
+                if (i_kind == 2) host_context%nan_output = 1
+                skip = object%skip_add(kappa, grad_diff, error)
+                if (i_kind == 1 .and. error /= 7) then
+                    write(stderr, *) "test_sr1_skip_add failed: Error of call "// &
+                        trim(call_number)// &
+                        " of the initial Hessian function not passed on."
+                    test_sr1_skip_add = .false.
+                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                    write(stderr, *) "test_sr1_skip_add failed: Value that is not "// &
+                        "a number at call "//trim(call_number)//" of the initial "// &
+                        "Hessian function not reported with the origin of the object."
+                    test_sr1_skip_add = .false.
+                end if
+            end do
         end do
 
     end function test_sr1_skip_add
@@ -740,15 +905,16 @@ contains
         ! this function tests the Hessian linear transformation of the SR1 updating
         ! scheme, so far only that it hands every call of the host's initial Hessian
         ! function the host context of its settings and passes on the error of every
-        ! call, while its numerics are left to later tests
+        ! call, reports a value of every call that is not a number with the origin of
+        ! the object, while its numerics are left to later tests
         !
         use otr_common_unit_tests, only: level_context
-        use otr_rotation_qn, only: sr1_updating_type
+        use otr_rotation_qn, only: sr1_updating_type, error_rotation_qn
         use test_reference, only: host_context, host_context_reached
 
         type(sr1_updating_type), target :: object
         real(rp) :: x(n_param), hess_x(n_param)
-        integer(ip) :: error, n_calls, i_call
+        integer(ip) :: error, n_calls, i_call, i_kind
         character(len=8) :: call_number
 
         ! assume tests pass
@@ -772,19 +938,29 @@ contains
         end if
         if (.not. host_context_reached("hess_x_sr1")) test_hess_x_sr1 = .false.
 
-        ! let every call of the initial Hessian function fail in turn, whose error the
-        ! routine has to pass on
+        ! let every call of the initial Hessian function fail in turn, by returning an
+        ! error, which the routine has to pass on, and a value that is not a number,
+        ! which it has to report with the origin of the object
         do i_call = 1, n_calls
-            call setup_updating_object(object)
-            host_context%failing_call = i_call
-            host_context%mock_error = 7
-            call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
-            if (error /= 7) then
-                write(call_number, '(I0)') i_call
-                write(stderr, *) "test_hess_x_sr1 failed: Error of call "// &
-                    trim(call_number)//" of the initial Hessian function not passed on."
-                test_hess_x_sr1 = .false.
-            end if
+            write(call_number, '(I0)') i_call
+            do i_kind = 1, 2
+                call setup_updating_object(object)
+                host_context%failing_call = i_call
+                if (i_kind == 1) host_context%mock_error = 7
+                if (i_kind == 2) host_context%nan_output = 1
+                call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+                if (i_kind == 1 .and. error /= 7) then
+                    write(stderr, *) "test_hess_x_sr1 failed: Error of call "// &
+                        trim(call_number)// &
+                        " of the initial Hessian function not passed on."
+                    test_hess_x_sr1 = .false.
+                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                    write(stderr, *) "test_hess_x_sr1 failed: Value that is not a "// &
+                        "number at call "//trim(call_number)//" of the initial "// &
+                        "Hessian function not reported with the origin of the object."
+                    test_hess_x_sr1 = .false.
+                end if
+            end do
         end do
 
     end function test_hess_x_sr1
@@ -794,15 +970,16 @@ contains
         ! this function tests the Hessian linear transformation of the BFGS updating
         ! scheme, so far only that it hands every call of the host's initial Hessian
         ! function the host context of its settings and passes on the error of every
-        ! call, while its numerics are left to later tests
+        ! call, reports a value of every call that is not a number with the origin of
+        ! the object, while its numerics are left to later tests
         !
         use otr_common_unit_tests, only: level_context
-        use otr_rotation_qn, only: bfgs_updating_type
+        use otr_rotation_qn, only: bfgs_updating_type, error_rotation_qn
         use test_reference, only: host_context, host_context_reached
 
         type(bfgs_updating_type), target :: object
         real(rp) :: x(n_param), hess_x(n_param)
-        integer(ip) :: error, n_calls, i_call
+        integer(ip) :: error, n_calls, i_call, i_kind
         character(len=8) :: call_number
 
         ! assume tests pass
@@ -827,19 +1004,29 @@ contains
         end if
         if (.not. host_context_reached("hess_x_bfgs")) test_hess_x_bfgs = .false.
 
-        ! let every call of the initial Hessian function fail in turn, whose error the
-        ! routine has to pass on
+        ! let every call of the initial Hessian function fail in turn, by returning an
+        ! error, which the routine has to pass on, and a value that is not a number,
+        ! which it has to report with the origin of the object
         do i_call = 1, n_calls
-            call setup_updating_object(object)
-            host_context%failing_call = i_call
-            host_context%mock_error = 7
-            call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
-            if (error /= 7) then
-                write(call_number, '(I0)') i_call
-                write(stderr, *) "test_hess_x_bfgs failed: Error of call "// &
-                    trim(call_number)//" of the initial Hessian function not passed on."
-                test_hess_x_bfgs = .false.
-            end if
+            write(call_number, '(I0)') i_call
+            do i_kind = 1, 2
+                call setup_updating_object(object)
+                host_context%failing_call = i_call
+                if (i_kind == 1) host_context%mock_error = 7
+                if (i_kind == 2) host_context%nan_output = 1
+                call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+                if (i_kind == 1 .and. error /= 7) then
+                    write(stderr, *) "test_hess_x_bfgs failed: Error of call "// &
+                        trim(call_number)// &
+                        " of the initial Hessian function not passed on."
+                    test_hess_x_bfgs = .false.
+                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                    write(stderr, *) "test_hess_x_bfgs failed: Value that is not a "// &
+                        "number at call "//trim(call_number)//" of the initial "// &
+                        "Hessian function not reported with the origin of the object."
+                    test_hess_x_bfgs = .false.
+                end if
+            end do
         end do
 
     end function test_hess_x_bfgs

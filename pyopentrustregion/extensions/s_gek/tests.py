@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import POINTER, c_bool, c_size_t
+from ctypes import POINTER, c_bool
 from unittest.mock import patch
 
 import numpy as np
@@ -53,6 +53,7 @@ fortran_tests = {
     "s_gek_tests": [
         "add_s_gek",
         "init_s_gek",
+        "invoke_change_reference",
         "s_gek_factory",
         "s_gek_sanity_check",
         "update_orbs_s_gek",
@@ -431,18 +432,16 @@ class SGEKPyIntegrationTests(unittest.TestCase):
 
     def test_s_gek_settings_layout(self):
         """
-        this function checks that the Python S-GEK settings structure has the size of
-        the bind(C) settings type and that every field is read back under its own name
-        from settings whose fields Fortran sets one by one to the reference values
+        this function checks that every field of the Python S-GEK settings structure is
+        read back under its own name from settings whose fields Fortran sets one by one
+        to the reference values
         """
-        lib.s_gek_settings_size.restype = c_size_t
         self.assertTrue(
             check_settings_layout(
                 "test_s_gek_settings_layout",
                 SGEKSettings,
                 lib.get_reference_s_gek_values,
                 lib.reference_s_gek_field,
-                lib.s_gek_settings_size(),
             ),
             "test_s_gek_settings_layout failed",
         )

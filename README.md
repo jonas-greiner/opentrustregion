@@ -538,6 +538,8 @@ Future versions may define more specific codes for other actionable failure mode
 
 OpenTrustRegion (OTR) supports additional optional modules: **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **rotation quasi-Newton (rotation QN)**, **density quasi-Newton (density QN)**, and **subspace gradient-enhanced kriging (S-GEK)**. The Python package, the published wheels included, contains all of them, while a Fortran or C build enables each through its CMake option, and a source install of the Python package can leave one out with `-C cmake.define.ENABLE_<NAME>=OFF`.
 
+The Python callback functions of the extensions follow the conventions of those of the solver: they receive NumPy arrays, which are only valid during the call, write array outputs in place, return any other outputs and signal errors by raising an exception instead of returning an error code.
+
 A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the rotation QN and S-GEK factories do on settings a factory wired, Fortran accepts only the returned functions themselves, C cannot tell a wrapper from your own function, and Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
 
 ```python

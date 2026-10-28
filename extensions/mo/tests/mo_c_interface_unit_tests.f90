@@ -8,7 +8,7 @@ module otr_mo_c_interface_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
-    use test_reference, only: tol
+    use test_reference, only: is_close
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
                                            c_associated, c_loc, c_f_pointer, &
                                            c_null_ptr, c_null_funptr
@@ -148,8 +148,8 @@ contains
             end if
 
             ! check that the factory received the MO coefficients of the caller in
-            ! place, unless the kinds differ and the object updates a copy
-            if (rp == c_rp .and. any(abs(mo_coeff_c - 2.0_c_rp) > tol)) then
+            ! place
+            if (.not. all(is_close(mo_coeff_c, 2.0_c_rp))) then
                 test_mo_factory_c_wrapper = .false.
                 write(stderr, *) "test_mo_factory_c_wrapper failed: MO "// &
                     "coefficients of the caller not passed in place for the "// &

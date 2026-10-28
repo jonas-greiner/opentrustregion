@@ -11,9 +11,9 @@ module otr_density_qn_c_interface
     use otr_density_qn, only: &
         standard_density_qn_factory_common => density_qn_factory_common, &
         density_qn_evaluate_dm_os_type, density_qn_evaluate_dm_cs_type
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
-                                           c_associated, c_char, c_null_funptr, &
-                                           c_null_ptr
+    use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_ptr, &
+                                           c_funptr, c_f_procpointer, c_associated, &
+                                           c_char, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -81,7 +81,8 @@ contains
         ! the C solver settings, returning the holder as the extension the host
         ! releases before that of the orbital basis object
         !
-        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin, &
+                                        verbosity_error
         use c_interface, only: solver_settings_type_c
         use otr_density_qn, only: &
             density_qn_settings_type, default_density_qn_settings, &
@@ -162,6 +163,13 @@ contains
         ! settings
         call setup_extension_holder(holder, solver_settings_c, solver_state_c, &
                                     settings, error)
+
+        ! the object can not run without the density matrix evaluating function
+        if (error == 0 .and. .not. c_associated(evaluate_dm_c_funptr)) then
+            call settings%log("Density matrix evaluating function has to be given.", &
+                              verbosity_error, .true.)
+            error = 1
+        end if
         call add_error_origin(error, error_density_qn, settings)
 
         ! the factory wires the solver settings of the holder, which then own the
@@ -182,13 +190,6 @@ contains
                 holder%solver_settings, holder%state, error, settings)
         end if
 
-        ! the orbital update copies the orbitals back to the host's array if the object
-        ! moves a copy of them, as that of the orbital basis object does
-        if (error == 0 .and. associated(orbitals_held)) then
-            holder%solver_level%orbitals => orbitals_held%orbitals
-            holder%solver_level%orbitals_c => orbitals_held%orbitals_c
-        end if
-
         ! write the wired solver settings back and return the C wrappers of the orbital
         ! update and the objective function of the object and the holder, or free the
         ! holder if the factory failed
@@ -204,8 +205,8 @@ contains
     subroutine density_qn_evaluate_dm_cs_f_wrapper( &
         dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, context)
         !
-        ! this subroutine wraps the density matrix evaluating subroutine to convert
-        ! Fortran variables to C variables for the closed-shell case
+        ! this subroutine exposes the density matrix evaluating C function to Fortran
+        ! for the closed-shell case
         !
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -237,9 +238,9 @@ contains
     subroutine density_qn_evaluate_dm_os_f_wrapper( &
         dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, context)
         !
-        ! this subroutine wraps the density matrix evaluating subroutine to convert
-        ! Fortran variables to C variables for the open-shell case, finding the C
-        ! function and the host context in the bundle it receives as context
+        ! this subroutine exposes the density matrix evaluating C function to Fortran
+        ! for the open-shell case, finding the C function and the host context in the
+        ! bundle it receives as context
         !
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -248,9 +249,6 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(c_rp) :: energy_c
-        real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :), v_coulomb_c(:, :, :), &
-                               v_exchange_c(:, :, :), v_nonlinear_c(:, :, :)
         integer(c_ip) :: error_c
 
         ! the bundle holds the C function
@@ -259,52 +257,12 @@ contains
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (density_qn_c_callbacks_type)
-            ! convert arguments to C kind
-            nullify(fock_c, v_coulomb_c, v_exchange_c, v_nonlinear_c)
-            if (rp == c_rp) then
-                dm_c => dm
-                if (present(fock)) fock_c => fock
-                if (present(v_coulomb)) v_coulomb_c => v_coulomb
-                if (present(v_exchange)) v_exchange_c => v_exchange
-                if (present(v_nonlinear)) v_nonlinear_c => v_nonlinear
-            else
-                allocate(dm_c, source=real(dm, kind=c_rp))
-                if (present(fock)) allocate(fock_c, mold=real(fock, kind=c_rp))
-                if (present(v_coulomb)) &
-                    allocate(v_coulomb_c, mold=real(v_coulomb, kind=c_rp))
-                if (present(v_exchange)) &
-                    allocate(v_exchange_c, mold=real(v_exchange, kind=c_rp))
-                if (present(v_nonlinear)) &
-                    allocate(v_nonlinear_c, mold=real(v_nonlinear, kind=c_rp))
-            end if
-
             ! call density matrix evaluating C function
-            error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, v_coulomb_c, &
-                                            v_exchange_c, v_nonlinear_c, &
-                                            callbacks%host_context)
+            error_c = callbacks%evaluate_dm(dm, energy, fock, v_coulomb, v_exchange, &
+                                            v_nonlinear, callbacks%host_context)
 
-            ! convert arguments to Fortran kind
-            energy = real(energy_c, kind=rp)
+            ! convert error code to Fortran kind
             error = int(error_c, kind=ip)
-            if (rp /= c_rp) then
-                if (present(fock)) then
-                    fock = real(fock_c, kind=rp)
-                    deallocate(fock_c)
-                end if
-                if (present(v_coulomb)) then
-                    v_coulomb = real(v_coulomb_c, kind=rp)
-                    deallocate(v_coulomb_c)
-                end if
-                if (present(v_exchange)) then
-                    v_exchange = real(v_exchange_c, kind=rp)
-                    deallocate(v_exchange_c)
-                end if
-                if (present(v_nonlinear)) then
-                    v_nonlinear = real(v_nonlinear_c, kind=rp)
-                    deallocate(v_nonlinear_c)
-                end if
-                deallocate(dm_c)
-            end if
         end select
 
     end subroutine density_qn_evaluate_dm_os_f_wrapper
@@ -321,6 +279,18 @@ contains
         settings_c = default_density_qn_settings
 
     end subroutine init_density_qn_settings_c
+
+    integer(c_size_t) function density_qn_settings_size() bind(C)
+        !
+        ! this function returns the size of the C density QN settings, which the Python
+        ! interface compares with its own to detect a library of another version and
+        ! the C layout tests with the header's
+        !
+        type(density_qn_settings_type_c) :: settings_c
+
+        density_qn_settings_size = c_sizeof(settings_c)
+
+    end function density_qn_settings_size
 
     subroutine assign_density_qn_f_c(settings, settings_c)
         !

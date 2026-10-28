@@ -329,7 +329,10 @@ static c_real orthonormality_error(const toy_run *run) {
           for (c_int q = 0; q < n; q++)
             sum += x[p + n * a] * toy.s[p + n * q] * x[q + n * b];
         c_real target = run->mo_basis ? (a == b ? 1.0 : 0.0) : x[a + n * b];
-        error = fmax(error, fabs(sum - target));
+        /* keep a deviation that is not a number, which fmax would drop */
+        c_real deviation = fabs(sum - target);
+        if (!(deviation <= error))
+          error = deviation;
       }
   }
   return error;
@@ -383,12 +386,12 @@ bool toy_run_solve(toy_run *run, const char *test_name, const char *case_name) {
   c_real moved = 0.0;
   for (c_int i = 0; i < TOY_MAX_SIZE; i++)
     moved = fmax(moved, fabs(run->orbitals[i] - run->start_orbitals[i]));
-  if (moved < 1e-3) {
+  if (!(moved >= 1e-3)) {
     fprintf(stderr, "%s failed: Orbitals of the caller not moved for the %s case.\n",
             test_name, case_name);
     ok = false;
   }
-  if (orthonormality_error(run) > 1e-8) {
+  if (!(orthonormality_error(run) <= 1e-8)) {
     fprintf(stderr,
             "%s failed: Orbitals of the caller not orthonormal for the %s "
             "case.\n",

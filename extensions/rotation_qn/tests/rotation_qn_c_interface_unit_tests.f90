@@ -10,7 +10,8 @@ module otr_rotation_qn_c_interface_unit_tests
     use c_interface, only: c_rp, c_ip
     use test_reference, only: n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
-                                           c_associated, c_loc, c_f_pointer, c_null_ptr
+                                           c_associated, c_loc, c_f_pointer, &
+                                           c_null_ptr, c_null_funptr
 
     implicit none
 
@@ -62,7 +63,7 @@ contains
         !
         ! this function tests the C wrapper for the rotation QN factory
         !
-        use opentrustregion_core, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings, verbosity_error
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
         use otr_common_c_interface, only: extension_holder_type
@@ -88,10 +89,13 @@ contains
         type(rotation_qn_settings_type_c) :: settings
         type(c_ptr) :: extension_c, stacked_extension_c
         type(extension_holder_type), pointer :: holder
-        integer(c_ip) :: error_c
+        integer(c_ip) :: error_c, verbose
         integer(ip) :: i_case
         character(len=34), parameter :: default_cases(2) = &
             [character(len=34) :: "settings that were not initialized", "no settings"]
+        character(len=*), parameter :: missing_input_names(5) = [ &
+            character(len=27) :: "a record of the state", "an orbital update", "an "// &
+            "objective function", "a transport function", "an initial Hessian function"]
 
         ! assume tests pass
         test_rotation_qn_factory_c_wrapper = .true.
@@ -260,28 +264,46 @@ contains
             end if
         end do
 
-        ! call the factory without a record of the state, which has to produce an error
-        ! without calling the factory or returning functions or an extension, which are
-        ! set beforehand
-        solver_settings_c = default_solver_settings
-        update_orbs_rotation_qn_c_funptr = c_funloc(mock_update_orbs)
-        obj_func_rotation_qn_c_funptr = c_funloc(mock_obj_func)
-        extension_c = c_loc(state_c)
-        test_passed_mock_rotation_qn_factory = .false.
-        error_c = rotation_qn_factory_c_wrapper( &
-            n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
-            c_funloc(mock_transport), c_funloc(mock_init_hess), &
-            update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
-            extension_c, solver_settings_c, c_null_ptr, settings)
-        if (error_c /= error_rotation_qn + 1 .or. &
-            test_passed_mock_rotation_qn_factory .or. &
-            c_associated(update_orbs_rotation_qn_c_funptr) .or. &
-            c_associated(obj_func_rotation_qn_c_funptr) .or. &
-            c_associated(extension_c)) then
-            write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: No error "// &
-                "produced without a record of the state."
-            test_rotation_qn_factory_c_wrapper = .false.
-        end if
+        ! call the factory without a record of the state and without each of the
+        ! host's callback functions in turn, with only error messages passed to the
+        ! logging function, which has to produce an error with an error message without
+        ! calling the factory or returning functions or an extension, which are set
+        ! beforehand
+        verbose = settings%verbose
+        settings%verbose = int(verbosity_error, kind=c_ip)
+        do i_case = 1, size(missing_input_names)
+            call arm_host_context_c(settings%context)
+            solver_settings_c = default_solver_settings
+            update_orbs_rotation_qn_c_funptr = c_funloc(mock_update_orbs)
+            obj_func_rotation_qn_c_funptr = c_funloc(mock_obj_func)
+            extension_c = c_loc(state_c)
+            test_passed_mock_rotation_qn_factory = .false.
+            error_c = rotation_qn_factory_c_wrapper( &
+                n_param_c, &
+                merge(c_null_funptr, c_funloc(mock_update_orbs), i_case == 2), &
+                merge(c_null_funptr, c_funloc(mock_obj_func), i_case == 3), &
+                merge(c_null_funptr, c_funloc(mock_transport), i_case == 4), &
+                merge(c_null_funptr, c_funloc(mock_init_hess), i_case == 5), &
+                update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
+                extension_c, solver_settings_c, &
+                merge(c_null_ptr, c_loc(state_c), i_case == 1), settings)
+            if (error_c /= error_rotation_qn + 1 .or. &
+                test_passed_mock_rotation_qn_factory .or. &
+                c_associated(update_orbs_rotation_qn_c_funptr) .or. &
+                c_associated(obj_func_rotation_qn_c_funptr) .or. &
+                c_associated(extension_c)) then
+                write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: No "// &
+                    "error produced without "//trim(missing_input_names(i_case))//"."
+                test_rotation_qn_factory_c_wrapper = .false.
+            end if
+            if (host_context%n_messages == 0) then
+                write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: No "// &
+                    "error message printed without "// &
+                    trim(missing_input_names(i_case))//"."
+                test_rotation_qn_factory_c_wrapper = .false.
+            end if
+        end do
+        settings%verbose = verbose
 
         ! call the factory with a mock factory which produces an error after its checks,
         ! with the armed host context, which has to be returned without functions, an

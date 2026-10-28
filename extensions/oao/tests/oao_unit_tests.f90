@@ -7,7 +7,7 @@
 module otr_oao_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
-    use test_reference, only: tol
+    use test_reference, only: tol, is_close, is_at_most
     use, intrinsic :: iso_c_binding, only: c_bool
 
     implicit none
@@ -320,8 +320,8 @@ contains
         else
             rotated = oao%rotate_from_hess_eigenbasis(vector)
         end if
-        if (norm2(rotated - ref_rotate_eigenbasis_oao(vector, eigvecs, n_particle, &
-                                                      n_ao, to_eigenbasis)) > tol) then
+        if (.not. is_at_most(norm2(rotated - ref_rotate_eigenbasis_oao( &
+            vector, eigvecs, n_particle, n_ao, to_eigenbasis)), tol)) then
             write(stderr, *) test_name//" failed: Incorrect rotation."
             passed = .false.
         end if
@@ -412,7 +412,7 @@ contains
                     test_oao_factory_cs = .false.
                 else
                     dm_ao(1, 1) = dm_ao(1, 1) + 1.0_rp
-                    if (norm2(oao%dm_ao(:, :, 1) - dm_ao) > tol) then
+                    if (.not. is_at_most(norm2(oao%dm_ao(:, :, 1) - dm_ao), tol)) then
                         write(stderr, *) "test_oao_factory_cs failed: Density "// &
                             "matrix of the caller not taken over."
                         test_oao_factory_cs = .false.
@@ -722,16 +722,16 @@ contains
                             trim(case_names(i_case))//"."
                         test_oao_factory_common = .false.
                     end if
-                    if (norm2(oao%s_sqrt - s_sqrt) > tol .or. &
-                        norm2(oao%s_inv_sqrt - s_inv_sqrt) > tol) then
+                    if (.not. is_at_most(norm2(oao%s_sqrt - s_sqrt), tol) .or. &
+                        .not. is_at_most(norm2(oao%s_inv_sqrt - s_inv_sqrt), tol)) then
                         write(stderr, *) "test_oao_factory_common failed: Square "// &
                             "roots of the overlap matrix not computed "// &
                             trim(case_names(i_case))//"."
                         test_oao_factory_common = .false.
                     end if
                     do i = 1, n_particle
-                        if (norm2(oao%dm_oao(:, :, i) - matmul( &
-                            s_sqrt, matmul(dm_ao(:, :, i), s_sqrt))) > tol) then
+                        if (.not. is_at_most(norm2(oao%dm_oao(:, :, i) - matmul( &
+                            s_sqrt, matmul(dm_ao(:, :, i), s_sqrt))), tol)) then
                             write(stderr, *) "test_oao_factory_common failed: "// &
                                 "Density matrix not transformed to the OAO basis "// &
                                 trim(case_names(i_case))//"."
@@ -1040,7 +1040,7 @@ contains
                 expected_energy = expected_energy + sum(matmul(s_inv_sqrt, matmul( &
                     dm_oao(:, :, i), s_inv_sqrt)))
             end do
-            if (abs(energy - expected_energy) > tol) then
+            if (.not. is_close(energy, expected_energy)) then
                 write(stderr, *) "test_obj_func_oao failed: Incorrect energy for "// &
                     "the "//case_name//" case."
                 test_obj_func_oao = .false.
@@ -1068,7 +1068,7 @@ contains
                     "orbital rotation for the "//case_name//" case."
                 test_obj_func_oao = .false.
             end if
-            if (norm2(oao%dm_oao - dm_oao) > tol) then
+            if (.not. is_at_most(norm2(oao%dm_oao - dm_oao), tol)) then
                 write(stderr, *) "test_obj_func_oao failed: Current density matrix "// &
                     "changed by an orbital rotation for the "//case_name//" case."
                 test_obj_func_oao = .false.
@@ -1096,7 +1096,7 @@ contains
                 expected_energy = expected_energy + sum(matmul(s_inv_sqrt, matmul( &
                     dm_oao(:, :, i), s_inv_sqrt)))
             end do
-            if (abs(energy - expected_energy) > tol) then
+            if (.not. is_close(energy, expected_energy)) then
                 write(stderr, *) "test_obj_func_oao failed: Incorrect energy for a "// &
                     "plane rotation for the "//case_name//" case."
                 test_obj_func_oao = .false.
@@ -1117,6 +1117,19 @@ contains
                 test_obj_func_oao = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with a density matrix evaluating function that returns an
+            ! energy that is not a number and determine if a positive infinite value,
+            ! which rejects the step, is returned without an error
+            context%nan_output = 1
+            energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
+            context%nan_output = 0
+            if (error /= 0 .or. .not. energy > huge(energy)) then
+                write(stderr, *) "test_obj_func_oao failed: Energy that is not a "// &
+                    "number not returned as a positive infinite value for the "// &
+                    case_name//" case."
+                test_obj_func_oao = .false.
+            end if
 
             ! call routine with a rotation that is not finite, which the matrix
             ! exponential refuses, and determine if its error is returned with the
@@ -1228,7 +1241,7 @@ contains
             oao%response_stale = .false.
             if (.not. check_update_orbs_oao_stage(1_ip, "a starting density")) &
                 test_update_orbs_oao = .false.
-            if (abs(func - sum(dm_ao)) > tol) then
+            if (.not. is_close(func, sum(dm_ao))) then
                 write(stderr, *) "test_update_orbs_oao failed: Incorrect energy "// &
                     "for the "//case_name//" case."
                 test_update_orbs_oao = .false.
@@ -1236,20 +1249,20 @@ contains
             do i = 1, n_particle
                 fock_oao = matmul(s_inv_sqrt, matmul(mock_fock_factor(1) * &
                                                      dm_ao(:, :, i), s_inv_sqrt))
-                if (norm2(oao%fock_oo(:, :, i) - matmul( &
-                    dm_oao(:, :, i), matmul(fock_oao, dm_oao(:, :, i)))) > tol) then
+                if (.not. is_at_most(norm2(oao%fock_oo(:, :, i) - matmul( &
+                    dm_oao(:, :, i), matmul(fock_oao, dm_oao(:, :, i)))), tol)) then
                     write(stderr, *) "test_update_orbs_oao failed: Static Hessian "// &
                         "part not built from the Fock matrix in the OAO basis for "// &
                         "the "//case_name//" case."
                     test_update_orbs_oao = .false.
                 end if
             end do
-            if (norm2(grad - oao%grad) > tol) then
+            if (.not. is_at_most(norm2(grad - oao%grad), tol)) then
                 write(stderr, *) "test_update_orbs_oao failed: Gradient not "// &
                     "returned for the "//case_name//" case."
                 test_update_orbs_oao = .false.
             end if
-            if (norm2(h_diag - oao%h_diag) > tol) then
+            if (.not. is_at_most(norm2(h_diag - oao%h_diag), tol)) then
                 write(stderr, *) "test_update_orbs_oao failed: Hessian diagonal "// &
                     "not returned for the "//case_name//" case."
                 test_update_orbs_oao = .false.
@@ -1285,17 +1298,17 @@ contains
             h_diag = 0.0_rp
             if (.not. check_update_orbs_oao_stage(1_ip, "an evaluated density")) &
                 test_update_orbs_oao = .false.
-            if (abs(func) > tol) then
+            if (.not. is_close(func, 0.0_rp)) then
                 write(stderr, *) "test_update_orbs_oao failed: Stored energy not "// &
                     "returned for an evaluated density for the "//case_name//" case."
                 test_update_orbs_oao = .false.
             end if
-            if (norm2(grad - oao%grad) > tol) then
+            if (.not. is_at_most(norm2(grad - oao%grad), tol)) then
                 write(stderr, *) "test_update_orbs_oao failed: Stored gradient not "// &
                     "returned for an evaluated density for the "//case_name//" case."
                 test_update_orbs_oao = .false.
             end if
-            if (norm2(h_diag - oao%h_diag) > tol) then
+            if (.not. is_at_most(norm2(h_diag - oao%h_diag), tol)) then
                 write(stderr, *) "test_update_orbs_oao failed: Stored Hessian "// &
                     "diagonal not returned for an evaluated density for the "// &
                     case_name//" case."
@@ -1347,8 +1360,8 @@ contains
                 rotation = identity_matrix(n_ao)
                 rotation(1:2, 1:2) = reshape([cos(angle), -sin(angle), &
                                               sin(angle), cos(angle)], [2, 2])
-                if (norm2(oao%dm_oao(:, :, i) - matmul( &
-                    transpose(rotation), matmul(dm_oao(:, :, i), rotation))) > tol) then
+                if (.not. is_at_most(norm2(oao%dm_oao(:, :, i) - matmul( &
+                    transpose(rotation), matmul(dm_oao(:, :, i), rotation))), tol)) then
                     write(stderr, *) "test_update_orbs_oao failed: Density matrix "// &
                         "not rotated correctly by an orbital rotation for the "// &
                         case_name//" case."
@@ -1356,8 +1369,8 @@ contains
                 end if
             end do
             do i = 1, n_particle
-                if (norm2(dm_ao(:, :, i) - matmul( &
-                    s_inv_sqrt, matmul(oao%dm_oao(:, :, i), s_inv_sqrt))) > tol) then
+                if (.not. is_at_most(norm2(dm_ao(:, :, i) - matmul( &
+                    s_inv_sqrt, matmul(oao%dm_oao(:, :, i), s_inv_sqrt))), tol)) then
                     write(stderr, *) "test_update_orbs_oao failed: Density matrix "// &
                         "not moved consistently in the AO and the OAO basis for "// &
                         "the "//case_name//" case."
@@ -1390,6 +1403,27 @@ contains
                 test_update_orbs_oao = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with the orbital rotation again, whose evaluation returns a
+            ! Fock matrix that is not finite, and determine if this is reported with
+            ! the origin of the object and the rotated orbitals are marked as not
+            ! evaluated
+            context%nan_output = 2
+            call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
+                                 level_context(oao, 1_ip))
+            context%nan_output = 0
+            if (error /= error_oao + 1) then
+                write(stderr, *) "test_update_orbs_oao failed: Fock matrix that is "// &
+                    "not finite not reported with the origin of the object for the "// &
+                    case_name//" case."
+                test_update_orbs_oao = .false.
+            end if
+            if (.not. oao%evaluation_stale) then
+                write(stderr, *) "test_update_orbs_oao failed: Evaluation not "// &
+                    "marked stale after a Fock matrix that is not finite for the "// &
+                    case_name//" case."
+                test_update_orbs_oao = .false.
+            end if
 
             ! call routine without a density matrix evaluating function and determine
             ! if the error of its check is returned
@@ -1542,7 +1576,7 @@ contains
                     case_name//" case."
                 test_hess_x_oao = .false.
             end if
-            if (norm2(hess_x - expected_hess_x) > tol) then
+            if (.not. is_at_most(norm2(hess_x - expected_hess_x), tol)) then
                 write(stderr, *) "test_hess_x_oao failed: Incorrect Hessian linear "// &
                     "transformation for the "//case_name//" case."
                 test_hess_x_oao = .false.
@@ -1558,6 +1592,18 @@ contains
                 test_hess_x_oao = .false.
             end if
             context%mock_error = 0
+
+            ! call routine with a response function that returns values that are not
+            ! finite and determine if this is reported with the origin of the object
+            context%nan_output = 1
+            call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
+            context%nan_output = 0
+            if (error /= error_oao + 1) then
+                write(stderr, *) "test_hess_x_oao failed: Response that is not "// &
+                    "finite not reported with the origin of the object for the "// &
+                    case_name//" case."
+                test_hess_x_oao = .false.
+            end if
         end do
 
         ! mark the response as stale, as density QN would after moving the density
@@ -1593,7 +1639,7 @@ contains
                 "after being refreshed."
             test_hess_x_oao = .false.
         end if
-        if (norm2(hess_x - expected_hess_x) > tol) then
+        if (.not. is_at_most(norm2(hess_x - expected_hess_x), tol)) then
             write(stderr, *) "test_hess_x_oao failed: Incorrect Hessian linear "// &
                 "transformation with a refreshed response."
             test_hess_x_oao = .false.
@@ -1661,8 +1707,8 @@ contains
             end if
             second_diff = (model_energy(step * x) - 2.0_rp * &
                            model_energy(0.0_rp * x) + model_energy(-step * x)) / step**2
-            if (abs(dot_product(x, hess_x) - second_diff) > &
-                fd_tol * max(1.0_rp, abs(second_diff))) then
+            if (.not. is_close(dot_product(x, hess_x), second_diff, &
+                               fd_tol * max(1.0_rp, abs(second_diff)))) then
                 write(stderr, *) "test_hess_x_oao failed: Hessian linear "// &
                     "transformation does not match the finite difference of the "// &
                     "quadratic model energy for the "//case_name//" case."
@@ -1792,7 +1838,7 @@ contains
                 "projection of the host."
             test_project_oao = .false.
         end if
-        if (norm2(projected - expected) > tol) then
+        if (.not. is_at_most(norm2(projected - expected), tol)) then
             write(stderr, *) "test_project_oao failed: Incorrect vector without a "// &
                 "projection of the host."
             test_project_oao = .false.
@@ -1809,7 +1855,7 @@ contains
                 "projection of the host."
             test_project_oao = .false.
         end if
-        if (norm2(projected - expected) > tol) then
+        if (.not. is_at_most(norm2(projected - expected), tol)) then
             write(stderr, *) "test_project_oao failed: Projection of the host not "// &
                 "applied after the OAO projection."
             test_project_oao = .false.
@@ -1884,12 +1930,12 @@ contains
             write(stderr, *) "test_rotate_orbitals_oao failed: Produced error."
             test_rotate_orbitals_oao = .false.
         end if
-        if (norm2(oao%dm_oao - expected_dm_oao) > tol) then
+        if (.not. is_at_most(norm2(oao%dm_oao - expected_dm_oao), tol)) then
             write(stderr, *) "test_rotate_orbitals_oao failed: Incorrect density "// &
                 "matrix in the OAO basis."
             test_rotate_orbitals_oao = .false.
         end if
-        if (norm2(dm_ao - expected_dm_ao) > tol) then
+        if (.not. is_at_most(norm2(dm_ao - expected_dm_ao), tol)) then
             write(stderr, *) "test_rotate_orbitals_oao failed: Incorrect density "// &
                 "matrix in the AO basis."
             test_rotate_orbitals_oao = .false.
@@ -1910,8 +1956,8 @@ contains
                 "object."
             test_rotate_orbitals_oao = .false.
         end if
-        if (norm2(oao%dm_oao - expected_dm_oao) > tol .or. &
-            norm2(dm_ao - expected_dm_ao) > tol) then
+        if (.not. is_at_most(norm2(oao%dm_oao - expected_dm_oao), tol) .or. &
+            .not. is_at_most(norm2(dm_ao - expected_dm_ao), tol)) then
             write(stderr, *) "test_rotate_orbitals_oao failed: Density matrices "// &
                 "moved by a rotation that is not finite."
             test_rotate_orbitals_oao = .false.
@@ -1998,24 +2044,26 @@ contains
             ! call routine and determine if values of resulting quantities match and
             ! the eigendecomposition of the static Hessian part is marked stale
             call oao%calculate_grad_h_diag(fock_oao(:, :, :n_particle))
-            if (norm2(oao%fock_oo - expected_fock_oo(:, :, :n_particle)) > tol) then
+            if (.not. is_at_most( &
+                norm2(oao%fock_oo - expected_fock_oo(:, :, :n_particle)), tol)) then
                 write(stderr, *) "test_calculate_grad_h_diag_oao failed: Incorrect "// &
                     "occupied-occupied part of the Fock matrix for the "//case_name// &
                     " case."
                 test_calculate_grad_h_diag_oao = .false.
             end if
-            if (norm2(oao%fock_vv - expected_fock_vv(:, :, :n_particle)) > tol) then
+            if (.not. is_at_most( &
+                norm2(oao%fock_vv - expected_fock_vv(:, :, :n_particle)), tol)) then
                 write(stderr, *) "test_calculate_grad_h_diag_oao failed: Incorrect "// &
                     "virtual-virtual part of the Fock matrix for the "//case_name// &
                     " case."
                 test_calculate_grad_h_diag_oao = .false.
             end if
-            if (norm2(oao%grad - expected_grad) > tol) then
+            if (.not. is_at_most(norm2(oao%grad - expected_grad), tol)) then
                 write(stderr, *) "test_calculate_grad_h_diag_oao failed: Incorrect "// &
                     "gradient for the "//case_name//" case."
                 test_calculate_grad_h_diag_oao = .false.
             end if
-            if (norm2(oao%h_diag - expected_h_diag) > tol) then
+            if (.not. is_at_most(norm2(oao%h_diag - expected_h_diag), tol)) then
                 write(stderr, *) "test_calculate_grad_h_diag_oao failed: Incorrect "// &
                     "Hessian diagonal for the "//case_name//" case."
                 test_calculate_grad_h_diag_oao = .false.
@@ -2076,12 +2124,12 @@ contains
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Produced error."
             test_refresh_hess_eigen_oao = .false.
         end if
-        if (norm2(oao%hess_eigvecs - expected_eigvecs) > tol) then
+        if (.not. is_at_most(norm2(oao%hess_eigvecs - expected_eigvecs), tol)) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Incorrect "// &
                 "eigenvectors."
             test_refresh_hess_eigen_oao = .false.
         end if
-        if (norm2(oao%hess_eigvals - expected_eigvals) > tol) then
+        if (.not. is_at_most(norm2(oao%hess_eigvals - expected_eigvals), tol)) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Incorrect "// &
                 "eigenvalues."
             test_refresh_hess_eigen_oao = .false.
@@ -2101,7 +2149,7 @@ contains
                 "for an up-to-date eigendecomposition."
             test_refresh_hess_eigen_oao = .false.
         end if
-        if (norm2(oao%hess_eigvals - expected_eigvals) > tol) then
+        if (.not. is_at_most(norm2(oao%hess_eigvals - expected_eigvals), tol)) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: Up-to-date "// &
                 "eigendecomposition recomputed."
             test_refresh_hess_eigen_oao = .false.
@@ -2118,7 +2166,7 @@ contains
                 "when replacing an eigendecomposition."
             test_refresh_hess_eigen_oao = .false.
         end if
-        if (norm2(oao%hess_eigvals - expected_eigvals) > tol) then
+        if (.not. is_at_most(norm2(oao%hess_eigvals - expected_eigvals), tol)) then
             write(stderr, *) "test_refresh_hess_eigen_oao failed: "// &
                 "Eigendecomposition not replaced although stale."
             test_refresh_hess_eigen_oao = .false.
@@ -2183,7 +2231,7 @@ contains
 
             ! call routine and determine if values match
             eigval_pairs = oao%get_hess_eigval_pairs()
-            if (norm2(eigval_pairs - expected) > tol) then
+            if (.not. is_at_most(norm2(eigval_pairs - expected), tol)) then
                 write(stderr, *) "test_get_hess_eigval_pairs_oao failed: Incorrect "// &
                     "pairwise eigenvalue sums for the "// &
                     trim(shell_names(n_particle))//" case."
@@ -2285,13 +2333,13 @@ contains
                 unit_vector(ref_idx(i)) = 1.0_rp
                 expected = ref_rotate_eigenbasis_oao(unit_vector, eigvecs, n_particle, &
                                                      n_ao, .false.)
-                if (norm2(trial_vectors(:, i) - expected) > tol) then
+                if (.not. is_at_most(norm2(trial_vectors(:, i) - expected), tol)) then
                     write(stderr, *) "test_get_extra_trial_vectors_oao failed: "// &
                         "Incorrect extra trial vector for the "//case_name//" case."
                     test_get_extra_trial_vectors_oao = .false.
                 end if
             end do
-            if (norm2(trial_vectors(:, n_extra)) > tol) then
+            if (.not. is_at_most(norm2(trial_vectors(:, n_extra)), tol)) then
                 write(stderr, *) "test_get_extra_trial_vectors_oao failed: Slot "// &
                     "without a negative eigenvalue sum does not vanish for the "// &
                     case_name//" case."
@@ -2385,12 +2433,12 @@ contains
             write(stderr, *) "test_rotate_dm_ao failed: Produced error."
             test_rotate_dm_ao = .false.
         end if
-        if (norm2(rot_dm_oao - expected_dm_oao) > tol) then
+        if (.not. is_at_most(norm2(rot_dm_oao - expected_dm_oao), tol)) then
             write(stderr, *) "test_rotate_dm_ao failed: Incorrect rotated density "// &
                 "matrix in the OAO basis."
             test_rotate_dm_ao = .false.
         end if
-        if (norm2(rot_dm_ao - expected_dm_ao) > tol) then
+        if (.not. is_at_most(norm2(rot_dm_ao - expected_dm_ao), tol)) then
             write(stderr, *) "test_rotate_dm_ao failed: Incorrect rotated density "// &
                 "matrix in the AO basis."
             test_rotate_dm_ao = .false.
@@ -2405,7 +2453,7 @@ contains
                 "optional argument."
             test_rotate_dm_ao = .false.
         end if
-        if (norm2(rot_dm_ao - expected_dm_ao) > tol) then
+        if (.not. is_at_most(norm2(rot_dm_ao - expected_dm_ao), tol)) then
             write(stderr, *) "test_rotate_dm_ao failed: Incorrect rotated density "// &
                 "matrix in the AO basis without the optional argument."
             test_rotate_dm_ao = .false.
@@ -2444,10 +2492,10 @@ contains
             allocate(x(n_particle * n_ao * (n_ao - 1) / 2))
             call random_number(x)
             x_full = ref_unpack_asymm(x, n_particle, n_ao)
-            if (norm2(hess_x_static_oao(x_full, fock_oo(:, :, :n_particle), &
-                                        fock_vv(:, :, :n_particle)) - &
-                      ref_hess_x_static_oao(x_full, fock_oo(:, :, :n_particle), &
-                                            fock_vv(:, :, :n_particle))) > tol) then
+            if (.not. is_at_most(norm2(hess_x_static_oao( &
+                x_full, fock_oo(:, :, :n_particle), fock_vv(:, :, :n_particle)) - &
+                ref_hess_x_static_oao(x_full, fock_oo(:, :, :n_particle), &
+                                      fock_vv(:, :, :n_particle))), tol)) then
                 write(stderr, *) "test_hess_x_static_oao failed: Incorrect static "// &
                     "part for the "//trim(shell_names(n_particle))//" case."
                 test_hess_x_static_oao = .false.
@@ -2504,7 +2552,7 @@ contains
             size(projected_matrix, 3) /= n_particle) then
             write(stderr, *) "test_project_asymm failed: Incorrect matrix dimensions."
             test_project_asymm = .false.
-        else if (norm2(projected_matrix - expected) > tol) then
+        else if (.not. is_at_most(norm2(projected_matrix - expected), tol)) then
             write(stderr, *) "test_project_asymm failed: Incorrect matrix values."
             test_project_asymm = .false.
         end if
@@ -2523,8 +2571,8 @@ contains
             write(stderr, *) "test_project_asymm failed: Incorrect matrix "// &
                 "dimensions for random density matrices."
             test_project_asymm = .false.
-        else if (norm2(projected_matrix - &
-                       ref_project_asymm(random_matrix, random_dm)) > tol) then
+        else if (.not. is_at_most(norm2(projected_matrix - ref_project_asymm( &
+            random_matrix, random_dm)), tol)) then
             write(stderr, *) "test_project_asymm failed: Incorrect matrix values "// &
                 "for random density matrices."
             test_project_asymm = .false.
@@ -2577,7 +2625,7 @@ contains
             test_project_symm = .false.
             return
         end if
-        if (norm2(projected_matrix - expected) > tol) then
+        if (.not. is_at_most(norm2(projected_matrix - expected), tol)) then
             write(stderr, *) "test_project_symm failed: Incorrect matrix values."
             test_project_symm = .false.
         end if
@@ -2621,7 +2669,7 @@ contains
 
         ! call routine and determine if values of resulting density matrices match
         call purify(dm)
-        if (norm2(dm - expected) > tol) then
+        if (.not. is_at_most(norm2(dm - expected), tol)) then
             write(stderr, *) "test_purify failed: Incorrect density matrix values."
             test_purify = .false.
         end if
@@ -2634,7 +2682,7 @@ contains
 
         ! call routine and determine if idempotent density matrices are left unchanged
         call purify(purified_dm)
-        if (norm2(purified_dm - idempotent_dm) > tol) then
+        if (.not. is_at_most(norm2(purified_dm - idempotent_dm), tol)) then
             write(stderr, *) "test_purify failed: Idempotent density matrices not "// &
                 "left unchanged."
             test_purify = .false.
@@ -2680,7 +2728,7 @@ contains
             test_symmetric_transformation = .false.
             return
         end if
-        if (norm2(matrix_transformed - expected) > tol) then
+        if (.not. is_at_most(norm2(matrix_transformed - expected), tol)) then
             write(stderr, *) "test_symmetric_transformation failed: Incorrect "// &
                 "matrix values."
             test_symmetric_transformation = .false.
@@ -2721,7 +2769,7 @@ contains
             test_unpack_asymm = .false.
             return
         end if
-        if (norm2(matrix - expected) > tol) then
+        if (.not. is_at_most(norm2(matrix - expected), tol)) then
             write(stderr, *) "test_unpack_asymm failed: Incorrect matrix values."
             test_unpack_asymm = .false.
         end if
@@ -2759,8 +2807,9 @@ contains
             test_pack_asymm = .false.
             return
         end if
-        if (norm2(matrix_nonred - [1.0_rp, 2.0_rp, 3.0_rp, 3.0_rp, 4.0_rp, 5.0_rp]) > &
-            tol) then
+        if (.not. is_at_most( &
+            norm2(matrix_nonred - [1.0_rp, 2.0_rp, 3.0_rp, 3.0_rp, 4.0_rp, 5.0_rp]), &
+            tol)) then
             write(stderr, *) "test_pack_asymm failed: Incorrect vector values."
             test_pack_asymm = .false.
         end if

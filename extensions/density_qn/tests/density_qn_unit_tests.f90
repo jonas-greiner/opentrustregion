@@ -7,7 +7,7 @@
 module otr_density_qn_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
-    use test_reference, only: tol
+    use test_reference, only: tol, is_close, is_at_most, is_at_least
     use otr_common_unit_tests, only: mock_orbital_basis_type
     use otr_density_qn, only: density_qn_mo_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -116,7 +116,7 @@ contains
         ! so that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -149,6 +149,14 @@ contains
         if (present(v_nonlinear)) &
             v_nonlinear = mock_potential(mock_v_nonlinear_factor, dm)
 
+        ! return a value that is not a number in the energy or a potential if the host
+        ! context asks for it
+        call inject_host_nan(context, 1_ip, energy)
+        if (present(fock)) call inject_host_nan(context, 2_ip, fock(1, 1))
+        if (present(v_coulomb)) call inject_host_nan(context, 3_ip, v_coulomb(1, 1))
+        if (present(v_exchange)) call inject_host_nan(context, 4_ip, v_exchange(1, 1))
+        if (present(v_nonlinear)) call inject_host_nan(context, 5_ip, v_nonlinear(1, 1))
+
     end subroutine mock_evaluate_dm_cs
 
     subroutine mock_evaluate_dm_os(dm, energy, fock, v_coulomb, v_exchange, &
@@ -160,7 +168,7 @@ contains
         ! that non-vanishing differences are produced
         !
         use otr_common_unit_tests, only: record_mock_call, mock_factor, mock_fock_factor
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -197,6 +205,16 @@ contains
             if (present(v_nonlinear)) v_nonlinear(:, :, i) = &
                 mock_potential(mock_v_nonlinear_factor, dm(:, :, i))
         end do
+
+        ! return a value that is not a number in the energy or a potential if the host
+        ! context asks for it
+        call inject_host_nan(context, 1_ip, energy)
+        if (present(fock)) call inject_host_nan(context, 2_ip, fock(1, 1, 1))
+        if (present(v_coulomb)) call inject_host_nan(context, 3_ip, v_coulomb(1, 1, 1))
+        if (present(v_exchange)) &
+            call inject_host_nan(context, 4_ip, v_exchange(1, 1, 1))
+        if (present(v_nonlinear)) &
+            call inject_host_nan(context, 5_ip, v_nonlinear(1, 1, 1))
 
     end subroutine mock_evaluate_dm_os
 
@@ -610,6 +628,150 @@ contains
 
     end function ref_congruence_transform
 
+    logical function check_invoke_density_qn_evaluate_dm(test_name, i_shell) &
+        result(test_passed)
+        !
+        ! this function tests the subroutine which calls the density matrix evaluating
+        ! function of density QN of the closed-shell (i_shell = 1) or the open-shell
+        ! case (i_shell = 2)
+        !
+        use otr_density_qn, only: &
+            density_qn_settings_type, density_qn_evaluate_dm_cs_type, &
+            density_qn_evaluate_dm_os_type, invoke_density_qn_evaluate_dm_cs, &
+            invoke_density_qn_evaluate_dm_os
+        use otr_common_unit_tests, only: mock_requests, mock_fock_factor
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use otr_common_test_reference, only: n_ao, shell_names
+        use test_reference, only: arm_host_context, host_context_reached
+
+        character(len=*), intent(in) :: test_name
+        integer(ip), intent(in) :: i_shell
+
+        integer(ip), parameter :: error_origin = 4200
+        character(len=*), parameter :: output_names(5) = &
+            [character(len=20) :: "energy", "Fock matrix", "Coulomb potential", &
+             "exchange potential", "non-linear potential"]
+        type(density_qn_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(density_qn_evaluate_dm_cs_type), pointer :: evaluate_dm_cs
+        procedure(density_qn_evaluate_dm_os_type), pointer :: evaluate_dm_os
+        real(rp), target :: dm(n_ao, n_ao, i_shell), outputs(n_ao, n_ao, i_shell, 4)
+        real(rp) :: energy
+        integer(ip) :: error, i_output
+        character(len=:), allocatable :: suffix
+
+        ! assume tests pass
+        test_passed = .true.
+        suffix = " for the "//trim(shell_names(i_shell))//" case."
+
+        ! call a density matrix evaluating function with a random density matrix and
+        ! check that it receives the density matrix and the host context and that its
+        ! energy, Fock matrix and potentials are returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        evaluate_dm_cs => mock_evaluate_dm_cs
+        evaluate_dm_os => mock_evaluate_dm_os
+        call random_number(dm)
+        mock_requests = [integer(ip) :: ]
+        call evaluate()
+        if (error /= 0) then
+            write(stderr, *) "test_"//test_name//" failed: Produced error"//suffix
+            test_passed = .false.
+        end if
+        if (.not. is_close(energy, sum(dm))) then
+            write(stderr, *) "test_"//test_name//" failed: Energy not returned"//suffix
+            test_passed = .false.
+        end if
+        if (.not. (all(is_close(outputs(:, :, :, 1), &
+                                mock_potential(mock_fock_factor(1), dm))) .and. &
+                   all(is_close(outputs(:, :, :, 2), &
+                                mock_potential(mock_v_coulomb_factor(1), dm))) .and. &
+                   all(is_close(outputs(:, :, :, 3), &
+                                mock_potential(mock_v_exchange_factor(1), dm))) .and. &
+                   all(is_close(outputs(:, :, :, 4), &
+                                mock_potential(mock_v_nonlinear_factor, dm))))) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Fock matrix or potentials not returned"//suffix
+            test_passed = .false.
+        end if
+        if (.not. host_context_reached(test_name, context)) test_passed = .false.
+
+        ! let the function fail and check that its error is passed on unchanged
+        context%mock_error = 3
+        call evaluate()
+        if (error /= 3) then
+            write(stderr, *) "test_"//test_name// &
+                " failed: Error of the function not passed on unchanged"//suffix
+            test_passed = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return a Fock matrix and every potential that is not finite
+        ! at a finite energy in turn, which has to be reported with the origin of the
+        ! object and an error message
+        do i_output = 2, size(output_names)
+            call setup_error_logging(settings, context)
+            context%nan_output = i_output
+            call evaluate()
+            if (error /= error_origin + 1) then
+                write(stderr, *) "test_"//test_name//" failed: "// &
+                    trim(output_names(i_output))//" that is not finite not "// &
+                    "reported with the origin of the object"//suffix
+                test_passed = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_"//test_name// &
+                    " failed: No error message printed for a "// &
+                    trim(output_names(i_output))//" that is not finite"//suffix
+                test_passed = .false.
+            end if
+        end do
+
+        ! let the function return an energy that is not a number, alone and together
+        ! with a Fock matrix and potentials that are not numbers, which has to be
+        ! returned as a positive infinite value without an error, since an infinite
+        ! energy rejects the point and leaves the other outputs unused
+        context%nan_output = 1
+        call evaluate()
+        if (error /= 0 .or. .not. energy > huge(energy)) then
+            write(stderr, *) "test_"//test_name//" failed: Energy that is not a "// &
+                "number not returned as a positive infinite value without an error"// &
+                suffix
+            test_passed = .false.
+        end if
+        context%nan_output = -1
+        call evaluate()
+        if (error /= 0 .or. .not. energy > huge(energy)) then
+            write(stderr, *) "test_"//test_name//" failed: Fock matrix or "// &
+                "potentials checked at an infinite energy"//suffix
+            test_passed = .false.
+        end if
+        context%nan_output = 0
+
+    contains
+
+        subroutine evaluate()
+            !
+            ! this subroutine calls the routine under test for the case, asking for
+            ! every output
+            !
+            if (i_shell == 1) then
+                call invoke_density_qn_evaluate_dm_cs( &
+                    evaluate_dm_cs, dm(:, :, 1), energy, settings, error_origin, &
+                    error, outputs(:, :, 1, 1), outputs(:, :, 1, 2), &
+                    outputs(:, :, 1, 3), outputs(:, :, 1, 4))
+            else
+                call invoke_density_qn_evaluate_dm_os( &
+                    evaluate_dm_os, dm, energy, settings, error_origin, error, &
+                    outputs(:, :, :, 1), outputs(:, :, :, 2), outputs(:, :, :, 3), &
+                    outputs(:, :, :, 4))
+            end if
+
+        end subroutine evaluate
+
+    end function check_invoke_density_qn_evaluate_dm
+
     function check_build_hess_model(n_particle, test_name) result(passed)
         !
         ! this function checks the assembly of the approximate Hessian model from the
@@ -783,9 +945,10 @@ contains
                         lists(:, :, :, k, 1) - current(:, :, :, 1), &
                         dim=3) - (lists(:, :, j, k, 2) - current(:, :, j, 2)))
                 end do
-                if (norm2(response - merge(4.0_rp, 2.0_rp, n_particle == 1) * &
-                          ref_pack_ov(v_diff_mo, mo%mo_channels)) > &
-                    tol * (1.0_rp + norm2(response))) then
+                if (.not. is_at_most( &
+                    norm2(response - merge(4.0_rp, 2.0_rp, n_particle == 1) * &
+                          ref_pack_ov(v_diff_mo, mo%mo_channels)), &
+                    tol * (1.0_rp + norm2(response)))) then
                     write(stderr, *) test_name//" failed: History not reproduced "// &
                         "exactly for "//case_qn_method//" in the MO basis."
                     passed = .false.
@@ -887,9 +1050,10 @@ contains
                     passed = .false.
                 end if
                 do k = 1, n_list
-                    if (norm2(density_qn%dm_list(:, :, :, k) - dm_list(:, :, :, k)) > &
-                        tol .or. norm2(stacked_potentials(density_qn, k) - &
-                                       lists(:, :, :, k, :)) > tol) then
+                    if (.not. is_at_most(norm2(density_qn%dm_list(:, :, :, k) - &
+                                               dm_list(:, :, :, k)), tol) .or. &
+                        .not. is_at_most(norm2(stacked_potentials(density_qn, k) - &
+                                               lists(:, :, :, k, :)), tol)) then
                         write(stderr, *) test_name//" failed: History changed for "// &
                             case_qn_method//" and "//case_name//"."
                         passed = .false.
@@ -1699,6 +1863,26 @@ contains
 
     end function test_density_qn_set_solver_settings
 
+    logical(c_bool) function test_invoke_density_qn_evaluate_dm_cs() bind(C)
+        !
+        ! this function tests the subroutine which calls the closed-shell density
+        ! matrix evaluating function of density QN
+        !
+        test_invoke_density_qn_evaluate_dm_cs = check_invoke_density_qn_evaluate_dm( &
+            "invoke_density_qn_evaluate_dm_cs", 1_ip)
+
+    end function test_invoke_density_qn_evaluate_dm_cs
+
+    logical(c_bool) function test_invoke_density_qn_evaluate_dm_os() bind(C)
+        !
+        ! this function tests the subroutine which calls the open-shell density matrix
+        ! evaluating function of density QN
+        !
+        test_invoke_density_qn_evaluate_dm_os = check_invoke_density_qn_evaluate_dm( &
+            "invoke_density_qn_evaluate_dm_os", 2_ip)
+
+    end function test_invoke_density_qn_evaluate_dm_os
+
     logical(c_bool) function test_obj_func_density_qn() bind(C)
         !
         ! this function tests the function which defines the energy evaluation, which
@@ -1723,7 +1907,7 @@ contains
             ! history
             !
             use test_reference, only: arm_host_context, host_context_reached
-            use otr_density_qn, only: density_qn_type
+            use otr_density_qn, only: density_qn_type, error_density_qn
             use otr_oao, only: oao_type
             use otr_common_test_reference, only: n_ao
             use otr_common_unit_tests, only: level_context, mock_requests
@@ -1801,30 +1985,32 @@ contains
                     " failed: Evaluated point not added to history."
                 passed = .false.
             else
-                if (abs(energy - basis_scale**2 * &
-                        sum(density_qn%dm_list(:, :, :, 1))) > tol) then
+                if (.not. is_close( &
+                    energy, basis_scale**2 * sum(density_qn%dm_list(:, :, :, 1)))) then
                     write(stderr, *) test_name//" failed: Incorrect energy."
                     passed = .false.
                 end if
-                if (norm2(density_qn%dm_list(:, :, :, 1) - dm_oao) < tol) then
+                if (.not. is_at_least(norm2(density_qn%dm_list(:, :, :, 1) - dm_oao), &
+                                      tol)) then
                     write(stderr, *) test_name// &
                         " failed: Incorrect density matrix history."
                     passed = .false.
                 end if
                 potentials = stacked_potentials(density_qn, 1_ip)
                 do k = 1, size(mock_potential_factors)
-                    if (norm2(potentials(:, :, :, k) - basis_scale**4 * &
-                              mock_potential(mock_potential_factors(k), &
-                                             density_qn%dm_list(:, :, :, 1))) > tol) &
-                        then
+                    if (.not. is_at_most(norm2( &
+                        potentials(:, :, :, k) - basis_scale**4 * mock_potential( &
+                            mock_potential_factors(k), &
+                            density_qn%dm_list(:, :, :, 1))), tol)) then
                         write(stderr, *) test_name// &
                             " failed: Incorrect potential history."
                         passed = .false.
                     end if
                 end do
             end if
-            if (norm2(oao%dm_oao - dm_oao) > tol .or. &
-                norm2(density_qn%orbitals%dm_ao - basis_scale**2 * dm_oao) > tol) then
+            if (.not. is_at_most(norm2(oao%dm_oao - dm_oao), tol) .or. &
+                .not. is_at_most(norm2(density_qn%orbitals%dm_ao - &
+                                       basis_scale**2 * dm_oao), tol)) then
                 write(stderr, *) test_name// &
                     " failed: Current density matrix changed by energy evaluation."
                 passed = .false.
@@ -1872,6 +2058,44 @@ contains
             end if
             context%mock_error = 0
 
+            ! call routine at another point whose evaluation returns an energy and
+            ! potentials that are not numbers and determine if a positive infinite
+            ! value, which rejects the step, is returned without an error and without
+            ! adding the point to the history
+            context%nan_output = -1
+            energy = density_qn%obj_func(2.0_rp * kappa, error, &
+                                         level_context(density_qn, 1_ip))
+            context%nan_output = 0
+            if (error /= 0 .or. .not. energy > huge(energy)) then
+                write(stderr, *) test_name//" failed: Energy that is not a number "// &
+                    "not returned as a positive infinite value."
+                passed = .false.
+            end if
+            if (size(density_qn%dm_list, 4) /= 1 .or. density_qn%model_stale) then
+                write(stderr, *) test_name//" failed: Point with an energy that is "// &
+                    "not a number added to the history."
+                passed = .false.
+            end if
+
+            ! call routine at another point whose evaluation returns a Coulomb
+            ! potential that is not finite at a finite energy and determine if this is
+            ! reported with the origin of the object without adding the point to the
+            ! history
+            context%nan_output = 3
+            energy = density_qn%obj_func(2.0_rp * kappa, error, &
+                                         level_context(density_qn, 1_ip))
+            context%nan_output = 0
+            if (error /= error_density_qn + 1) then
+                write(stderr, *) test_name//" failed: Potential that is not finite "// &
+                    "not reported with the origin of the object."
+                passed = .false.
+            end if
+            if (size(density_qn%dm_list, 4) /= 1 .or. density_qn%model_stale) then
+                write(stderr, *) test_name//" failed: Point with a potential that "// &
+                    "is not finite added to the history."
+                passed = .false.
+            end if
+
             ! check that the host context reached the callback functions unchanged
             if (.not. host_context_reached("obj_func_density_qn", context)) &
                 passed = .false.
@@ -1910,7 +2134,7 @@ contains
             use test_reference, only: arm_host_context, host_context_reached
             use opentrustregion_core, only: hess_x_type, solver_state_type
             use otr_common, only: hess_x_callback
-            use otr_density_qn, only: density_qn_type
+            use otr_density_qn, only: density_qn_type, error_density_qn
             use otr_oao, only: oao_type
             use otr_common_test_reference, only: n_ao
             use otr_common_unit_tests, only: level_context, mock_requests, &
@@ -1971,15 +2195,15 @@ contains
                 ! evaluating function are stored in the history basis and if the Fock
                 ! matrix in the history basis is passed on to the orbital basis, which
                 ! keeps its occupied-occupied and virtual-virtual parts
-                if (abs(func - sum(dm_ao)) > tol) then
+                if (.not. is_close(func, sum(dm_ao))) then
                     write(stderr, *) test_name//" failed: Incorrect energy."
                     passed = .false.
                 end if
                 potentials = stacked_potentials(density_qn, 0_ip)
                 do k = 1, size(mock_potential_factors)
-                    if (norm2(potentials(:, :, :, k) - basis_scale**2 * &
-                              mock_potential(mock_potential_factors(k), dm_ao)) > tol) &
-                        then
+                    if (.not. is_at_most(norm2( &
+                        potentials(:, :, :, k) - basis_scale**2 * &
+                        mock_potential(mock_potential_factors(k), dm_ao)), tol)) then
                         write(stderr, *) test_name//" failed: Incorrect potential."
                         passed = .false.
                     end if
@@ -1987,11 +2211,11 @@ contains
                 fock = basis_scale**2 * mock_potential(mock_fock_factor(1), dm_ao)
                 do k = 1, n_particle
                     complement = identity_matrix(n_ao) - oao%dm_oao(:, :, k)
-                    if (norm2(oao%fock_oo(:, :, k) - &
-                              matmul(oao%dm_oao(:, :, k), &
-                                     matmul(fock(:, :, k), oao%dm_oao(:, :, k)))) + &
-                        norm2(oao%fock_vv(:, :, k) - matmul( &
-                            complement, matmul(fock(:, :, k), complement))) > tol) then
+                    if (.not. is_at_most(norm2(oao%fock_oo(:, :, k) - matmul( &
+                        oao%dm_oao(:, :, k), &
+                        matmul(fock(:, :, k), oao%dm_oao(:, :, k)))) + norm2( &
+                            oao%fock_vv(:, :, k) - matmul(complement, matmul( &
+                                fock(:, :, k), complement))), tol)) then
                         write(stderr, *) test_name//" failed: Fock matrix in the "// &
                             "history basis not passed on to the orbital basis."
                         passed = .false.
@@ -2000,11 +2224,12 @@ contains
 
                 ! determine if the gradient, Hessian diagonal and Hessian linear
                 ! transformation are returned
-                if (norm2(grad - density_qn%orbitals%grad) > tol) then
+                if (.not. is_at_most(norm2(grad - density_qn%orbitals%grad), tol)) then
                     write(stderr, *) test_name//" failed: Gradient not returned."
                     passed = .false.
                 end if
-                if (norm2(h_diag - density_qn%orbitals%h_diag) > tol) then
+                if (.not. is_at_most(norm2(h_diag - density_qn%orbitals%h_diag), tol)) &
+                    then
                     write(stderr, *) test_name// &
                         " failed: Hessian diagonal not returned."
                     passed = .false.
@@ -2031,7 +2256,7 @@ contains
                 ! determine if a call without an orbital rotation, which takes no step,
                 ! leaves the ratio of the step to its size in the trust-region metric
                 ! unchanged
-                if (abs(density_qn%step_norm_ratio - 1.0_rp) > tol) then
+                if (.not. is_close(density_qn%step_norm_ratio, 1.0_rp)) then
                     write(stderr, *) test_name//" failed: Ratio of the step to its "// &
                         "size in the trust-region metric changed without a step."
                     passed = .false.
@@ -2094,14 +2319,14 @@ contains
                     exit checks
                 end if
                 do k = 1, 2
-                    if (norm2(density_qn%dm_list(:, :, :, k) - dm_saved(:, :, :, k)) > &
-                        tol) then
+                    if (.not. is_at_most(norm2(density_qn%dm_list(:, :, :, k) - &
+                                               dm_saved(:, :, :, k)), tol)) then
                         write(stderr, *) test_name// &
                             " failed: Incorrect density matrix history."
                         passed = .false.
                     end if
-                    if (norm2(stacked_potentials(density_qn, k) - &
-                              potentials_saved(:, :, :, :, k)) > tol) then
+                    if (.not. is_at_most(norm2(stacked_potentials( &
+                        density_qn, k) - potentials_saved(:, :, :, :, k)), tol)) then
                         write(stderr, *) test_name// &
                             " failed: Incorrect potential history."
                         passed = .false.
@@ -2110,7 +2335,7 @@ contains
 
                 ! determine if the ratio of the step to its size in the trust-region
                 ! metric is recorded
-                if (abs(density_qn%step_norm_ratio - metric_ratio) > tol) then
+                if (.not. is_close(density_qn%step_norm_ratio, metric_ratio)) then
                     write(stderr, *) test_name//" failed: Ratio of the step to its "// &
                         "size in the trust-region metric not recorded."
                     passed = .false.
@@ -2187,6 +2412,26 @@ contains
                 if (any(mock_requests /= 15_ip)) then
                     write(stderr, *) test_name//" failed: Incorrect outputs "// &
                         "requested from density matrix evaluating function."
+                    passed = .false.
+                end if
+
+                ! call routine with an orbital rotation whose evaluation returns a Fock
+                ! matrix that is not finite and determine if this is reported with the
+                ! origin of the object and the rotated density is marked as not
+                ! evaluated
+                kappa = 0.1_rp
+                context%nan_output = 2
+                call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
+                                            error, level_context(density_qn, 1_ip))
+                context%nan_output = 0
+                if (error /= error_density_qn + 1) then
+                    write(stderr, *) test_name//" failed: Fock matrix that is not "// &
+                        "finite not reported with the origin of the object."
+                    passed = .false.
+                end if
+                if (.not. density_qn%evaluation_stale) then
+                    write(stderr, *) test_name//" failed: Evaluation not marked "// &
+                        "stale after a Fock matrix that is not finite."
                     passed = .false.
                 end if
             end block checks
@@ -2340,7 +2585,7 @@ contains
                     case_name//"."
                 test_hess_x_density_qn = .false.
             end if
-            if (norm2(hess_x - expected_hess_x) > tol) then
+            if (.not. is_at_most(norm2(hess_x - expected_hess_x), tol)) then
                 write(stderr, *) "test_hess_x_density_qn failed: Incorrect Hessian "// &
                     "linear transformation "//case_name//"."
                 test_hess_x_density_qn = .false.
@@ -2465,8 +2710,8 @@ contains
                     "inverse produced error for the "//case_name//" case."
                 passed = .false.
             end if
-            if (norm2(matmul(hess, actual) - mu * actual - vector) > &
-                tol * (1.0_rp + norm2(hess) * norm2(actual))) then
+            if (.not. is_at_most(norm2(matmul(hess, actual) - mu * actual - vector), &
+                                 tol * (1.0_rp + norm2(hess) * norm2(actual)))) then
                 write(stderr, *) "test_inv_hess_x_density_qn failed: Shifted "// &
                     "inverse is not inverse of shifted reference Hessian for the "// &
                     case_name//" case."
@@ -2481,8 +2726,8 @@ contains
                     "inverse produced error for the "//case_name//" case."
                 passed = .false.
             end if
-            if (norm2(matmul(hess, actual) - vector) > &
-                tol * (1.0_rp + norm2(hess) * norm2(actual))) then
+            if (.not. is_at_most(norm2(matmul(hess, actual) - vector), &
+                                 tol * (1.0_rp + norm2(hess) * norm2(actual)))) then
                 write(stderr, *) "test_inv_hess_x_density_qn failed: Inverse is "// &
                     "not inverse of reference Hessian for the "//case_name//" case."
                 passed = .false.
@@ -2686,18 +2931,18 @@ contains
             write(stderr, *) "test_precond_density_qn failed: Residual not handed "// &
                 "to the inverse."
             test_precond_density_qn = .false.
-        else if (norm2(density_qn%received - residual) > tol) then
+        else if (.not. is_at_most(norm2(density_qn%received - residual), tol)) then
             write(stderr, *) "test_precond_density_qn failed: Residual not handed "// &
                 "to the inverse."
             test_precond_density_qn = .false.
         end if
         if (.not. density_qn%level_shift_received .or. &
-            abs(density_qn%received_level_shift - mu) > tol) then
+            .not. is_close(density_qn%received_level_shift, mu)) then
             write(stderr, *) "test_precond_density_qn failed: Level shift not "// &
                 "handed to the inverse."
             test_precond_density_qn = .false.
         end if
-        if (norm2(precond_residual - 3.0_rp * residual) > tol) then
+        if (.not. is_at_most(norm2(precond_residual - 3.0_rp * residual), tol)) then
             write(stderr, *) "test_precond_density_qn failed: Result of the "// &
                 "inverse not passed on."
             test_precond_density_qn = .false.
@@ -2747,7 +2992,7 @@ contains
             write(stderr, *) "test_precond_pd_density_qn failed: Residual not "// &
                 "handed to the orbital basis."
             test_precond_pd_density_qn = .false.
-        else if (norm2(basis%received - residual) > tol) then
+        else if (.not. is_at_most(norm2(basis%received - residual), tol)) then
             write(stderr, *) "test_precond_pd_density_qn failed: Residual not "// &
                 "handed to the orbital basis."
             test_precond_pd_density_qn = .false.
@@ -2757,7 +3002,7 @@ contains
                 "handed to the orbital basis."
             test_precond_pd_density_qn = .false.
         end if
-        if (norm2(precond_residual - 3.0_rp * residual) > tol) then
+        if (.not. is_at_most(norm2(precond_residual - 3.0_rp * residual), tol)) then
             write(stderr, *) "test_precond_pd_density_qn failed: Result of the "// &
                 "orbital basis not passed on."
             test_precond_pd_density_qn = .false.
@@ -2805,7 +3050,7 @@ contains
                 "Context not handed to the orbital basis."
             test_get_extra_trial_vectors_density_qn = .false.
         end if
-        if (any(abs(trial_vectors - 3.0_rp) > tol)) then
+        if (.not. all(is_close(trial_vectors, 3.0_rp))) then
             write(stderr, *) "test_get_extra_trial_vectors_density_qn failed: "// &
                 "Trial vectors of the orbital basis not passed on."
             test_get_extra_trial_vectors_density_qn = .false.
@@ -3026,19 +3271,19 @@ contains
         do k = 1, n_particle
             expected_dm = matmul(expected(:, :n_occ(k), k), &
                                  transpose(expected(:, :n_occ(k), k)))
-            if (norm2(rot_dm_ao(:, :, k) - expected_dm) > tol) then
+            if (.not. is_at_most(norm2(rot_dm_ao(:, :, k) - expected_dm), tol)) then
                 write(stderr, *) "test_rotate_trial_density_qn_mo failed: "// &
                     "Incorrect rotated density matrix in the AO basis."
                 test_rotate_trial_density_qn_mo = .false.
             end if
-            if (norm2(rot_dm_hist(:, :, k) - &
-                      matmul(ao_overlap, matmul(expected_dm, ao_overlap))) > tol) then
+            if (.not. is_at_most(norm2(rot_dm_hist(:, :, k) - matmul( &
+                ao_overlap, matmul(expected_dm, ao_overlap))), tol)) then
                 write(stderr, *) "test_rotate_trial_density_qn_mo failed: "// &
                     "Incorrect rotated density matrix in the history basis."
                 test_rotate_trial_density_qn_mo = .false.
             end if
         end do
-        if (norm2(mo_coeff - mo_coeff_before) > tol) then
+        if (.not. is_at_most(norm2(mo_coeff - mo_coeff_before), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_mo failed: Current MO "// &
                 "coefficients changed."
             test_rotate_trial_density_qn_mo = .false.
@@ -3115,28 +3360,29 @@ contains
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Produced error."
             test_rotate_trial_density_qn_oao = .false.
         end if
-        if (norm2(rot_dm_hist - dm_oao) < tol) then
+        if (.not. is_at_least(norm2(rot_dm_hist - dm_oao), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Density "// &
                 "matrix not rotated."
             test_rotate_trial_density_qn_oao = .false.
         end if
-        if (norm2(rot_dm_ao - basis_scale**2 * rot_dm_hist) > tol) then
+        if (.not. is_at_most(norm2(rot_dm_ao - basis_scale**2 * rot_dm_hist), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Density "// &
                 "matrix not rotated consistently in the AO and OAO basis."
             test_rotate_trial_density_qn_oao = .false.
         end if
-        if (norm2(matmul(rot_dm_hist(:, :, 1), rot_dm_hist(:, :, 1)) - &
-                  rot_dm_hist(:, :, 1)) > tol) then
+        if (.not. is_at_most( &
+            norm2(matmul(rot_dm_hist(:, :, 1), rot_dm_hist(:, :, 1)) - &
+                  rot_dm_hist(:, :, 1)), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Rotated "// &
                 "density matrix not idempotent."
             test_rotate_trial_density_qn_oao = .false.
         end if
-        if (norm2(oao%dm_oao - dm_oao) > tol) then
+        if (.not. is_at_most(norm2(oao%dm_oao - dm_oao), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Current "// &
                 "density matrix in the OAO basis moved."
             test_rotate_trial_density_qn_oao = .false.
         end if
-        if (norm2(dm_ao - basis_scale**2 * dm_oao) > tol) then
+        if (.not. is_at_most(norm2(dm_ao - basis_scale**2 * dm_oao), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Current "// &
                 "density matrix in the AO basis moved."
             test_rotate_trial_density_qn_oao = .false.
@@ -3157,8 +3403,8 @@ contains
                 "error for a plane rotation."
             test_rotate_trial_density_qn_oao = .false.
         end if
-        if (norm2(rot_dm_hist(:, :, 1) - matmul( &
-            transpose(rotation), matmul(dm_oao(:, :, 1), rotation))) > tol) then
+        if (.not. is_at_most(norm2(rot_dm_hist(:, :, 1) - matmul( &
+            transpose(rotation), matmul(dm_oao(:, :, 1), rotation))), tol)) then
             write(stderr, *) "test_rotate_trial_density_qn_oao failed: Incorrect "// &
                 "density matrix for a plane rotation."
             test_rotate_trial_density_qn_oao = .false.
@@ -3211,8 +3457,8 @@ contains
         ! matrix from both sides is returned
         dm = density_qn%history_dm()
         do k = 1, n_particle
-            if (norm2(dm(:, :, k) - matmul(ao_overlap, matmul(mo%dm_ao(:, :, k), &
-                                                              ao_overlap))) > tol) then
+            if (.not. is_at_most(norm2(dm(:, :, k) - matmul( &
+                ao_overlap, matmul(mo%dm_ao(:, :, k), ao_overlap))), tol)) then
                 write(stderr, *) "test_history_dm_density_qn_mo failed: Incorrect "// &
                     "density matrix."
                 test_history_dm_density_qn_mo = .false.
@@ -3247,7 +3493,7 @@ contains
         density_qn = density_qn_oao_type(oao)
 
         ! call routine and determine if the density matrix in the OAO basis is returned
-        if (norm2(density_qn%history_dm() - dm_oao) > tol) then
+        if (.not. is_at_most(norm2(density_qn%history_dm() - dm_oao), tol)) then
             write(stderr, *) "test_history_dm_density_qn_oao failed: Incorrect "// &
                 "density matrix."
             test_history_dm_density_qn_oao = .false.
@@ -3291,7 +3537,8 @@ contains
         end do
 
         ! call routine and determine if the potentials are kept in the AO basis
-        if (norm2(density_qn%to_history_basis(matrix) - matrix) > tol) then
+        if (.not. is_at_most(norm2(density_qn%to_history_basis(matrix) - matrix), &
+                             tol)) then
             write(stderr, *) "test_to_history_basis_density_qn_mo failed: "// &
                 "Incorrect potential."
             test_to_history_basis_density_qn_mo = .false.
@@ -3334,7 +3581,8 @@ contains
 
         ! call routine and determine if the potentials are transformed with the inverse
         ! square root of the overlap matrix
-        if (norm2(density_qn%to_history_basis(matrix) - expected) > tol) then
+        if (.not. is_at_most(norm2(density_qn%to_history_basis(matrix) - expected), &
+                             tol)) then
             write(stderr, *) "test_to_history_basis_density_qn_oao failed: "// &
                 "Incorrect potential."
             test_to_history_basis_density_qn_oao = .false.
@@ -3416,7 +3664,7 @@ contains
                     "Incorrect dimensions of history columns in the "//case_name// &
                     " case."
                 test_history_columns_density_qn_mo = .false.
-            else if (norm2(cols - expected_cols) > tol) then
+            else if (.not. is_at_most(norm2(cols - expected_cols), tol)) then
                 write(stderr, *) "test_history_columns_density_qn_mo failed: "// &
                     "Incorrect history columns in the "//case_name//" case."
                 test_history_columns_density_qn_mo = .false.
@@ -3426,7 +3674,7 @@ contains
                     "Incorrect dimensions of packed columns in the "//case_name// &
                     " case."
                 test_history_columns_density_qn_mo = .false.
-            else if (norm2(packed - expected_packed) > tol) then
+            else if (.not. is_at_most(norm2(packed - expected_packed), tol)) then
                 write(stderr, *) "test_history_columns_density_qn_mo failed: "// &
                     "Incorrect packed columns in the "//case_name//" case."
                 test_history_columns_density_qn_mo = .false.
@@ -3483,8 +3731,8 @@ contains
             write(stderr, *) "test_history_columns_density_qn_oao failed: "// &
                 "Incorrect dimensions of history columns."
             test_history_columns_density_qn_oao = .false.
-        else if ( &
-            norm2(cols - reshape(diff, [n_ao * n_ao * n_particle, n_list])) > tol) then
+        else if (.not. is_at_most( &
+            norm2(cols - reshape(diff, [n_ao * n_ao * n_particle, n_list])), tol)) then
             write(stderr, *) "test_history_columns_density_qn_oao failed: History "// &
                 "columns are not the flattened difference matrices."
             test_history_columns_density_qn_oao = .false.
@@ -3493,7 +3741,7 @@ contains
             write(stderr, *) "test_history_columns_density_qn_oao failed: "// &
                 "Incorrect dimensions of packed columns."
             test_history_columns_density_qn_oao = .false.
-        else if (norm2(packed - ref_packed_columns(diff)) > tol) then
+        else if (.not. is_at_most(norm2(packed - ref_packed_columns(diff)), tol)) then
             write(stderr, *) "test_history_columns_density_qn_oao failed: Packed "// &
                 "columns are not the projected and packed difference matrices."
             test_history_columns_density_qn_oao = .false.
@@ -3741,7 +3989,7 @@ contains
         call random_number(x)
 
         ! call routine and determine if the trial vector is doubled
-        if (norm2(density_qn%hess_x_static(x) - 2.0_rp * x) > tol) then
+        if (.not. is_at_most(norm2(density_qn%hess_x_static(x) - 2.0_rp * x), tol)) then
             write(stderr, *) "test_hess_x_static_density_qn_mo failed: Incorrect "// &
                 "static part."
             test_hess_x_static_density_qn_mo = .false.
@@ -3793,9 +4041,9 @@ contains
             ! assembled one
             x = generate_random_nonredundant_vector(n_param, n_particle, n_ao, dm_oao)
             response = 0.0_rp
-            if (norm2(density_qn%hess_x_static(x) - &
-                      ref_hess_x_oao(ref_unpack_asymm(x, n_particle, n_ao), response, &
-                                     dm_oao, fock_oo, fock_vv, n_param)) > tol) then
+            if (.not. is_at_most(norm2(density_qn%hess_x_static(x) - ref_hess_x_oao( &
+                ref_unpack_asymm(x, n_particle, n_ao), response, dm_oao, fock_oo, &
+                fock_vv, n_param)), tol)) then
                 write(stderr, *) "test_hess_x_static_density_qn_oao failed: "// &
                     "Incorrect static part for the "//trim(shell_names(n_particle))// &
                     " case."
@@ -3855,7 +4103,7 @@ contains
             write(stderr, *) "test_cache_channel_split_dirs failed: Incorrect "// &
                 "dimensions of split directions."
             test_cache_channel_split_dirs = .false.
-        else if (norm2(matmul(u, chol) - raw(:, map)) > tol) then
+        else if (.not. is_at_most(norm2(matmul(u, chol) - raw(:, map)), tol)) then
             write(stderr, *) "test_cache_channel_split_dirs failed: Split "// &
                 "directions are not rebased directions of the gathered, reordered "// &
                 "raw split columns."
@@ -3912,7 +4160,7 @@ contains
             write(stderr, *) "test_cache_combined_channel_dirs failed: Incorrect "// &
                 "dimensions of combined directions."
             test_cache_combined_channel_dirs = .false.
-        else if (norm2(matmul(u, chol) - raw(:, map)) > tol) then
+        else if (.not. is_at_most(norm2(matmul(u, chol) - raw(:, map)), tol)) then
             write(stderr, *) "test_cache_combined_channel_dirs failed: Combined "// &
                 "directions are not rebased directions of the gathered, reordered "// &
                 "raw combined columns."
@@ -4055,17 +4303,20 @@ contains
                         "Incorrect dimensions of the factors for "//case_name//"."
                     test_get_low_rank_hess_factors = .false.
                 else
-                    if (norm2(density_qn%expansion_dirs - expansion) > tol) then
+                    if (.not. is_at_most(norm2(density_qn%expansion_dirs - expansion), &
+                                         tol)) then
                         write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                             "Incorrect expansion directions for "//case_name//"."
                         test_get_low_rank_hess_factors = .false.
                     end if
-                    if (norm2(density_qn%projection_dirs - projection) > tol) then
+                    if (.not. is_at_most( &
+                        norm2(density_qn%projection_dirs - projection), tol)) then
                         write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                             "Incorrect projection directions for "//case_name//"."
                         test_get_low_rank_hess_factors = .false.
                     end if
-                    if (norm2(density_qn%coupling_matrix - coupling) > tol) then
+                    if (.not. is_at_most(norm2(density_qn%coupling_matrix - coupling), &
+                                         tol)) then
                         write(stderr, *) "test_get_low_rank_hess_factors failed: "// &
                             "Incorrect coupling matrix for "//case_name//"."
                         test_get_low_rank_hess_factors = .false.
@@ -4136,7 +4387,7 @@ contains
 
         ! call routine and determine if the symmetrized matrix matches
         call build_a_part(dm_cols, v_cols, a)
-        if (maxval(abs(a - expected)) > tol) then
+        if (.not. all(is_close(a, expected))) then
             write(stderr, *) "test_build_a_part failed: Incorrect symmetrized A matrix."
             test_build_a_part = .false.
         end if
@@ -4183,8 +4434,8 @@ contains
             test_build_a_transformed = .false.
             return
         end if
-        if (norm2(matmul(transpose(chol), matmul(a_t, chol)) - expected(map, map)) > &
-            tol) then
+        if (.not. is_at_most(norm2(matmul(transpose(chol), matmul(a_t, chol)) - &
+                                   expected(map, map)), tol)) then
             write(stderr, *) "test_build_a_transformed failed: Result does not "// &
                 "invert back to the gathered, reordered raw symmetrized matrix."
             test_build_a_transformed = .false.
@@ -4254,8 +4505,8 @@ contains
             write(stderr, *) "test_build_a_block_linear_os failed: Incorrect "// &
                 "dimensions."
             test_build_a_block_linear_os = .false.
-        else if (norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
-                       expected_a_block(map, map)) > tol) then
+        else if (.not. is_at_most(norm2(matmul(transpose(chol), matmul( &
+            a_block, chol)) - expected_a_block(map, map)), tol)) then
             write(stderr, *) "test_build_a_block_linear_os failed: Result does not "// &
                 "invert back to the gathered, reordered raw block matrix."
             test_build_a_block_linear_os = .false.
@@ -4325,8 +4576,8 @@ contains
             test_build_a_block_nonlinear_os = .false.
             return
         end if
-        if (norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
-                  expected_a_block(map, map)) > tol) then
+        if (.not. is_at_most(norm2(matmul(transpose(chol), matmul(a_block, chol)) - &
+                                   expected_a_block(map, map)), tol)) then
             write(stderr, *) "test_build_a_block_nonlinear_os failed: Result does "// &
                 "not invert back to the gathered, reordered raw block matrix."
             test_build_a_block_nonlinear_os = .false.
@@ -4360,17 +4611,17 @@ contains
         ! call routine and determine if values of resulting blocks match and if these
         ! are transposes of each other
         call cross_symmetrize(a12, a21)
-        if (norm2(a12 - expected12) > tol) then
+        if (.not. is_at_most(norm2(a12 - expected12), tol)) then
             write(stderr, *) "test_cross_symmetrize failed: Incorrect first block "// &
                 "values after cross-symmetrization."
             test_cross_symmetrize = .false.
         end if
-        if (norm2(a21 - expected21) > tol) then
+        if (.not. is_at_most(norm2(a21 - expected21), tol)) then
             write(stderr, *) "test_cross_symmetrize failed: Incorrect second block "// &
                 "values after cross-symmetrization."
             test_cross_symmetrize = .false.
         end if
-        if (norm2(a21 - transpose(a12)) > tol) then
+        if (.not. is_at_most(norm2(a21 - transpose(a12)), tol)) then
             write(stderr, *) "test_cross_symmetrize failed: Blocks are not "// &
                 "transposes of each other after cross-symmetrization."
             test_cross_symmetrize = .false.
@@ -4400,7 +4651,7 @@ contains
 
         ! call routine and determine if values of resulting eigenvalues match
         eig_vals_inv = truncated_eigval_inv(eig_vals, 0.1_rp)
-        if (norm2(eig_vals_inv - expected) > tol) then
+        if (.not. is_at_most(norm2(eig_vals_inv - expected), tol)) then
             write(stderr, *) "test_truncated_eigval_inv failed: Incorrect "// &
                 "truncated inverse eigenvalues."
             test_truncated_eigval_inv = .false.
@@ -4437,7 +4688,7 @@ contains
                                                      dm_oao, context)
 
         ! without a state, the whole history is used
-        if (density_qn%history_window() < huge(1.0_rp)) then
+        if (.not. is_close(density_qn%history_window(), huge(1.0_rp), 0.0_rp)) then
             write(stderr, *) "test_history_window failed: The history is "// &
                 "restricted without a state."
             test_history_window = .false.
@@ -4445,7 +4696,7 @@ contains
 
         ! before the solver sets a trust radius, the whole history is used
         density_qn%state => state
-        if (density_qn%history_window() < huge(1.0_rp)) then
+        if (.not. is_close(density_qn%history_window(), huge(1.0_rp), 0.0_rp)) then
             write(stderr, *) "test_history_window failed: The history is "// &
                 "restricted before the solver set a trust radius."
             test_history_window = .false.
@@ -4453,8 +4704,8 @@ contains
 
         ! the trust radius is converted into a distance between density matrices
         state%trust_radius = trust_radius
-        if (abs(density_qn%history_window() - &
-                history_window_factor * sqrt(2.0_rp) * trust_radius) > tol) then
+        if (.not. is_close(density_qn%history_window(), &
+                           history_window_factor * sqrt(2.0_rp) * trust_radius)) then
             write(stderr, *) "test_history_window failed: Incorrect window for a "// &
                 "spherical trust region."
             test_history_window = .false.
@@ -4463,8 +4714,8 @@ contains
         ! and into a step length with the ratio of the last step to its size in the
         ! trust-region metric
         density_qn%step_norm_ratio = metric_ratio
-        if (abs(density_qn%history_window() - history_window_factor * sqrt(2.0_rp) * &
-                metric_ratio * trust_radius) > tol) then
+        if (.not. is_close(density_qn%history_window(), history_window_factor * &
+                           sqrt(2.0_rp) * metric_ratio * trust_radius)) then
             write(stderr, *) "test_history_window failed: Incorrect window for a "// &
                 "trust region in another metric."
             test_history_window = .false.
@@ -4692,8 +4943,8 @@ contains
                 write(stderr, *) "test_factorize_history failed: Incorrect map "// &
                     "back to original history indices for "//case_name//"."
                 passed = .false.
-            else if (norm2(matmul(transpose(chol), chol) - gram(map, map)) > &
-                     tol * (1.0_rp + norm2(gram))) then
+            else if (.not. is_at_most(norm2(matmul(transpose(chol), chol) - gram( &
+                map, map)), tol * (1.0_rp + norm2(gram)))) then
                 write(stderr, *) "test_factorize_history failed: Cholesky factor "// &
                     "does not reproduce the Gram matrix of the accepted columns "// &
                     "for "//case_name//"."
@@ -4735,7 +4986,7 @@ contains
 
         ! undoing the right-division by right-multiplying by the same factor must
         ! reproduce the gathered, reordered columns exactly
-        if (norm2(matmul(rebased, chol) - dirs(:, map)) > tol) then
+        if (.not. is_at_most(norm2(matmul(rebased, chol) - dirs(:, map)), tol)) then
             write(stderr, *) "test_rebase_dirs failed: Rebased directions do not "// &
                 "invert back to the gathered, reordered original columns."
             test_rebase_dirs = .false.
@@ -4773,13 +5024,13 @@ contains
             test_congruence_transform = .false.
             return
         end if
-        if (norm2(a_tilde - transpose(a_tilde)) > tol) then
+        if (.not. is_at_most(norm2(a_tilde - transpose(a_tilde)), tol)) then
             write(stderr, *) "test_congruence_transform failed: Result is not "// &
                 "symmetric even though the input and the transform preserve symmetry."
             test_congruence_transform = .false.
         end if
-        if (norm2(matmul(transpose(chol), matmul(a_tilde, chol)) - a_gathered) > tol) &
-            then
+        if (.not. is_at_most(norm2(matmul(transpose(chol), matmul(a_tilde, chol)) - &
+                                   a_gathered), tol)) then
             write(stderr, *) "test_congruence_transform failed: Result does not "// &
                 "invert back to the gathered, reordered original matrix."
             test_congruence_transform = .false.
@@ -4818,10 +5069,10 @@ contains
             test_combine_channels = .false.
             return
         end if
-        if (any(abs(chol_comb(1:n1, 1:n1) - chol1) > tol) .or. &
-            any(abs(chol_comb(n1 + 1:, n1 + 1:) - chol2) > tol) .or. &
-            any(abs(chol_comb(1:n1, n1 + 1:)) > tol) .or. &
-            any(abs(chol_comb(n1 + 1:, 1:n1)) > tol)) then
+        if (.not. all(is_close(chol_comb(1:n1, 1:n1), chol1)) .or. &
+            .not. all(is_close(chol_comb(n1 + 1:, n1 + 1:), chol2)) .or. &
+            .not. all(is_close(chol_comb(1:n1, n1 + 1:), 0.0_rp)) .or. &
+            .not. all(is_close(chol_comb(n1 + 1:, 1:n1), 0.0_rp))) then
             write(stderr, *) "test_combine_channels failed: Incorrect "// &
                 "block-diagonal Cholesky factor."
             test_combine_channels = .false.
@@ -4882,7 +5133,7 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_get_ms_a_inv failed: Produced error."
             test_get_ms_a_inv = .false.
-        else if (norm2(a_inv - expected) > tol) then
+        else if (.not. is_at_most(norm2(a_inv - expected), tol)) then
             write(stderr, *) "test_get_ms_a_inv failed: Incorrect pseudoinverse."
             test_get_ms_a_inv = .false.
         end if
@@ -4901,7 +5152,7 @@ contains
             write(stderr, *) "test_get_ms_a_inv failed: Produced error for a badly "// &
                 "aligned history."
             test_get_ms_a_inv = .false.
-        else if (norm2(a_inv) > tol) then
+        else if (.not. is_at_most(norm2(a_inv), tol)) then
             write(stderr, *) "test_get_ms_a_inv failed: Screening did not discard "// &
                 "every direction of a badly aligned history."
             test_get_ms_a_inv = .false.
@@ -4971,8 +5222,9 @@ contains
         else if (size(a_inv, 1) /= 2 * n_diff .or. size(dirs, 2) /= 2 * n_diff) then
             write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Incorrect dimensions."
             test_get_ms_a_inv_jk_cs = .false.
-        else if (norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), dm_cols) - &
-                       (v_coulomb_cols - v_exchange_cols)) > tol) then
+        else if (.not. is_at_most( &
+            norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), dm_cols) - &
+                  (v_coulomb_cols - v_exchange_cols)), tol)) then
             write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Secant condition not "// &
                 "fulfilled."
             test_get_ms_a_inv_jk_cs = .false.
@@ -4992,8 +5244,8 @@ contains
             write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Exact-exchange term "// &
                 "not left out without exact exchange."
             test_get_ms_a_inv_jk_cs = .false.
-        else if (norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), dm_cols) - &
-                       v_coulomb_cols) > tol) then
+        else if (.not. is_at_most(norm2(matmul(matmul(dirs, matmul( &
+            a_inv, transpose(dirs))), dm_cols) - v_coulomb_cols), tol)) then
             write(stderr, *) "test_get_ms_a_inv_jk_cs failed: Secant condition not "// &
                 "fulfilled without exact exchange."
             test_get_ms_a_inv_jk_cs = .false.
@@ -5092,9 +5344,9 @@ contains
         else if (size(a_inv, 1) /= 4 * n_diff .or. size(dirs, 2) /= 4 * n_diff) then
             write(stderr, *) "test_get_ms_a_inv_jk_os failed: Incorrect dimensions."
             test_get_ms_a_inv_jk_os = .false.
-        else if ( &
+        else if (.not. is_at_most( &
             norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), directions) - &
-                  matmul(coulomb - exchange, directions)) > tol) then
+                  matmul(coulomb - exchange, directions)), tol)) then
             write(stderr, *) "test_get_ms_a_inv_jk_os failed: Secant condition not "// &
                 "fulfilled."
             test_get_ms_a_inv_jk_os = .false.
@@ -5115,8 +5367,9 @@ contains
             write(stderr, *) "test_get_ms_a_inv_jk_os failed: Exact-exchange term "// &
                 "not left out without exact exchange."
             test_get_ms_a_inv_jk_os = .false.
-        else if (norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), &
-                              directions) - matmul(coulomb, directions)) > tol) then
+        else if (.not. is_at_most( &
+            norm2(matmul(matmul(dirs, matmul(a_inv, transpose(dirs))), directions) - &
+                  matmul(coulomb, directions)), tol)) then
             write(stderr, *) "test_get_ms_a_inv_jk_os failed: Secant condition not "// &
                 "fulfilled without exact exchange."
             test_get_ms_a_inv_jk_os = .false.
@@ -5180,9 +5433,11 @@ contains
         if (error /= 0) then
             write(stderr, *) "test_get_ms_jk_inv failed: Produced error."
             test_get_ms_jk_inv = .false.
-        else if (norm2(a_inv - expected) > tol * (1.0_rp + norm2(expected)) .or. &
-                 norm2(dirs(:, :n_accepted) - dirs_coulomb) > tol .or. &
-                 norm2(dirs(:, n_accepted + 1:) - dirs_exchange) > tol) then
+        else if ( &
+            .not. is_at_most(norm2(a_inv - expected), &
+                             tol * (1.0_rp + norm2(expected))) .or. &
+            .not. is_at_most(norm2(dirs(:, :n_accepted) - dirs_coulomb), tol) .or. &
+            .not. is_at_most(norm2(dirs(:, n_accepted + 1:) - dirs_exchange), tol)) then
             write(stderr, *) "test_get_ms_jk_inv failed: Incorrect coupling or "// &
                 "directions."
             test_get_ms_jk_inv = .false.
@@ -5202,8 +5457,9 @@ contains
             write(stderr, *) "test_get_ms_jk_inv failed: Exact-exchange term not "// &
                 "left out without exact exchange."
             test_get_ms_jk_inv = .false.
-        else if (norm2(a_inv - expected) > tol * (1.0_rp + norm2(expected)) .or. &
-                 norm2(dirs - dirs_coulomb) > tol) then
+        else if (.not. is_at_most(norm2(a_inv - expected), &
+                                  tol * (1.0_rp + norm2(expected))) .or. &
+                 .not. is_at_most(norm2(dirs - dirs_coulomb), tol)) then
             write(stderr, *) "test_get_ms_jk_inv failed: Incorrect coupling or "// &
                 "directions without exact exchange."
             test_get_ms_jk_inv = .false.
@@ -5218,7 +5474,8 @@ contains
             write(stderr, *) "test_get_ms_jk_inv failed: Produced error for an "// &
                 "exact-exchange A of noise."
             test_get_ms_jk_inv = .false.
-        else if (norm2(a_inv(n_accepted + 1:, n_accepted + 1:)) > tol) then
+        else if (.not. is_at_most(norm2(a_inv(n_accepted + 1:, n_accepted + 1:)), &
+                                  tol)) then
             write(stderr, *) "test_get_ms_jk_inv failed: Exact-exchange A of noise "// &
                 "inverted."
             test_get_ms_jk_inv = .false.
@@ -5233,7 +5490,8 @@ contains
             write(stderr, *) "test_get_ms_jk_inv failed: Produced error for a "// &
                 "negative definite exact-exchange A."
             test_get_ms_jk_inv = .false.
-        else if (norm2(a_inv(n_accepted + 1:, n_accepted + 1:)) > tol) then
+        else if (.not. is_at_most(norm2(a_inv(n_accepted + 1:, n_accepted + 1:)), &
+                                  tol)) then
             write(stderr, *) "test_get_ms_jk_inv failed: Negative eigenvalues of "// &
                 "exact-exchange A inverted."
             test_get_ms_jk_inv = .false.
@@ -5305,7 +5563,7 @@ contains
         if (size(y_gram, 1) /= n_accepted .or. size(y_gram, 2) /= n_accepted) then
             write(stderr, *) "test_response_gram failed: Incorrect shape."
             test_response_gram = .false.
-        else if (maxval(abs(y_gram - expected)) > tol) then
+        else if (.not. all(is_close(y_gram, expected))) then
             write(stderr, *) "test_response_gram failed: Incorrect rebased "// &
                 "response Gram matrix."
             test_response_gram = .false.
@@ -5370,7 +5628,7 @@ contains
 
         ! call routine and determine if the surviving inverse eigenvalues match
         call apply_ms_sr1_skip(eig_vals, eig_vecs, y_gram, eig_vals_inv)
-        if (norm2(eig_vals_inv - expected) > tol) then
+        if (.not. is_at_most(norm2(eig_vals_inv - expected), tol)) then
             write(stderr, *) "test_apply_ms_sr1_skip failed: Incorrect inverse "// &
                 "eigenvalues after skipping."
             test_apply_ms_sr1_skip = .false.
@@ -5416,7 +5674,7 @@ contains
             write(stderr, *) "test_spectral_to_dense failed: Incorrect dimensions "// &
                 "of reconstructed matrix."
             test_spectral_to_dense = .false.
-        else if (norm2(mat - expected) > tol) then
+        else if (.not. is_at_most(norm2(mat - expected), tol)) then
             write(stderr, *) "test_spectral_to_dense failed: Incorrect "// &
                 "reconstructed matrix."
             test_spectral_to_dense = .false.
@@ -5523,7 +5781,7 @@ contains
                 "prepending to empty list."
             test_prepend = .false.
         end if
-        if (norm2(list(:, :, :, 1) - new_array) > tol) then
+        if (.not. is_at_most(norm2(list(:, :, :, 1) - new_array), tol)) then
             write(stderr, *) "test_prepend failed: Incorrect list values after "// &
                 "prepending to empty list."
             test_prepend = .false.
@@ -5545,7 +5803,7 @@ contains
                 "prepending to non-empty list."
             test_prepend = .false.
         end if
-        if (norm2(list - expected) > tol) then
+        if (.not. is_at_most(norm2(list - expected), tol)) then
             write(stderr, *) "test_prepend failed: Incorrect list values after "// &
                 "prepending to non-empty list."
             test_prepend = .false.

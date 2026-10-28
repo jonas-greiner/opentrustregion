@@ -430,12 +430,112 @@ contains
 
     end subroutine density_qn_set_solver_settings
 
+    subroutine invoke_density_qn_evaluate_dm_cs(evaluate_dm, dm, energy, settings, &
+                                                error_origin, error, fock, v_coulomb, &
+                                                v_exchange, v_nonlinear)
+        !
+        ! this subroutine calls the closed-shell density matrix evaluating function of
+        ! density QN with the host context of its settings and passes on its error,
+        ! counts an energy that is not a number as infinite and returns an error of its
+        ! own with the origin of the object if the function returns a Fock matrix or a
+        ! potential that is not finite at a finite energy, while an infinite energy,
+        ! which rejects the point, leaves them unchecked, since the caller does not use
+        ! them then
+        !
+        use opentrustregion_core, only: settings_type, verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
+                                                 ieee_value, ieee_positive_inf
+
+        procedure(density_qn_evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+        real(rp), intent(out), optional, target, contiguous :: &
+            fock(:, :), v_coulomb(:, :), v_exchange(:, :), v_nonlinear(:, :)
+
+        logical :: finite
+
+        ! call the density matrix evaluating function
+        call evaluate_dm(dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, &
+                         settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (ieee_is_nan(energy)) energy = ieee_value(energy, ieee_positive_inf)
+        if (.not. ieee_is_finite(energy)) return
+        finite = .true.
+        if (present(fock)) finite = finite .and. all(ieee_is_finite(fock))
+        if (present(v_coulomb)) finite = finite .and. all(ieee_is_finite(v_coulomb))
+        if (present(v_exchange)) finite = finite .and. all(ieee_is_finite(v_exchange))
+        if (present(v_nonlinear)) finite = finite .and. all(ieee_is_finite(v_nonlinear))
+        if (.not. finite) then
+            call settings%log("Density matrix evaluating function returned values "// &
+                              "that are not finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_density_qn_evaluate_dm_cs
+
+    subroutine invoke_density_qn_evaluate_dm_os(evaluate_dm, dm, energy, settings, &
+                                                error_origin, error, fock, v_coulomb, &
+                                                v_exchange, v_nonlinear)
+        !
+        ! this subroutine calls the open-shell density matrix evaluating function of
+        ! density QN with the host context of its settings and passes on its error,
+        ! counts an energy that is not a number as infinite and returns an error of its
+        ! own with the origin of the object if the function returns a Fock matrix or a
+        ! potential that is not finite at a finite energy, while an infinite energy,
+        ! which rejects the point, leaves them unchecked, since the caller does not use
+        ! them then
+        !
+        use opentrustregion_core, only: settings_type, verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
+                                                 ieee_value, ieee_positive_inf
+
+        procedure(density_qn_evaluate_dm_os_type), intent(in), pointer :: evaluate_dm
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+        real(rp), intent(out), optional, target :: &
+            fock(:, :, :), v_coulomb(:, :, :), v_exchange(:, :, :), v_nonlinear(:, :, :)
+
+        logical :: finite
+
+        ! call the density matrix evaluating function
+        call evaluate_dm(dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, &
+                         settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (ieee_is_nan(energy)) energy = ieee_value(energy, ieee_positive_inf)
+        if (.not. ieee_is_finite(energy)) return
+        finite = .true.
+        if (present(fock)) finite = finite .and. all(ieee_is_finite(fock))
+        if (present(v_coulomb)) finite = finite .and. all(ieee_is_finite(v_coulomb))
+        if (present(v_exchange)) finite = finite .and. all(ieee_is_finite(v_exchange))
+        if (present(v_nonlinear)) finite = finite .and. all(ieee_is_finite(v_nonlinear))
+        if (.not. finite) then
+            call settings%log("Density matrix evaluating function returned values "// &
+                              "that are not finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_density_qn_evaluate_dm_os
+
     function obj_func_density_qn(self, kappa, error, context) result(energy)
         !
         ! this function defines the energy evaluation, which also adds the evaluated
         ! point with its Coulomb, exact-exchange and non-linear potentials to the
-        ! history, unless it is already there
+        ! history, unless it is already there or its energy is not finite
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -465,17 +565,21 @@ contains
 
         ! calculate mean-field energy
         if (self%orbitals%n_particle == 1) then
-            call self%evaluate_dm_cs(rot_dm_ao(:, :, 1), energy, &
-                                     v_coulomb=v_coulomb_ao(:, :, 1), &
-                                     v_exchange=v_exchange_ao(:, :, 1), &
-                                     v_nonlinear=v_nonlinear_ao(:, :, 1), error=error, &
-                                     context=self%settings%context)
+            call invoke_density_qn_evaluate_dm_cs( &
+                self%evaluate_dm_cs, rot_dm_ao(:, :, 1), energy, self%settings, &
+                self%error_origin, error, v_coulomb=v_coulomb_ao(:, :, 1), &
+                v_exchange=v_exchange_ao(:, :, 1), v_nonlinear=v_nonlinear_ao(:, :, 1))
         else
-            call self%evaluate_dm_os( &
-                rot_dm_ao, energy, v_coulomb=v_coulomb_ao, v_exchange=v_exchange_ao, &
-                v_nonlinear=v_nonlinear_ao, error=error, context=self%settings%context)
+            call invoke_density_qn_evaluate_dm_os( &
+                self%evaluate_dm_os, rot_dm_ao, energy, self%settings, &
+                self%error_origin, error, v_coulomb=v_coulomb_ao, &
+                v_exchange=v_exchange_ao, v_nonlinear=v_nonlinear_ao)
         end if
         if (error /= 0) return
+
+        ! an energy that is not finite rejects the step, so the potentials of the point
+        ! are not added to the history
+        if (.not. ieee_is_finite(energy)) return
 
         ! update list of density and potential matrices
         if (allocated(self%dm_list)) then
@@ -561,14 +665,16 @@ contains
                      v_exchange_ao(n_ao, n_ao, n_particle), &
                      v_nonlinear_ao(n_ao, n_ao, n_particle))
             if (self%orbitals%n_particle == 1) then
-                call self%evaluate_dm_cs( &
-                    self%orbitals%dm_ao(:, :, 1), self%orbitals%energy, &
+                call invoke_density_qn_evaluate_dm_cs( &
+                    self%evaluate_dm_cs, self%orbitals%dm_ao(:, :, 1), &
+                    self%orbitals%energy, self%settings, self%error_origin, error, &
                     fock_ao(:, :, 1), v_coulomb_ao(:, :, 1), v_exchange_ao(:, :, 1), &
-                    v_nonlinear_ao(:, :, 1), error, self%settings%context)
+                    v_nonlinear_ao(:, :, 1))
             else
-                call self%evaluate_dm_os(self%orbitals%dm_ao, self%orbitals%energy, &
-                                         fock_ao, v_coulomb_ao, v_exchange_ao, &
-                                         v_nonlinear_ao, error, self%settings%context)
+                call invoke_density_qn_evaluate_dm_os( &
+                    self%evaluate_dm_os, self%orbitals%dm_ao, self%orbitals%energy, &
+                    self%settings, self%error_origin, error, fock_ao, v_coulomb_ao, &
+                    v_exchange_ao, v_nonlinear_ao)
             end if
             if (error /= 0) then
                 deallocate(fock_ao, v_coulomb_ao, v_exchange_ao, v_nonlinear_ao)

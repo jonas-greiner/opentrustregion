@@ -62,16 +62,12 @@ module otr_common_c_interface
     ! one level of the holder of an extension object for C hosts, whose address is the
     ! context of the C wrappers wired into the C settings of the level, holding the
     ! level of the object, the bundle of the host's C callback functions and context of
-    ! the level, for an object reading the state of the solver, the host's record of
-    ! the state, from which the state the object reads is refreshed, and, for an object
-    ! updating a copy of the host's orbitals since their real kind differs from C's,
-    ! the copy and the host's array, to which the orbital update copies them back
+    ! the level and, for an object reading the state of the solver, the host's record
+    ! of the state, from which the state the object reads is refreshed
     type :: holder_level_type
         type(extension_level_type), pointer :: level => null()
         type(c_callbacks_type) :: callbacks = c_callbacks_type()
         type(solver_state_type_c), pointer :: state_c => null()
-        real(rp), pointer :: orbitals(:, :, :) => null()
-        real(c_rp), pointer :: orbitals_c(:, :, :) => null()
     end type
 
     ! holder of an extension object for C hosts, with the levels of the solver and of
@@ -440,8 +436,6 @@ contains
         type(c_funptr) :: host_hess_x_c_funptr
         class(*), pointer :: context
         procedure(hess_x_type), pointer :: hess_x_funptr
-        real(rp) :: func
-        real(rp), pointer :: kappa(:), grad(:), h_diag(:)
         integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to update
@@ -479,34 +473,15 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            kappa => kappa_c(:n_param)
-            grad => grad_c(:n_param)
-            h_diag => h_diag_c(:n_param)
-        else
-            allocate(kappa(n_param), grad(n_param), h_diag(n_param))
-            kappa = real(kappa_c(:n_param), kind=rp)
-        end if
-
         ! call the orbital update with the level, after disassociating the Hessian
         ! linear transformation so that a missing one is detected
         hess_x_funptr => null()
-        call update_orbs_callback(kappa, func, grad, h_diag, hess_x_funptr, error, &
-                                  context)
+        call update_orbs_callback(kappa_c(:n_param), func_c, grad_c(:n_param), &
+                                  h_diag_c(:n_param), hess_x_funptr, error, context)
 
-        ! convert arguments to C kind, copy the orbitals back to the host's array if
-        ! the object updates a copy of them and return the C wrapper of the Hessian
-        ! linear transformation if the orbital update returned one
-        func_c = real(func, kind=c_rp)
+        ! convert error code to C kind and return the C wrapper of the Hessian linear
+        ! transformation if the orbital update returned one
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            grad_c(:n_param) = real(grad, kind=c_rp)
-            h_diag_c(:n_param) = real(h_diag, kind=c_rp)
-            deallocate(kappa, grad, h_diag)
-        end if
-        if (associated(held%orbitals_c)) &
-            held%orbitals_c = real(held%orbitals, kind=c_rp)
         if (associated(hess_x_funptr)) hess_x_c_funptr = c_funloc(hess_x_c_wrapper)
 
     end function update_orbs_c_wrapper
@@ -527,7 +502,6 @@ contains
         type(holder_level_type), pointer :: held
         procedure(obj_func_c_type), pointer :: host_obj_func
         class(*), pointer :: context
-        real(rp), pointer :: kappa(:)
         integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
@@ -551,20 +525,11 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            kappa => kappa_c(:n_param)
-        else
-            allocate(kappa(n_param))
-            kappa = real(kappa_c(:n_param), kind=rp)
-        end if
-
         ! call the callback function with the level
-        func_c = real(obj_func_callback(kappa, error, context), kind=c_rp)
+        func_c = obj_func_callback(kappa_c(:n_param), error, context)
 
-        ! convert arguments to C kind
+        ! convert error code to C kind
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) deallocate(kappa)
 
     end function obj_func_c_wrapper
 
@@ -584,7 +549,6 @@ contains
         type(holder_level_type), pointer :: held
         procedure(hess_x_c_type), pointer :: host_hess_x
         class(*), pointer :: context
-        real(rp), pointer :: x(:), hess_x(:)
         integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
@@ -607,24 +571,11 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            x => x_c(:n_param)
-            hess_x => hess_x_c(:n_param)
-        else
-            allocate(x(n_param), hess_x(n_param))
-            x = real(x_c(:n_param), kind=rp)
-        end if
-
         ! call the callback function with the level
-        call hess_x_callback(x, hess_x, error, context)
+        call hess_x_callback(x_c(:n_param), hess_x_c(:n_param), error, context)
 
-        ! convert arguments to C kind
+        ! convert error code to C kind
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            hess_x_c(:n_param) = real(hess_x, kind=c_rp)
-            deallocate(x, hess_x)
-        end if
 
     end function hess_x_c_wrapper
 
@@ -645,7 +596,6 @@ contains
         type(holder_level_type), pointer :: held
         procedure(precond_c_type), pointer :: host_precond
         class(*), pointer :: context
-        real(rp), pointer :: residual(:), precond_residual(:)
         integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
@@ -669,25 +619,12 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            residual => residual_c(:n_param)
-            precond_residual => precond_residual_c(:n_param)
-        else
-            allocate(residual(n_param), precond_residual(n_param))
-            residual = real(residual_c(:n_param), kind=rp)
-        end if
-
         ! call the callback function with the level
-        call precond_callback(residual, real(mu_c, kind=rp), precond_residual, error, &
-                              context)
+        call precond_callback(residual_c(:n_param), mu_c, &
+                              precond_residual_c(:n_param), error, context)
 
-        ! convert arguments to C kind
+        ! convert error code to C kind
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
-            deallocate(residual, precond_residual)
-        end if
 
     end function precond_c_wrapper
 
@@ -707,7 +644,6 @@ contains
         type(holder_level_type), pointer :: held
         procedure(precond_pd_c_type), pointer :: host_precond_pd
         class(*), pointer :: context
-        real(rp), pointer :: residual(:), precond_residual(:)
         integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
@@ -731,24 +667,12 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            residual => residual_c(:n_param)
-            precond_residual => precond_residual_c(:n_param)
-        else
-            allocate(residual(n_param), precond_residual(n_param))
-            residual = real(residual_c(:n_param), kind=rp)
-        end if
-
         ! call the callback function with the level
-        call precond_pd_callback(residual, precond_residual, error, context)
+        call precond_pd_callback(residual_c(:n_param), precond_residual_c(:n_param), &
+                                 error, context)
 
-        ! convert arguments to C kind
+        ! convert error code to C kind
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            precond_residual_c(:n_param) = real(precond_residual, kind=c_rp)
-            deallocate(residual, precond_residual)
-        end if
 
     end function precond_pd_c_wrapper
 
@@ -766,7 +690,6 @@ contains
         type(holder_level_type), pointer :: held
         procedure(project_c_type), pointer :: host_project
         class(*), pointer :: context
-        real(rp), pointer :: vector(:)
         integer(ip) :: n_param, error
 
         ! find the level of the holder, without which there is nothing to call
@@ -789,23 +712,11 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            vector => vector_c(:n_param)
-        else
-            allocate(vector(n_param))
-            vector = real(vector_c(:n_param), kind=rp)
-        end if
-
         ! call the callback function with the level
-        call project_callback(vector, error, context)
+        call project_callback(vector_c(:n_param), error, context)
 
-        ! convert arguments to C kind
+        ! convert error code to C kind
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            vector_c(:n_param) = real(vector, kind=c_rp)
-            deallocate(vector)
-        end if
 
     end function project_c_wrapper
 
@@ -851,24 +762,15 @@ contains
         ! hand the object the current state of the host's record
         call refresh_state(held)
 
-        ! convert arguments to Fortran kind
-        if (rp == c_rp) then
-            trial_vectors(1:n_param, 1:n_extra_trial_vectors) => &
-                trial_vectors_c(:n_param * n_extra_trial_vectors)
-        else
-            allocate(trial_vectors(n_param, n_extra_trial_vectors))
-        end if
+        ! view the host's array as the trial vectors
+        trial_vectors(1:n_param, 1:n_extra_trial_vectors) => &
+            trial_vectors_c(:n_param * n_extra_trial_vectors)
 
         ! call the callback function with the level
         call get_extra_trial_vectors_callback(trial_vectors, error, context)
 
-        ! convert arguments to C kind
+        ! convert error code to C kind
         error_c = int(error, kind=c_ip)
-        if (rp /= c_rp) then
-            trial_vectors_c(:n_param * n_extra_trial_vectors) = reshape( &
-                real(trial_vectors, kind=c_rp), [n_param * n_extra_trial_vectors])
-            deallocate(trial_vectors)
-        end if
 
     end function get_extra_trial_vectors_c_wrapper
 
@@ -988,8 +890,8 @@ contains
     subroutine evaluate_dm_cs_f_wrapper(dm, energy, fock, get_response_cs_funptr, &
                                         error, context)
         !
-        ! this subroutine wraps the density matrix evaluating C function of an orbital
-        ! basis to convert Fortran variables to C variables for the closed-shell case
+        ! this subroutine exposes the density matrix evaluating C function of an
+        ! orbital basis to Fortran for the closed-shell case
         !
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out) :: energy
@@ -1020,11 +922,10 @@ contains
     subroutine evaluate_dm_os_f_wrapper(dm, energy, fock, get_response_funptr, error, &
                                         context)
         !
-        ! this subroutine wraps the density matrix evaluating C function of an orbital
-        ! basis to convert Fortran variables to C variables for the open-shell case,
-        ! finding the C function and the host context in the bundle it receives as
-        ! context, in which it keeps the response C function the C function returns if
-        ! one is requested
+        ! this subroutine exposes the density matrix evaluating C function of an
+        ! orbital basis to Fortran for the open-shell case, finding the C function and
+        ! the host context in the bundle it receives as context, in which it keeps the
+        ! response C function the C function returns if one is requested
         !
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out) :: energy
@@ -1034,8 +935,6 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(c_rp) :: energy_c
-        real(c_rp), pointer :: dm_c(:, :, :), fock_c(:, :, :)
         type(c_funptr) :: get_response_c_funptr
         integer(c_ip) :: error_c
 
@@ -1046,41 +945,20 @@ contains
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (orbital_c_callbacks_type)
-            ! convert arguments to C kind
-            nullify(fock_c)
-            if (rp == c_rp) then
-                dm_c => dm
-                if (present(fock)) fock_c => fock
-            else
-                allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-                dm_c = real(dm, kind=c_rp)
-                if (present(fock)) &
-                    allocate(fock_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-            end if
-
             ! call density matrix evaluating C function and keep the response C
             ! function it returns in the bundle
             if (present(get_response_funptr)) then
-                error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, &
-                                                get_response_c_funptr, &
-                                                callbacks%host_context)
+                error_c = callbacks%evaluate_dm( &
+                    dm, energy, fock, get_response_c_funptr, callbacks%host_context)
                 if (error_c == 0) call c_f_procpointer(cptr=get_response_c_funptr, &
                                                        fptr=callbacks%get_response)
             else
-                error_c = callbacks%evaluate_dm(dm_c, energy_c, fock_c, &
+                error_c = callbacks%evaluate_dm(dm, energy, fock, &
                                                 context_c=callbacks%host_context)
             end if
 
-            ! convert arguments to Fortran kind
-            energy = real(energy_c, kind=rp)
+            ! convert error code to Fortran kind
             error = int(error_c, kind=ip)
-            if (rp /= c_rp) then
-                if (present(fock)) then
-                    fock = real(fock_c, kind=rp)
-                    deallocate(fock_c)
-                end if
-                deallocate(dm_c)
-            end if
         end select
 
         ! associate the Fortran procedure pointer with the wrapper of the response
@@ -1092,8 +970,8 @@ contains
 
     subroutine get_response_cs_f_wrapper(dm, response, error, context)
         !
-        ! this subroutine wraps the response C function of an orbital basis to convert
-        ! Fortran variables to C variables for the closed-shell case
+        ! this subroutine exposes the response C function of an orbital basis to
+        ! Fortran for the closed-shell case
         !
         real(rp), intent(in), target, contiguous :: dm(:, :)
         real(rp), intent(out), target, contiguous :: response(:, :)
@@ -1110,17 +988,16 @@ contains
 
     subroutine get_response_os_f_wrapper(dm, response, error, context)
         !
-        ! this subroutine wraps the response C function of an orbital basis to convert
-        ! Fortran variables to C variables for the open-shell case, finding the C
-        ! function the density matrix evaluating function returned last and the host
-        ! context in the bundle it receives as context
+        ! this subroutine exposes the response C function of an orbital basis to
+        ! Fortran for the open-shell case, finding the C function the density matrix
+        ! evaluating function returned last and the host context in the bundle it
+        ! receives as context
         !
         real(rp), intent(in), target :: dm(:, :, :)
         real(rp), intent(out), target :: response(:, :, :)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(c_rp), pointer :: dm_c(:, :, :), response_c(:, :, :)
         integer(c_ip) :: error_c
 
         ! the bundle holds the C function
@@ -1128,25 +1005,11 @@ contains
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (orbital_c_callbacks_type)
-            ! convert arguments to C kind
-            if (rp == c_rp) then
-                dm_c => dm
-                response_c => response
-            else
-                allocate(dm_c(size(dm, 1), size(dm, 2), size(dm, 3)), &
-                         response_c(size(dm, 1), size(dm, 2), size(dm, 3)))
-                dm_c = real(dm, kind=c_rp)
-            end if
-
             ! call response C function
-            error_c = callbacks%get_response(dm_c, response_c, callbacks%host_context)
+            error_c = callbacks%get_response(dm, response, callbacks%host_context)
 
-            ! convert arguments to Fortran kind
+            ! convert error code to Fortran kind
             error = int(error_c, kind=ip)
-            if (rp /= c_rp) then
-                response = real(response_c, kind=rp)
-                deallocate(dm_c, response_c)
-            end if
         end select
 
     end subroutine get_response_os_f_wrapper

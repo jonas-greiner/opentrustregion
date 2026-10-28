@@ -9,10 +9,10 @@ module otr_s_gek_test_reference
     use opentrustregion_core, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use otr_s_gek, only: s_gek_settings_type
-    use test_reference, only: n_param, tol, tol_c
-    use, intrinsic :: iso_c_binding, only: &
-        c_size_t, c_sizeof, c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, &
-        c_associated, c_intptr_t, c_null_char, c_null_funptr, c_null_ptr
+    use test_reference, only: n_param, is_close
+    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
+                                           c_f_procpointer, c_associated, c_intptr_t, &
+                                           c_null_char, c_null_funptr, c_null_ptr
 
     implicit none
 
@@ -93,21 +93,21 @@ contains
         end if
 
         ! check kappa list
-        if (any(abs(kappa_list - expected_lists(:, :, 1)) > tol)) then
+        if (.not. all(is_close(kappa_list, expected_lists(:, :, 1)))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Parameter list returned"// &
                 message//" wrong."
         end if
 
         ! check local gradient list
-        if (any(abs(local_grad_list - expected_lists(:, :, 2)) > tol)) then
+        if (.not. all(is_close(local_grad_list, expected_lists(:, :, 2)))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name// &
                 " failed: Local gradient list returned"//message//" wrong."
         end if
 
         ! check gradient list
-        if (any(abs(grad_list - expected_lists(:, :, 3)) > tol)) then
+        if (.not. all(is_close(grad_list, expected_lists(:, :, 3)))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Gradient list returned"// &
                 message//" wrong."
@@ -179,21 +179,21 @@ contains
         end if
 
         ! check kappa list
-        if (any(abs(kappa_list - expected_lists(:, :, 1)) > tol_c)) then
+        if (.not. all(is_close(kappa_list, expected_lists(:, :, 1)))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Parameter list returned"// &
                 message//" wrong."
         end if
 
         ! check local gradient list
-        if (any(abs(local_grad_list - expected_lists(:, :, 2)) > tol_c)) then
+        if (.not. all(is_close(local_grad_list, expected_lists(:, :, 2)))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name// &
                 " failed: Local gradient list returned"//message//" wrong."
         end if
 
         ! check gradient list
-        if (any(abs(grad_list - expected_lists(:, :, 3)) > tol_c)) then
+        if (.not. all(is_close(grad_list, expected_lists(:, :, 3)))) then
             test_passed = .false.
             write(stderr, *) "test_"//test_name//" failed: Gradient list returned"// &
                 message//" wrong."
@@ -280,19 +280,6 @@ contains
                                     .not. c_associated(settings_c%context)
 
     end function is_default_s_gek_settings
-
-    integer(c_size_t) function s_gek_settings_size() bind(C)
-        !
-        ! this function returns the size of the C S-GEK settings, so that the layout
-        ! tests detect a field missing from the C or Python settings
-        !
-        use otr_s_gek_c_interface, only: s_gek_settings_type_c
-
-        type(s_gek_settings_type_c) :: settings_c
-
-        s_gek_settings_size = c_sizeof(settings_c)
-
-    end function s_gek_settings_size
 
     logical function equal_s_gek(lhs, rhs)
         !

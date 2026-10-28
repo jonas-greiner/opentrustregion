@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import POINTER, c_bool, c_size_t
+from ctypes import POINTER, c_bool
 from unittest.mock import patch
 
 import numpy as np
@@ -60,6 +60,8 @@ fortran_tests = {
         "hess_x_bfgs",
         "hess_x_sr1",
         "init_rotation_qn",
+        "invoke_init_hess",
+        "invoke_transport",
         "rotation_qn_factory",
         "rotation_qn_sanity_check",
         "sr1_skip_add",
@@ -476,19 +478,16 @@ class RotationQNPyIntegrationTests(unittest.TestCase):
 
     def test_rotation_qn_settings_layout(self):
         """
-        this function checks that the Python rotation QN settings structure has the
-        size of the bind(C) settings type and that every field is read back under its
-        own name from settings whose fields Fortran sets one by one to the reference
-        values
+        this function checks that every field of the Python rotation QN settings
+        structure is read back under its own name from settings whose fields Fortran
+        sets one by one to the reference values
         """
-        lib.rotation_qn_settings_size.restype = c_size_t
         self.assertTrue(
             check_settings_layout(
                 "test_rotation_qn_settings_layout",
                 RotationQNSettings,
                 lib.get_reference_rotation_qn_values,
                 lib.reference_rotation_qn_field,
-                lib.rotation_qn_settings_size(),
             ),
             "test_rotation_qn_settings_layout failed",
         )

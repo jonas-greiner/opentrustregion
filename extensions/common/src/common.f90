@@ -856,6 +856,151 @@ contains
 
     end subroutine logger_callback
 
+    subroutine invoke_evaluate_dm_cs(evaluate_dm, dm, energy, settings, error_origin, &
+                                     error, fock, get_response_funptr)
+        !
+        ! this subroutine calls the closed-shell density matrix evaluating function of
+        ! an orbital basis with the host context of its settings and passes on its
+        ! error, counts an energy that is not a number as infinite and returns an error
+        ! of its own with the origin of the object if the function returns a Fock
+        ! matrix that is not finite at a finite energy, while an infinite energy, which
+        ! rejects the point, leaves the Fock matrix unchecked, since the caller does
+        ! not use it then
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
+                                                 ieee_value, ieee_positive_inf
+
+        procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out) :: energy
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+        real(rp), intent(out), optional, target, contiguous :: fock(:, :)
+        procedure(get_response_cs_type), intent(out), optional, pointer :: &
+            get_response_funptr
+
+        ! call the density matrix evaluating function
+        call evaluate_dm(dm, energy, fock, get_response_funptr, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (ieee_is_nan(energy)) energy = ieee_value(energy, ieee_positive_inf)
+        if (.not. ieee_is_finite(energy) .or. .not. present(fock)) return
+        if (.not. all(ieee_is_finite(fock))) then
+            call settings%log("Density matrix evaluating function returned values "// &
+                              "that are not finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_evaluate_dm_cs
+
+    subroutine invoke_evaluate_dm_os(evaluate_dm, dm, energy, settings, error_origin, &
+                                     error, fock, get_response_funptr)
+        !
+        ! this subroutine calls the open-shell density matrix evaluating function of an
+        ! orbital basis with the host context of its settings and passes on its error,
+        ! counts an energy that is not a number as infinite and returns an error of its
+        ! own with the origin of the object if the function returns a Fock matrix that
+        ! is not finite at a finite energy, while an infinite energy, which rejects the
+        ! point, leaves the Fock matrix unchecked, since the caller does not use it then
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
+                                                 ieee_value, ieee_positive_inf
+
+        procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out) :: energy
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+        real(rp), intent(out), optional, target :: fock(:, :, :)
+        procedure(get_response_os_type), intent(out), optional, pointer :: &
+            get_response_funptr
+
+        ! call the density matrix evaluating function
+        call evaluate_dm(dm, energy, fock, get_response_funptr, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (ieee_is_nan(energy)) energy = ieee_value(energy, ieee_positive_inf)
+        if (.not. ieee_is_finite(energy) .or. .not. present(fock)) return
+        if (.not. all(ieee_is_finite(fock))) then
+            call settings%log("Density matrix evaluating function returned values "// &
+                              "that are not finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_evaluate_dm_os
+
+    subroutine invoke_get_response_cs(get_response, dm, response, settings, &
+                                      error_origin, error)
+        !
+        ! this subroutine calls the closed-shell response function of an orbital basis
+        ! with the host context of its settings and passes on its error, and returns an
+        ! error of its own with the origin of the object if the function returns values
+        ! that are not finite
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        procedure(get_response_cs_type), intent(in), pointer :: get_response
+        real(rp), intent(in), target, contiguous :: dm(:, :)
+        real(rp), intent(out), target, contiguous :: response(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! call the response function
+        call get_response(dm, response, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. all(ieee_is_finite(response))) then
+            call settings%log("Response function returned values that are not "// &
+                              "finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_get_response_cs
+
+    subroutine invoke_get_response_os(get_response, dm, response, settings, &
+                                      error_origin, error)
+        !
+        ! this subroutine calls the open-shell response function of an orbital basis
+        ! with the host context of its settings and passes on its error, and returns an
+        ! error of its own with the origin of the object if the function returns values
+        ! that are not finite
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        procedure(get_response_os_type), intent(in), pointer :: get_response
+        real(rp), intent(in), target :: dm(:, :, :)
+        real(rp), intent(out), target :: response(:, :, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! call the response function
+        call get_response(dm, response, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. all(ieee_is_finite(response))) then
+            call settings%log("Response function returned values that are not "// &
+                              "finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_get_response_os
+
     subroutine check_evaluate_dm_orbital_basis(self, error)
         !
         ! this subroutine produces an error for an orbital basis set up without a
@@ -896,13 +1041,13 @@ contains
         ! rebuild response, the energy is discarded since the caller already holds it
         ! for the current density
         if (associated(self%evaluate_dm_cs)) then
-            call self%evaluate_dm_cs(self%dm_ao(:, :, 1), energy, &
-                                     get_response_funptr=self%get_response_cs, &
-                                     error=error, context=self%settings%context)
+            call invoke_evaluate_dm_cs(self%evaluate_dm_cs, self%dm_ao(:, :, 1), &
+                                       energy, self%settings, self%error_origin, &
+                                       error, get_response_funptr=self%get_response_cs)
         else
-            call self%evaluate_dm_os(self%dm_ao, energy, &
-                                     get_response_funptr=self%get_response_os, &
-                                     error=error, context=self%settings%context)
+            call invoke_evaluate_dm_os(self%evaluate_dm_os, self%dm_ao, energy, &
+                                       self%settings, self%error_origin, error, &
+                                       get_response_funptr=self%get_response_os)
         end if
         if (error /= 0) return
 

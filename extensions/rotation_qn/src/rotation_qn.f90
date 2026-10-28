@@ -222,6 +222,67 @@ contains
 
     end subroutine rotation_qn_sanity_check
 
+    subroutine invoke_transport(transport, geodesic, tangent_vector, settings, &
+                                error_origin, error)
+        !
+        ! this subroutine calls the host's transport function with the host context of
+        ! the settings and passes on its error, and returns an error of its own with
+        ! the origin of the object if the function returns values that are not finite
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        procedure(transport_type), intent(in), pointer :: transport
+        real(rp), intent(in), target :: geodesic(:)
+        real(rp), intent(inout), target :: tangent_vector(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! call the transport function
+        call transport(geodesic, tangent_vector, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. all(ieee_is_finite(tangent_vector))) then
+            call settings%log("Transport function returned values that are not "// &
+                              "finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_transport
+
+    subroutine invoke_init_hess(init_hess, vector, settings, error_origin, error)
+        !
+        ! this subroutine calls the host's initial Hessian function with the host
+        ! context of the settings and passes on its error, and returns an error of its
+        ! own with the origin of the object if the function returns values that are not
+        ! finite
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        procedure(init_hess_type), intent(in), pointer :: init_hess
+        real(rp), intent(inout), target :: vector(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! call the initial Hessian function
+        call init_hess(vector, error, settings%context)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. all(ieee_is_finite(vector))) then
+            call settings%log("Initial Hessian function returned values that are "// &
+                              "not finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_init_hess
+
     recursive subroutine update_orbs_rotation_qn(self, kappa, func, grad, h_diag, &
                                                  hess_x_funptr, error, context)
         !
@@ -281,11 +342,11 @@ contains
 
         ! transport history
         do i = 1, self%n_points
-            call self%transport(kappa, self%kappa_list(:, i), error, &
-                                self%settings%context)
+            call invoke_transport(self%transport, kappa, self%kappa_list(:, i), &
+                                  self%settings, self%error_origin, error)
             if (error /= 0) return
-            call self%transport(kappa, self%grad_diff_list(:, i), error, &
-                                self%settings%context)
+            call invoke_transport(self%transport, kappa, self%grad_diff_list(:, i), &
+                                  self%settings, self%error_origin, error)
             if (error /= 0) return
         end do
 
@@ -293,7 +354,8 @@ contains
         skip = .false.
         if (allocated(self%last_grad)) then
             ! calculate gradient difference
-            call self%transport(kappa, self%last_grad, error, self%settings%context)
+            call invoke_transport(self%transport, kappa, self%last_grad, &
+                                  self%settings, self%error_origin, error)
             if (error /= 0) return
             grad_diff = grad - self%last_grad
 
@@ -368,7 +430,8 @@ contains
         n_param = size(kappa)
         kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
         residual = -kappa
-        call self%init_hess(residual, error, self%settings%context)
+        call invoke_init_hess(self%init_hess, residual, self%settings, &
+                              self%error_origin, error)
         if (error /= 0) return
         residual = residual + grad_diff
         residual_norm = sqrt(ddot(n_param, residual, 1_ip, residual, 1_ip))
@@ -414,7 +477,8 @@ contains
 
         ! initialize with Hessian diagonal
         hess_x = x
-        call self%init_hess(hess_x, error, self%settings%context)
+        call invoke_init_hess(self%init_hess, hess_x, self%settings, &
+                              self%error_origin, error)
         if (error /= 0) return
 
         ! only current point is available
@@ -424,7 +488,8 @@ contains
         allocate(psi(n_param, self%n_points))
         do i = 1, self%n_points
             psi(:, i) = -self%kappa_list(:, i)
-            call self%init_hess(psi(:, i), error, self%settings%context)
+            call invoke_init_hess(self%init_hess, psi(:, i), self%settings, &
+                                  self%error_origin, error)
             if (error /= 0) return
             psi(:, i) = psi(:, i) + self%grad_diff_list(:, i)
         end do
@@ -549,7 +614,8 @@ contains
 
         ! initialize with Hessian diagonal
         hess_x = x
-        call self%init_hess(hess_x, error, self%settings%context)
+        call invoke_init_hess(self%init_hess, hess_x, self%settings, &
+                              self%error_origin, error)
         if (error /= 0) return
 
         ! only current point is available
@@ -562,7 +628,8 @@ contains
         compact_scal_mat = 0.0_rp
         do j = 1, self%n_points
             init_hess_x = self%kappa_list(:, j)
-            call self%init_hess(init_hess_x, error, self%settings%context)
+            call invoke_init_hess(self%init_hess, init_hess_x, self%settings, &
+                                  self%error_origin, error)
             if (error /= 0) return
             do i = 1, self%n_points
                 ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
@@ -628,7 +695,8 @@ contains
         do i = 1, self%n_points
             ! subtract rotation difference contributions
             init_hess_x = self%kappa_list(:, i)
-            call self%init_hess(init_hess_x, error, self%settings%context)
+            call invoke_init_hess(self%init_hess, init_hess_x, self%settings, &
+                                  self%error_origin, error)
             if (error /= 0) return
             hess_x = hess_x - (solution(i) * init_hess_x)
             ! subtract gradient difference contributions

@@ -11,7 +11,7 @@ module c_interface_unit_tests
                            obj_func_c_type, precond_c_type, precond_pd_c_type, &
                            project_c_type, get_extra_trial_vectors_c_type, &
                            conv_check_c_type, logger_c_type
-    use test_reference, only: tol_c, n_param, n_param_c
+    use test_reference, only: is_close, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: &
         c_bool, c_ptr, c_loc, c_funptr, c_funloc, c_char, c_associated, c_null_ptr, &
         c_null_char, c_null_funptr, c_f_pointer, c_sizeof
@@ -788,7 +788,7 @@ contains
                     "error code wrong "//trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
             end if
-            if (i_case == 2 .and. any(abs(kappa - 1.0_c_rp) > tol_c)) then
+            if (i_case == 2 .and. .not. all(is_close(kappa, 1.0_c_rp))) then
                 write(stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                     "direction wrong "//trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
@@ -1488,7 +1488,7 @@ contains
             write(stderr, *) "test_hess_x_f_wrapper_impl failed: Produced error."
             test_hess_x_f_wrapper_impl = .false.
         end if
-        if (any(abs(hess_x - 4.0_rp * x) > tol_c)) then
+        if (.not. all(is_close(hess_x, 4.0_rp * x))) then
             write(stderr, *) "test_hess_x_f_wrapper_impl failed: Result of the C "// &
                 "function not returned."
             test_hess_x_f_wrapper_impl = .false.

@@ -9,7 +9,7 @@ module otr_common_test_reference
     use opentrustregion_core, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
     use otr_common, only: orbital_settings_type, evaluate_dm_missing_warning_msg
-    use test_reference, only: same_callbacks
+    use test_reference, only: same_callbacks, is_close
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_f_procpointer, &
                                            c_associated, c_null_funptr, c_char, &
                                            c_null_char
@@ -186,7 +186,6 @@ contains
         ! the closed-shell case for every combination of requested outputs
         !
         use otr_common, only: evaluate_dm_cs_type, get_response_cs_type
-        use test_reference, only: tol
 
         procedure(evaluate_dm_cs_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
@@ -241,7 +240,7 @@ contains
             end if
 
             ! check energy
-            if (abs(energy - sum(dm_ao)) > tol) then
+            if (.not. is_close(energy, sum(dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
                     message//" for closed-shell case wrong"//requested//"."
                 test_passed = .false.
@@ -249,7 +248,7 @@ contains
 
             ! check Fock matrix
             if (btest(request, 0) .and. &
-                any(abs(fock - evaluate_dm_factors(1) * dm_ao) > tol)) then
+                .not. all(is_close(fock, evaluate_dm_factors(1) * dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
                     message//" for closed-shell case wrong"//requested//"."
                 test_passed = .false.
@@ -272,7 +271,6 @@ contains
         ! the open-shell case for every combination of requested outputs
         !
         use otr_common, only: evaluate_dm_os_type, get_response_os_type
-        use test_reference, only: tol
 
         procedure(evaluate_dm_os_type), intent(in), pointer :: evaluate_dm_funptr
         character(len=*), intent(in) :: test_name, message
@@ -327,7 +325,7 @@ contains
             end if
 
             ! check energy
-            if (abs(energy - sum(dm_ao)) > tol) then
+            if (.not. is_close(energy, sum(dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
                     message//" for open-shell case wrong"//requested//"."
                 test_passed = .false.
@@ -335,7 +333,7 @@ contains
 
             ! check Fock matrix
             if (btest(request, 0) .and. &
-                any(abs(fock - evaluate_dm_factors(1) * dm_ao) > tol)) then
+                .not. all(is_close(fock, evaluate_dm_factors(1) * dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
                     message//" for open-shell case wrong"//requested//"."
                 test_passed = .false.
@@ -359,7 +357,6 @@ contains
         ! combination of requested outputs
         !
         use otr_common_c_interface, only: evaluate_dm_c_type
-        use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: evaluate_dm_c_funptr
         integer(ip), intent(in) :: n_particle
@@ -423,7 +420,7 @@ contains
             end if
 
             ! check energy
-            if (abs(energy - sum(dm_ao)) > tol_c) then
+            if (.not. is_close(energy, sum(dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Energy returned"// &
                     message//" for "//shell//" case wrong"//requested//"."
                 test_passed = .false.
@@ -431,7 +428,7 @@ contains
 
             ! check Fock matrix
             if (btest(request, 0) .and. &
-                any(abs(fock - evaluate_dm_factors(1) * dm_ao) > tol_c)) then
+                .not. all(is_close(fock, evaluate_dm_factors(1) * dm_ao))) then
                 write(stderr, *) "test_"//test_name//" failed: Fock matrix returned"// &
                     message//" for "//shell//" case wrong"//requested//"."
                 test_passed = .false.
@@ -455,7 +452,6 @@ contains
         ! case
         !
         use otr_common, only: get_response_cs_type
-        use test_reference, only: tol
 
         procedure(get_response_cs_type), intent(in), pointer :: get_response_funptr
         character(len=*), intent(in) :: test_name, message
@@ -493,7 +489,7 @@ contains
         end if
 
         ! check response
-        if (any(abs(response - evaluate_dm_factors(2) * dm_ao) > tol)) then
+        if (.not. all(is_close(response, evaluate_dm_factors(2) * dm_ao))) then
             write(stderr, *) "test_"//test_name//" failed: Response returned"// &
                 message//" for closed-shell case wrong."
             test_passed = .false.
@@ -511,7 +507,6 @@ contains
         ! case
         !
         use otr_common, only: get_response_os_type
-        use test_reference, only: tol
 
         procedure(get_response_os_type), intent(in), pointer :: get_response_funptr
         character(len=*), intent(in) :: test_name, message
@@ -549,7 +544,7 @@ contains
         end if
 
         ! check response
-        if (any(abs(response - evaluate_dm_factors(2) * dm_ao) > tol)) then
+        if (.not. all(is_close(response, evaluate_dm_factors(2) * dm_ao))) then
             write(stderr, *) "test_"//test_name//" failed: Response returned"// &
                 message//" for open-shell case wrong."
             test_passed = .false.
@@ -567,7 +562,6 @@ contains
         ! (n_particle = 1) or open-shell (n_particle = 2) case
         !
         use otr_common_c_interface, only: get_response_c_type
-        use test_reference, only: tol_c
 
         type(c_funptr), intent(in) :: get_response_c_funptr
         integer(ip), intent(in) :: n_particle
@@ -614,7 +608,7 @@ contains
         end if
 
         ! check response
-        if (any(abs(response - evaluate_dm_factors(2) * dm_ao) > tol_c)) then
+        if (.not. all(is_close(response, evaluate_dm_factors(2) * dm_ao))) then
             write(stderr, *) "test_"//test_name//" failed: Response returned"// &
                 message//" for "//shell//" case wrong."
             test_passed = .false.

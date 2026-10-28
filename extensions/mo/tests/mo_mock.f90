@@ -9,7 +9,7 @@ module otr_mo_mock
     use opentrustregion_core, only: rp, ip, stderr, obj_func_type
     use c_interface, only: c_ip, c_rp
     use otr_mo, only: mo_factory_cs, mo_factory_os
-    use test_reference, only: tol
+    use test_reference, only: is_close
     use otr_mo_test_reference, only: ref_mo_settings, operator(/=)
 
     implicit none
@@ -159,7 +159,7 @@ contains
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed MO "// &
                 "coefficients for closed-shell case have wrong shape."
-        else if (any(abs(mo_coeff - pattern(:, :, 1)) > tol)) then
+        else if (.not. all(is_close(mo_coeff, pattern(:, :, 1)))) then
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed MO "// &
                 "coefficients for closed-shell case wrong."
@@ -258,7 +258,7 @@ contains
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed MO "// &
                 "coefficients for open-shell case have wrong shape."
-        else if (any(abs(mo_coeff - pattern) > tol)) then
+        else if (.not. all(is_close(mo_coeff, pattern))) then
             test_passed = .false.
             write(stderr, *) "test_mo_factory_c_wrapper failed: Passed MO "// &
                 "coefficients for open-shell case wrong."

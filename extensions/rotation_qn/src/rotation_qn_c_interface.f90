@@ -10,8 +10,8 @@ module otr_rotation_qn_c_interface
     use c_interface, only: c_ip, c_rp, c_callbacks_type
     use otr_rotation_qn, only: transport_type, init_hess_type, &
                                standard_rotation_qn_factory => rotation_qn_factory
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_char, c_funptr, &
-                                           c_f_procpointer, c_associated, &
+    use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_ptr, c_char, &
+                                           c_funptr, c_f_procpointer, c_associated, &
                                            c_null_funptr, c_null_ptr
 
     implicit none
@@ -84,7 +84,8 @@ contains
         ! solver settings and record of the solver state, and writes the solver
         ! settings the factory wired back into the C solver settings
         !
-        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin, &
+                                        verbosity_error
         use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
                                obj_func_f_wrapper
         use otr_rotation_qn, only: &
@@ -154,6 +155,18 @@ contains
         call setup_extension_holder(holder, solver_settings_c, solver_state_c, &
                                     settings, error, update_orbs_c_funptr, &
                                     obj_func_c_funptr)
+
+        ! the object can not run without the host's orbital update, objective
+        ! function, transport and initial Hessian functions
+        if (error == 0 .and. .not. (c_associated(update_orbs_c_funptr) .and. &
+                                    c_associated(obj_func_c_funptr) .and. &
+                                    c_associated(transport_c_funptr) .and. &
+                                    c_associated(init_hess_c_funptr))) then
+            call settings%log("Orbital update, objective function, transport and "// &
+                              "initial Hessian functions have to be given.", &
+                              verbosity_error, .true.)
+            error = 1
+        end if
         call add_error_origin(error, error_rotation_qn, settings)
 
         ! the factory wires the solver settings of the holder, which then own the
@@ -186,16 +199,14 @@ contains
 
     subroutine transport_f_wrapper(geodesic, tangent_vector, error, context)
         !
-        ! this subroutine wraps the transport subroutine to convert Fortran variables
-        ! to C variables, finding the C function and the host context in the bundle it
-        ! receives as context
+        ! this subroutine exposes the transport C function to Fortran, finding the C
+        ! function and the host context in the bundle it receives as context
         !
         real(rp), intent(in), target :: geodesic(:)
         real(rp), intent(inout), target :: tangent_vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(c_rp), pointer :: geodesic_c(:), tangent_vector_c(:)
         integer(c_ip) :: error_c
 
         ! the bundle holds the C function
@@ -203,43 +214,25 @@ contains
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (rotation_qn_c_callbacks_type)
-            ! convert arguments to C kind
-            if (rp == c_rp) then
-                geodesic_c => geodesic
-                tangent_vector_c => tangent_vector
-            else
-                allocate(geodesic_c(size(geodesic, 1)))
-                allocate(tangent_vector_c(size(tangent_vector, 1)))
-                geodesic_c = real(geodesic, kind=c_rp)
-                tangent_vector_c = real(tangent_vector, kind=c_rp)
-            end if
-
             ! call transport C function
-            error_c = callbacks%transport(geodesic_c, tangent_vector_c, &
-                                          callbacks%host_context)
+            error_c = &
+                callbacks%transport(geodesic, tangent_vector, callbacks%host_context)
 
-            ! convert arguments to Fortran kind
+            ! convert error code to Fortran kind
             error = int(error_c, kind=ip)
-            if (rp /= c_rp) then
-                tangent_vector = real(tangent_vector_c, kind=rp)
-                deallocate(geodesic_c)
-                deallocate(tangent_vector_c)
-            end if
         end select
 
     end subroutine transport_f_wrapper
 
     subroutine init_hess_f_wrapper(vector, error, context)
         !
-        ! this subroutine wraps the initial Hessian subroutine to convert Fortran
-        ! variables to C variables, finding the C function and the host context in the
-        ! bundle it receives as context
+        ! this subroutine exposes the initial Hessian C function to Fortran, finding
+        ! the C function and the host context in the bundle it receives as context
         !
         real(rp), intent(inout), target :: vector(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(c_rp), pointer :: vector_c(:)
         integer(c_ip) :: error_c
 
         ! the bundle holds the C function
@@ -247,23 +240,11 @@ contains
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (rotation_qn_c_callbacks_type)
-            ! convert arguments to C kind
-            if (rp == c_rp) then
-                vector_c => vector
-            else
-                allocate(vector_c(size(vector, 1)))
-                vector_c = real(vector, kind=c_rp)
-            end if
-
             ! call initial Hessian C function
-            error_c = callbacks%init_hess(vector_c, callbacks%host_context)
+            error_c = callbacks%init_hess(vector, callbacks%host_context)
 
-            ! convert arguments to Fortran kind
+            ! convert error code to Fortran kind
             error = int(error_c, kind=ip)
-            if (rp /= c_rp) then
-                vector = real(vector_c, kind=rp)
-                deallocate(vector_c)
-            end if
         end select
 
     end subroutine init_hess_f_wrapper
@@ -280,6 +261,18 @@ contains
         settings_c = default_rotation_qn_settings
 
     end subroutine init_rotation_qn_settings_c
+
+    integer(c_size_t) function rotation_qn_settings_size() bind(C)
+        !
+        ! this function returns the size of the C rotation QN settings, which the
+        ! Python interface compares with its own to detect a library of another version
+        ! and the C layout tests with the header's
+        !
+        type(rotation_qn_settings_type_c) :: settings_c
+
+        rotation_qn_settings_size = c_sizeof(settings_c)
+
+    end function rotation_qn_settings_size
 
     subroutine assign_rotation_qn_f_c(settings, settings_c)
         !

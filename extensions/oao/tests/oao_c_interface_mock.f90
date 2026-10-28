@@ -10,6 +10,7 @@ module otr_oao_c_interface_mock
     use c_interface, only: c_rp, c_ip
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c
     use otr_oao_test_reference, only: ref_oao_settings
+    use test_reference, only: is_close
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
                                            c_funloc, c_null_char, c_null_funptr, &
                                            c_null_ptr, c_associated
@@ -43,7 +44,6 @@ contains
         !
         use otr_oao_c_interface, only: oao_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
-        use test_reference, only: tol_c
         use otr_oao_test_reference, only: operator(/=), density_pattern
         use otr_common_test_reference, only: check_evaluate_dm_c_funptr, &
                                              ao_overlap_pattern, n_particle, n_ao
@@ -73,14 +73,15 @@ contains
             write(stderr, *) "test_oao_factory_py_interface failed: Passed number "// &
                 "of particles wrong."
             test_oao_factory_interface = .false.
-        else if (any(abs(dm_ao_c(:n_ao_c**2 * n_particle_c) - reshape(density_pattern( &
-            n_ao_c, n_particle_c, 0.0_c_rp), [n_ao_c**2 * n_particle_c])) > tol_c)) then
+        else if (.not. all(is_close(dm_ao_c(:n_ao_c**2 * n_particle_c), reshape( &
+            density_pattern(n_ao_c, n_particle_c, 0.0_c_rp), &
+            [n_ao_c**2 * n_particle_c])))) then
             write(stderr, *) "test_oao_factory_py_interface failed: Passed AO "// &
                 "density matrix wrong."
             test_oao_factory_interface = .false.
         end if
-        if (any(abs(ao_overlap_c(:n_ao_c**2) - &
-                    reshape(ao_overlap_pattern(n_ao_c), [n_ao_c**2])) > tol_c)) then
+        if (.not. all(is_close(ao_overlap_c(:n_ao_c**2), &
+                               reshape(ao_overlap_pattern(n_ao_c), [n_ao_c**2])))) then
             write(stderr, *) "test_oao_factory_py_interface failed: Passed AO "// &
                 "overlap matrix wrong."
             test_oao_factory_interface = .false.

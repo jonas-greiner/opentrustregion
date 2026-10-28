@@ -7,7 +7,7 @@
 module otr_s_gek_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
-    use test_reference, only: tol, n_param
+    use test_reference, only: n_param, is_close, is_at_most
     use otr_s_gek, only: change_reference_type, s_gek_type
     use, intrinsic :: iso_c_binding, only: c_bool
 
@@ -35,9 +35,10 @@ contains
         ! this subroutine is a mock of the host's change of reference function, which
         ! leaves the parameters unchanged and takes the gradients over from the local
         ! gradients, as a change to a reference at which both coincide does, records
-        ! its call, checks the host context and returns the error code set in it
+        ! its call, checks the host context and returns the error code set in it or a
+        ! value that is not a number
         !
-        use otr_common_mock, only: record_host_call
+        use otr_common_mock, only: record_host_call, inject_host_nan
 
         real(rp), intent(in), target :: new_ref(:)
         integer(ip), intent(in) :: n_points
@@ -48,6 +49,9 @@ contains
 
         grad_list(:, :n_points) = local_grad_list(:, :n_points)
         error = record_host_call("change_reference", context)
+        call inject_host_nan(context, 1_ip, kappa_list(1, 1))
+        call inject_host_nan(context, 2_ip, local_grad_list(1, 1))
+        call inject_host_nan(context, 3_ip, grad_list(1, 1))
 
     end subroutine mock_change_reference
 
@@ -364,6 +368,111 @@ contains
 
     end function test_s_gek_sanity_check
 
+    logical(c_bool) function test_invoke_change_reference() bind(C)
+        !
+        ! this function tests the subroutine which calls the host's change of reference
+        ! function
+        !
+        use otr_s_gek, only: s_gek_settings_type, invoke_change_reference
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use test_reference, only: arm_host_context, host_context_reached
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+
+        ! number of stored points, which leaves the last column of the lists unused
+        integer(ip), parameter :: error_origin = 4200, n_points = 2
+        character(len=*), parameter :: list_names(3) = &
+            [character(len=15) :: "parameters", "local gradients", "gradients"]
+        type(s_gek_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(change_reference_type), pointer :: change_reference_funptr
+        real(rp) :: new_ref(n_param), kappa_list(n_param, n_points + 1), &
+                    local_grad_list(n_param, n_points + 1), &
+                    grad_list(n_param, n_points + 1), &
+                    expected_kappa_list(n_param, n_points)
+        integer(ip) :: error, i_list
+
+        ! assume tests pass
+        test_invoke_change_reference = .true.
+
+        ! call a change of reference function, which leaves the parameters unchanged
+        ! and takes the gradients over from the local gradients, with random lists
+        ! whose unused column is not a number, and check that it receives the host
+        ! context, that the lists of the stored points are returned and that the unused
+        ! column is not checked
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        change_reference_funptr => mock_change_reference
+        call random_number(new_ref)
+        call random_number(kappa_list)
+        call random_number(local_grad_list)
+        kappa_list(:, n_points + 1) = ieee_value(1.0_rp, ieee_quiet_nan)
+        local_grad_list(:, n_points + 1) = ieee_value(1.0_rp, ieee_quiet_nan)
+        grad_list = ieee_value(1.0_rp, ieee_quiet_nan)
+        expected_kappa_list = kappa_list(:, :n_points)
+        call change_reference()
+        if (error /= 0) then
+            write(stderr, *) "test_invoke_change_reference failed: Produced error."
+            test_invoke_change_reference = .false.
+        end if
+        if (.not. ( &
+            all(is_close(kappa_list(:, :n_points), expected_kappa_list)) .and. &
+            all(is_close(grad_list(:, :n_points), local_grad_list(:, :n_points))))) then
+            write(stderr, *) "test_invoke_change_reference failed: Lists of the "// &
+                "stored points not returned."
+            test_invoke_change_reference = .false.
+        end if
+        if (.not. host_context_reached("invoke_change_reference", context)) &
+            test_invoke_change_reference = .false.
+
+        ! let the function fail and check that its error is passed on unchanged
+        context%mock_error = 3
+        call change_reference()
+        if (error /= 3) then
+            write(stderr, *) "test_invoke_change_reference failed: Error of the "// &
+                "function not passed on unchanged."
+            test_invoke_change_reference = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return every list with a value that is not a number in turn,
+        ! starting from finite lists, which has to be reported with the origin of the
+        ! object and an error message
+        do i_list = 1, size(list_names)
+            call random_number(kappa_list(:, :n_points))
+            call random_number(local_grad_list(:, :n_points))
+            call setup_error_logging(settings, context)
+            context%nan_output = i_list
+            call change_reference()
+            if (error /= error_origin + 1) then
+                write(stderr, *) "test_invoke_change_reference failed: "// &
+                    trim(list_names(i_list))//" that are not finite not reported "// &
+                    "with the origin of the object."
+                test_invoke_change_reference = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_invoke_change_reference failed: No error "// &
+                    "message printed for "//trim(list_names(i_list))// &
+                    " that are not finite."
+                test_invoke_change_reference = .false.
+            end if
+        end do
+        context%nan_output = 0
+
+    contains
+
+        subroutine change_reference()
+            !
+            ! this subroutine calls the routine under test with the stored points
+            !
+            call invoke_change_reference(change_reference_funptr, new_ref, n_points, &
+                                         kappa_list, local_grad_list, grad_list, &
+                                         settings, error_origin, error)
+
+        end subroutine change_reference
+
+    end function test_invoke_change_reference
+
     logical(c_bool) function test_update_orbs_s_gek() bind(C)
         !
         ! this function tests the S-GEK orbital update, which forwards to the host's
@@ -432,9 +541,9 @@ contains
                     "code wrong for "//trim(case_names(i_case))//"."
                 test_update_orbs_s_gek = .false.
             end if
-            if (abs(func - sum(kappa)) > tol .or. &
-                any(abs(grad - 2.0_rp * kappa) > tol) .or. &
-                any(abs(h_diag - 3.0_rp * kappa) > tol)) then
+            if (.not. is_close(func, sum(kappa)) .or. &
+                .not. all(is_close(grad, 2.0_rp * kappa)) .or. &
+                .not. all(is_close(h_diag, 3.0_rp * kappa))) then
                 write(stderr, *) "test_update_orbs_s_gek failed: Results of the "// &
                     "host's orbital update not returned for "// &
                     trim(case_names(i_case))//"."
@@ -459,10 +568,10 @@ contains
                     "wrongly for "//trim(case_names(i_case))//"."
                 test_update_orbs_s_gek = .false.
             else if (case_adds(i_case)) then
-                if (any(abs(object%added_kappa - kappa) > tol) .or. &
-                    abs(object%added_func - func) > tol .or. &
-                    any(abs(object%added_grad - grad) > tol) .or. &
-                    any(abs(object%added_h_diag - h_diag) > tol)) then
+                if (.not. all(is_close(object%added_kappa, kappa)) .or. &
+                    .not. is_close(object%added_func, func) .or. &
+                    .not. all(is_close(object%added_grad, grad)) .or. &
+                    .not. all(is_close(object%added_h_diag, h_diag))) then
                     write(stderr, *) "test_update_orbs_s_gek failed: Values of the "// &
                         "added point wrong for "//trim(case_names(i_case))//"."
                     test_update_orbs_s_gek = .false.
@@ -519,7 +628,7 @@ contains
             test_init_s_gek = .false.
         end if
         if (object%n_points /= 0 .or. object%n_covariance /= 0 .or. &
-            abs(object%loosen_factor - 1.0_rp) > tol) then
+            .not. is_close(object%loosen_factor, 1.0_rp)) then
             write(stderr, *) "test_init_s_gek failed: Points, covariance size or "// &
                 "loosening factor not initialized."
             test_init_s_gek = .false.
@@ -541,13 +650,14 @@ contains
         !
         ! this function tests the subroutine which adds a new point to an S-GEK object,
         ! so far only that it hands the host's change of reference function the host
-        ! context of its settings and passes on its error, while its numerics are left
-        ! to later tests
+        ! context of its settings, passes on its error and reports a value that is not
+        ! a number with the origin of the object, while its numerics are left to later
+        ! tests
         !
         use otr_s_gek, only: s_gek_type, default_s_gek_settings, error_s_gek
         use test_reference, only: arm_host_context, host_context, host_context_reached
 
-        type(s_gek_type) :: objects(2)
+        type(s_gek_type) :: objects(3)
         real(rp) :: kappa(n_param), grad(n_param), h_diag(n_param)
         integer(ip) :: error, i_case
 
@@ -557,8 +667,10 @@ contains
         ! add a random first point with a positive Hessian diagonal to objects as after
         ! their initialization, without the routine that initializes them, for which
         ! the routine moves the stored points to the new reference, with a change of
-        ! reference function that succeeds and with one that fails, whose error the
-        ! routine has to pass on
+        ! reference function that succeeds, with one that fails, whose error the
+        ! routine has to pass on, and with one that returns a value that is not a
+        ! number, which the routine has to report with the origin of the object, in
+        ! both cases right after the call, before it stores the Hessian diagonal
         call random_number(kappa)
         call random_number(grad)
         call random_number(h_diag)
@@ -578,8 +690,16 @@ contains
                          object%grad_list(n_param, 0), &
                          object%local_grad_list(n_param, 0), object%y_list(n_param, 0))
                 if (i_case == 2) host_context%mock_error = 7
+                if (i_case == 3) host_context%nan_output = 1
+                object%h_diag = 0.0_rp
                 call object%add(kappa, 1.0_rp, grad, h_diag, error)
             end associate
+            if (i_case > 1 .and. &
+                .not. all(is_at_most(abs(objects(i_case)%h_diag), 0.0_rp))) then
+                write(stderr, *) "test_add_s_gek failed: Point taken further after "// &
+                    "a failing change of reference function."
+                test_add_s_gek = .false.
+            end if
             if (i_case == 1) then
                 if (error /= 0) then
                     write(stderr, *) "test_add_s_gek failed: Produced error."
@@ -591,9 +711,14 @@ contains
                     test_add_s_gek = .false.
                 end if
                 if (.not. host_context_reached("add_s_gek")) test_add_s_gek = .false.
-            else if (error /= 7) then
+            else if (i_case == 2 .and. error /= 7) then
                 write(stderr, *) "test_add_s_gek failed: Error of the change of "// &
                     "reference function not passed on."
+                test_add_s_gek = .false.
+            else if (i_case == 3 .and. error /= error_s_gek + 1) then
+                write(stderr, *) "test_add_s_gek failed: Value that is not a "// &
+                    "number of the change of reference function not reported with "// &
+                    "the origin of the object."
                 test_add_s_gek = .false.
             end if
         end do

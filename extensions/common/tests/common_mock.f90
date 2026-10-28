@@ -53,6 +53,31 @@ contains
 
     end function record_host_call
 
+    subroutine inject_host_nan(context, position, output)
+        !
+        ! this subroutine replaces a real output of a mock host callback function by a
+        ! value that is not a number if the test chose its position in the host
+        ! context, for the call the test chose or every call, after record_host_call
+        ! counted the call
+        !
+        use test_reference, only: host_context_type
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+
+        class(*), intent(in), pointer :: context
+        integer(ip), intent(in) :: position
+        real(rp), intent(inout) :: output
+
+        if (.not. associated(context)) return
+        select type (context)
+        class is (host_context_type)
+            if ((context%nan_output == position .or. context%nan_output < 0) .and. &
+                (context%failing_call == 0 .or. &
+                 context%n_calls == context%failing_call)) &
+                output = ieee_value(output, ieee_quiet_nan)
+        end select
+
+    end subroutine inject_host_nan
+
     function mock_obj_func(kappa, error, context) result(func)
         !
         ! this function is a test function for the objective function, which records
