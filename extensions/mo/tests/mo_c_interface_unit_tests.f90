@@ -6,7 +6,7 @@
 
 module otr_mo_c_interface_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, &
@@ -22,7 +22,7 @@ contains
         ! this function tests the C wrapper for the MO factory for the closed- and the
         ! open-shell case, without and with irreps of the MOs
         !
-        use opentrustregion, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
         use otr_common_c_interface, only: extension_holder_type, &

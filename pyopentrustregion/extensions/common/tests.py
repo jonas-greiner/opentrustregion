@@ -29,6 +29,7 @@ from pyopentrustregion.tests import (
     n_param,
     add_tests,
     print_separator,
+    check_callback_interfaces,
 )
 from pyopentrustregion.python_interface import (
     logger_interface_type,
@@ -40,10 +41,12 @@ from pyopentrustregion.python_interface import (
     SolverSettings,
     SolverState,
     solver,
+    interruption_state,
 )
 
 from pyopentrustregion.extensions.common.python_interface import (
     EvaluateDMInterface,
+    GetResponseInterface,
     ExtensionOwner,
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
@@ -364,7 +367,7 @@ def settings_hold_reference(test_name, settings, lookup):
     """
     test_passed = True
     for field_name, field_type in settings.c_struct._fields_:
-        if field_name == "context":
+        if field_name in ("context", "initialized"):
             continue
         if field_type == c_void_p:
             if getattr(settings, field_name) is not None:
@@ -899,8 +902,10 @@ class CommonPyInterfaceTests(unittest.TestCase):
 
     def test_evaluate_dm_py_interface(self):
         """
-        this function tests the Python interface to the density matrix evaluating
-        function
+        this function tests the Python interfaces to the density matrix evaluating
+        function and the response function it returns, which report an exception or an
+        interruption as an error and keep it, also a missing response function, and
+        hand over the density matrix read-only
         """
         # initialize test flag
         test_passed = True
@@ -932,6 +937,25 @@ class CommonPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
+        # both interfaces report an exception or an interruption as an error and keep
+        # it, and hand over the density matrix read-only
+        dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
+        response = np.zeros(2 * (n_ao,))
+        response_ptr = response.ctypes.data_as(POINTER(c_real))
+        interfaces = {
+            "density matrix evaluating function": lambda func, exc: (
+                EvaluateDMInterface(func, n_ao, 1, True, exc)(
+                    dm_ao_ptr, (c_real * 1)(), None, None, None
+                )
+            ),
+            "response function": lambda func, exc: GetResponseInterface(
+                func, n_ao, 1, True, exc
+            )(dm_ao_ptr, response_ptr, None),
+        }
+        test_passed &= check_callback_interfaces(
+            "test_evaluate_dm_py_interface", interfaces, list(interfaces), dm_ao
+        )
+
         self.assertTrue(test_passed, "test_evaluate_dm_py_interface failed")
         print(" test_evaluate_dm_py_interface PASSED")
 
@@ -939,9 +963,10 @@ class CommonPyInterfaceTests(unittest.TestCase):
         """
         this function tests the orbital updating function and the objective function a
         factory returns around the C functions the C factory returned, which have to
-        call them with the context of the solver settings, keep these alive, share the
-        collector of the factory call, copy the orbitals back after every orbital update
-        and hand over and receive arrays of any layout and kind
+        call them with the context of the solver settings while marking the library as
+        innermost, keep these alive, share the collector of the factory call, copy the
+        orbitals back after every orbital update and hand over and receive arrays of any
+        layout and kind
         """
         test_passed = True
         solver_settings = SolverSettings()
@@ -1013,6 +1038,34 @@ class CommonPyInterfaceTests(unittest.TestCase):
             print(
                 " test_extension_functions failed: Parameters of the objective "
                 "function not handed over."
+            )
+            test_passed = False
+
+        # the returned functions mark the library as innermost while its C functions
+        # run
+        marks = []
+
+        def marking_update_orbs(*args):
+            marks.append(interruption_state.stack)
+            return 0
+
+        def marking_obj_func(*args):
+            marks.append(interruption_state.stack)
+            return 0
+
+        c_functions = (
+            update_orbs_interface_type(marking_update_orbs),
+            obj_func_interface_type(marking_obj_func),
+        )
+        update_orbs, obj_func = extension_functions(
+            *c_functions, solver_settings, exception
+        )
+        update_orbs(kappa, grad, h_diag)
+        obj_func(kappa)
+        if marks != [(False,), (False,)]:
+            print(
+                " test_extension_functions failed: Library not marked as innermost "
+                "while the returned functions call its C functions."
             )
             test_passed = False
 

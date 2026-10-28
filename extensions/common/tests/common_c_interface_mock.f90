@@ -6,7 +6,7 @@
 
 module otr_common_c_interface_mock
 
-    use opentrustregion, only: stderr
+    use opentrustregion_core, only: stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, obj_func_c_type, &
                            hess_x_c_type, precond_c_type
     use, intrinsic :: iso_c_binding, only: c_ptr, c_funptr, c_funloc, c_loc, &

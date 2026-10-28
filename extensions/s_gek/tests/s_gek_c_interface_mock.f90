@@ -6,7 +6,7 @@
 
 module otr_s_gek_c_interface_mock
 
-    use opentrustregion, only: stderr
+    use opentrustregion_core, only: stderr
     use c_interface, only: c_ip
     use otr_s_gek_c_interface, only: s_gek_factory_c_wrapper, init_s_gek_settings_c
     use otr_s_gek_test_reference, only: ref_s_gek_settings
@@ -133,7 +133,7 @@ contains
         use otr_s_gek_c_interface, only: s_gek_settings_type_c
         use otr_s_gek_test_reference, only: get_reference_s_gek_values
 
-        type(s_gek_settings_type_c), intent(inout) :: settings
+        type(s_gek_settings_type_c), intent(out) :: settings
 
         ! set reference values without logging function and host context
         call get_reference_s_gek_values(settings)

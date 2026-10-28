@@ -6,7 +6,7 @@
 
 module otr_rotation_qn_mock
 
-    use opentrustregion, only: ip, stderr
+    use opentrustregion_core, only: ip, stderr
     use otr_rotation_qn, only: rotation_qn_factory
     use otr_rotation_qn_test_reference, only: ref_rotation_qn_settings, operator(/=)
 
@@ -40,7 +40,8 @@ contains
         ! settings at its level of the solver and lets the settings own it, as the
         ! factory does
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, obj_func_type, &
+                                        solver_state_type
         use otr_common, only: extension_type, extension_solver_settings_type
         use otr_rotation_qn, only: transport_type, init_hess_type, &
                                    rotation_qn_settings_type, sr1_updating_type, &

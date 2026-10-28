@@ -6,7 +6,7 @@
 
 module otr_rotation_qn_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use test_reference, only: n_param, tol
     use otr_rotation_qn, only: transport_type, init_hess_type, sr1_updating_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -117,7 +117,8 @@ contains
         ! with the settings and the host's transport and initial Hessian functions and
         ! wires the solver settings with it and the record of the state
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, obj_func_type, &
+                                        solver_state_type
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
@@ -450,7 +451,7 @@ contains
         ! starting point, whose gradient the first step pair needs, passing on the
         ! error of the addition
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: hess_x_callback
         use otr_common_mock, only: mock_update_orbs

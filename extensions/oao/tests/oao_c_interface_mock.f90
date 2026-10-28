@@ -6,7 +6,7 @@
 
 module otr_oao_c_interface_mock
 
-    use opentrustregion, only: ip, stderr
+    use opentrustregion_core, only: ip, stderr
     use c_interface, only: c_rp, c_ip
     use otr_oao_c_interface, only: oao_factory_c_wrapper, init_oao_settings_c
     use otr_oao_test_reference, only: ref_oao_settings
@@ -145,7 +145,7 @@ contains
         use otr_oao_c_interface, only: oao_settings_type_c
         use otr_oao_test_reference, only: get_reference_oao_values
 
-        type(oao_settings_type_c), intent(inout) :: settings
+        type(oao_settings_type_c), intent(out) :: settings
 
         ! set reference values without logging function and host context
         call get_reference_oao_values(settings)

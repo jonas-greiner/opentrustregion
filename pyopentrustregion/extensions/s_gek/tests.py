@@ -15,6 +15,7 @@ from pyopentrustregion.tests import (
     n_param,
     add_tests,
     print_separator,
+    check_callback_interfaces,
 )
 from pyopentrustregion.python_interface import (
     c_real,
@@ -117,36 +118,21 @@ class SGEKPyInterfaceTests(unittest.TestCase):
     def test_callback_interfaces(self):
         """
         this function tests that the interface to the change of reference function
-        reports an exception raised by the function as an error and keeps it
+        reports an exception or an interruption raised by the function as an error and
+        keeps it, and that the function receives the new reference read-only
         """
-        test_passed = True
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
-
-        def raising(*args):
-            raise ValueError("callback function failure")
-
-        for name, call in [
-            (
-                "change of reference function",
-                lambda exc: ChangeReferenceInterface(raising, n_param, exc).call(
-                    vector_ptr, 1, vector_ptr, vector_ptr, vector_ptr
-                ),
-            ),
-        ]:
-            exception = {}
-            if call(exception) != 1:
-                print(
-                    f" test_callback_interfaces failed: Exception raised by {name} "
-                    "not reported as error."
-                )
-                test_passed = False
-            if not isinstance(exception.get("exc"), ValueError):
-                print(
-                    f" test_callback_interfaces failed: Exception raised by {name} "
-                    "not kept."
-                )
-                test_passed = False
+        output = np.zeros(n_param)
+        output_ptr = output.ctypes.data_as(POINTER(c_real))
+        interfaces = {
+            "change of reference function": lambda func, exc: ChangeReferenceInterface(
+                func, n_param, exc
+            )(vector_ptr, 1, output_ptr, output_ptr, output_ptr, None),
+        }
+        test_passed = check_callback_interfaces(
+            "test_callback_interfaces", interfaces, list(interfaces), vector
+        )
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")
         print(" test_callback_interfaces PASSED")

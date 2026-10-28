@@ -6,7 +6,7 @@
 
 module otr_common_test_reference
 
-    use opentrustregion, only: ip, rp, stderr
+    use opentrustregion_core, only: ip, rp, stderr
     use c_interface, only: c_ip, c_rp
     use otr_common, only: orbital_settings_type, evaluate_dm_missing_warning_msg
     use test_reference, only: same_callbacks
@@ -108,7 +108,7 @@ contains
             n_kernel = 3, n_rotations = 3, &
             rotation_pairs(2, n_rotations) = reshape([1, 4, &
                                                       2, 5, &
-                                                      1, 3], [2, n_rotations])
+                                                      1, 3], [2_ip, n_rotations])
         real(rp), parameter :: rotation_angles(n_rotations) = [0.6_rp, -0.6_rp, 0.3_rp]
 
         real(rp) :: s(n_ao, n_ao), m(n_ao, n_ao, n_kernel), eigvals(n_ao), &
@@ -715,7 +715,7 @@ contains
         ! settings of an extension are those of the expected settings, unset where these
         ! have none, which the comparisons of the settings values leave out
         !
-        use opentrustregion, only: settings_type
+        use opentrustregion_core, only: settings_type
 
         class(settings_type), intent(in) :: settings, expected
 

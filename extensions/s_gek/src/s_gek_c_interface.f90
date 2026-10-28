@@ -6,7 +6,7 @@
 
 module otr_s_gek_c_interface
 
-    use opentrustregion, only: ip, rp, update_orbs_type, obj_func_type
+    use opentrustregion_core, only: ip, rp, update_orbs_type, obj_func_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
     use otr_s_gek, only: change_reference_type, standard_s_gek_factory => s_gek_factory
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_f_procpointer, &
@@ -74,7 +74,7 @@ contains
         ! of the solver state, and writes the solver settings the factory wired back
         ! into the C solver settings
         !
-        use opentrustregion, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
                                obj_func_f_wrapper
         use otr_s_gek, only: s_gek_settings_type, default_s_gek_settings, &
@@ -238,7 +238,7 @@ contains
         !
         use otr_s_gek, only: default_s_gek_settings
 
-        type(s_gek_settings_type_c), intent(inout) :: settings_c
+        type(s_gek_settings_type_c), intent(out) :: settings_c
 
         settings_c = default_s_gek_settings
 

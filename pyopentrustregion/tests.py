@@ -7,19 +7,20 @@
 import gc
 import os
 import sys
+import copy
+import signal
 import threading
 import unittest
 import warnings
 import weakref
-from importlib import resources
 from ctypes import (
-    CDLL,
     c_bool,
     pointer,
     c_char_p,
     c_void_p,
-    c_size_t,
     sizeof,
+    memset,
+    addressof,
     Array,
     byref,
     Structure,
@@ -28,96 +29,48 @@ from ctypes import (
     string_at,
 )
 from unittest.mock import patch
+from functools import partial
+from types import SimpleNamespace
 from pathlib import Path
 import numpy as np
 
-# check if pyopentrustregion is installed or import it from the source tree
-try:
-    from pyopentrustregion.python_interface import (
-        SolverSettings,
-        StabilitySettings,
-        SolverState,
-        StabilityState,
-        solver,
-        stability_check,
-        c_int,
-        c_real,
-        ext,
-        conda_prefix,
-        UpdateOrbsInterface,
-        c_buffer,
-        write_back,
-        raise_on_failure,
-        hess_x_interface_type,
-        precond_interface_type,
-        precond_pd_interface_type,
-        project_interface_type,
-        get_extra_trial_vectors_interface_type,
-        conv_check_interface_type,
-        logger_interface_type,
-    )
-except ImportError:
+# when run as a script, import the package this file belongs to rather than another
+# one that is installed
+if not __package__:
     sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
-    from pyopentrustregion.python_interface import (
-        SolverSettings,
-        StabilitySettings,
-        SolverState,
-        StabilityState,
-        solver,
-        stability_check,
-        c_int,
-        c_real,
-        ext,
-        conda_prefix,
-        UpdateOrbsInterface,
-        c_buffer,
-        write_back,
-        raise_on_failure,
-        hess_x_interface_type,
-        precond_interface_type,
-        precond_pd_interface_type,
-        project_interface_type,
-        get_extra_trial_vectors_interface_type,
-        conv_check_interface_type,
-        logger_interface_type,
-    )
+from pyopentrustregion.python_interface import (
+    SolverSettings,
+    StabilitySettings,
+    SolverState,
+    StabilityState,
+    solver,
+    stability_check,
+    c_int,
+    c_real,
+    ext,
+    _load_lib,
+    interruption_state,
+    defer_interruption,
+    ObjFuncInterface,
+    HessXInterface,
+    UpdateOrbsInterface,
+    c_buffer,
+    write_back,
+    raise_on_failure,
+    raise_callback_error,
+    call_library,
+    check_struct_sizes,
+    hess_x_interface_type,
+    precond_interface_type,
+    precond_pd_interface_type,
+    project_interface_type,
+    get_extra_trial_vectors_interface_type,
+    conv_check_interface_type,
+    logger_interface_type,
+)
 
-lib = None
-
-# try to load from installed package (conda)
-lib_name = f"libotrtestsuite.{ext}"
-conda_path_unix = conda_prefix / "lib" / lib_name
-conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
-if conda_path_unix.exists():
-    lib = CDLL(str(conda_path_unix))
-elif conda_path_wind.exists():
-    lib = CDLL(str(conda_path_wind))
-
-# fallback: try to load from installed package (site-packages)
-if lib is None:
-    lib_path = resources.files("pyopentrustregion") / f"libotrtestsuite.{ext}"
-    if lib_path.is_file():
-        lib = CDLL(str(lib_path))
-
-# fallback: try to load from same directory (editable install)
-if lib is None:
-    local_path = os.path.join(os.path.dirname(__file__), f"libotrtestsuite.{ext}")
-    if os.path.exists(local_path):
-        lib = CDLL(local_path)
-
-# fallback: try to load from ../build (development build)
-if lib is None:
-    build_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "../build", f"libotrtestsuite.{ext}")
-    )
-    if os.path.exists(build_path):
-        lib = CDLL(build_path)
-
-# if all failed
-if lib is None:
-    raise FileNotFoundError(
-        f"Cannot find any of the expected libraries: libotrtestsuite.{ext}"
-    )
+# load the testsuite library
+lib = _load_lib([f"libotrtestsuite.{ext}"])
 
 
 def print_separator(string: str):
@@ -217,8 +170,12 @@ fortran_tests = {
         "precond_pd_f_wrapper",
         "project_f_wrapper",
         "solver_c_wrapper",
+        "solver_settings_size",
+        "solver_state_size",
         "stability_check_c_wrapper",
         "stability_hess_x_f_wrapper",
+        "stability_settings_size",
+        "stability_state_size",
         "store_optional_c_callbacks",
         "update_orbs_f_wrapper",
     ],
@@ -253,8 +210,6 @@ lib.get_reference_solver_values.argtypes = [
     c_char_p,
 ]
 lib.get_reference_solver_values.restype = None
-lib.solver_settings_size.restype = c_size_t
-lib.stability_settings_size.restype = c_size_t
 
 # define signatures of the Fortran functions providing the reference states
 lib.reference_state_field.argtypes = [c_char_p]
@@ -263,8 +218,6 @@ lib.get_reference_solver_state_values.argtypes = [POINTER(SolverState.c_struct)]
 lib.get_reference_solver_state_values.restype = None
 lib.get_reference_stability_state_values.argtypes = [POINTER(StabilityState.c_struct)]
 lib.get_reference_stability_state_values.restype = None
-lib.solver_state_size.restype = c_size_t
-lib.stability_state_size.restype = c_size_t
 
 
 def reference(name, field_type):
@@ -297,6 +250,60 @@ def reference_state(name, field_type):
     if field_type == c_int:
         return int(value)
     return value
+
+
+def check_callback_interfaces(test_name, interfaces, read_only, input_array):
+    """
+    this function checks that interfaces to Python callback functions, given by name
+    as functions calling the interface with a callback function and an exception
+    collector, report an exception or an interruption raised by the callback function
+    as an error and keep it, and that those named in read_only hand the callback
+    function their input, the given array, read-only as its first argument, so that
+    writing into it is reported as an error and leaves the input unchanged
+    """
+    test_passed = True
+
+    def raising(error_type):
+        def callback(*args):
+            raise error_type("callback function failure")
+
+        return callback
+
+    for error_type in (ValueError, KeyboardInterrupt):
+        for name, call in interfaces.items():
+            exception = {}
+            if call(raising(error_type), exception) != 1:
+                print(
+                    f" {test_name} failed: {error_type.__name__} raised by {name} not "
+                    "reported as error."
+                )
+                test_passed = False
+            if not isinstance(exception.get("exc"), error_type):
+                print(
+                    f" {test_name} failed: {error_type.__name__} raised by {name} not "
+                    "kept."
+                )
+                test_passed = False
+
+    def writing_into_input(array, *args):
+        array += 1.0
+
+    original = input_array.copy()
+    for name in read_only:
+        exception = {}
+        error = interfaces[name](writing_into_input, exception)
+        if error != 1 or not isinstance(exception.get("exc"), ValueError):
+            print(
+                f" {test_name} failed: Writing into the input of the {name} not "
+                "reported as error."
+            )
+            test_passed = False
+        if not np.array_equal(input_array, original):
+            print(f" {test_name} failed: Input of the {name} changed.")
+            test_passed = False
+            input_array[...] = original
+
+    return test_passed
 
 
 # define function to add tests to test classes
@@ -599,6 +606,61 @@ class PyInterfaceUnitTests(unittest.TestCase):
         c_settings_kept = bytes(settings.settings_c) == c_settings
         if not c_settings_kept:
             print(" test_solver_py_interface failed: C settings changed by the calls.")
+        # an orbital update that raises makes the solver fail with the exception as the
+        # cause of the reported error, which a library calling it right away shows
+        update_orbs_failure = ValueError("orbital update failure")
+
+        def raising_update_orbs(kappa, grad, h_diag):
+            raise update_orbs_failure
+
+        def library_calling_update_orbs(update_orbs_interface, *args):
+            vector = np.zeros(n_param)
+            vector_ptr = vector.ctypes.data_as(POINTER(c_real))
+            return update_orbs_interface(
+                vector_ptr,
+                pointer(c_real()),
+                vector_ptr,
+                vector_ptr,
+                pointer(hess_x_interface_type()),
+                None,
+            )
+
+        update_orbs_error_reported = False
+        with patch(
+            "pyopentrustregion.python_interface.lib.solver",
+            library_calling_update_orbs,
+        ):
+            try:
+                solver(raising_update_orbs, mock_obj_func, n_param)
+            except RuntimeError as e:
+                update_orbs_error_reported = e.__cause__ is update_orbs_failure
+        if not update_orbs_error_reported:
+            print(
+                " test_solver_py_interface failed: Exception raised by orbital update "
+                "was not reported."
+            )
+
+        # the solver marks the library as innermost while it runs, around the callback
+        # function marked within it, and raises an interruption of a callback function
+        # as it is
+        interruption = KeyboardInterrupt()
+        marks = []
+
+        def interrupted_obj_func(kappa):
+            marks.append(interruption_state.stack)
+            raise interruption
+
+        raised = None
+        try:
+            solver(mock_update_orbs, interrupted_obj_func, n_param, settings)
+        except KeyboardInterrupt as e:
+            raised = e
+        interruption_raised = raised is interruption and marks == [(False, True)]
+        if not interruption_raised:
+            print(
+                " test_solver_py_interface failed: Library not marked as innermost or "
+                "interruption of callback function not raised."
+            )
 
         # call solver python interface without settings, which have to be passed as
         # none so that the library uses its default settings, the results of the mock
@@ -623,6 +685,8 @@ class PyInterfaceUnitTests(unittest.TestCase):
             and logger_error_reported
             and callback_error_reported
             and c_settings_kept
+            and update_orbs_error_reported
+            and interruption_raised
             and no_settings_passed,
             "test_solver_py_interface failed",
         )
@@ -780,6 +844,67 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "Hessian linear transformation was not reported."
             )
 
+        # the stability check marks the library as innermost while it runs, around the
+        # callback function marked within it, and raises an interruption of a callback
+        # function as it is
+        interruption = KeyboardInterrupt()
+        marks = []
+
+        def interrupted_hess_x(x, hess_x):
+            marks.append(interruption_state.stack)
+            raise interruption
+
+        raised = None
+        try:
+            stability_check(h_diag, interrupted_hess_x, n_param, settings)
+        except KeyboardInterrupt as e:
+            raised = e
+        interruption_raised = raised is interruption and marks == [(False, True)]
+        if not interruption_raised:
+            print(
+                " test_stability_check_py_interface failed: Library not marked as "
+                "innermost or interruption of callback function not raised."
+            )
+
+        # a Hessian diagonal given as a strided view, of another type or as a list is
+        # passed with its values, while a Hessian diagonal of another length and an
+        # array for the direction which the library can not write into are refused
+        matrix = np.zeros((n_param, n_param))
+        np.fill_diagonal(matrix, 3.0)
+        h_diag_converted = True
+        for h_diag_given, case in [
+            (np.diag(matrix), "a strided view"),
+            (np.full(n_param, 3.0, dtype=np.float32), "a single precision array"),
+            ([3.0] * n_param, "a list"),
+        ]:
+            interface_flag.value = False
+            stability_check(h_diag_given, mock_hess_x, n_param, settings)
+            if not interface_flag.value:
+                print(
+                    " test_stability_check_py_interface failed: Hessian diagonal "
+                    f"given as {case} not passed correctly."
+                )
+                h_diag_converted = False
+        read_only = np.zeros(n_param)
+        read_only.flags.writeable = False
+        wrong_inputs_refused = True
+        for h_diag_given, kappa_given, case in [
+            (np.full(n_param + 1, 3.0), None, "Hessian diagonal of another length"),
+            (h_diag, np.zeros(n_param + 1), "Direction of another length"),
+            (h_diag, np.zeros(n_param, dtype=np.float32), "Single precision direction"),
+            (h_diag, np.zeros(2 * n_param)[::2], "Strided direction"),
+            (h_diag, read_only, "Read-only direction"),
+            (h_diag, [0.0] * n_param, "Direction given as a list"),
+        ]:
+            try:
+                stability_check(
+                    h_diag_given, mock_hess_x, n_param, settings, kappa=kappa_given
+                )
+                print(f" test_stability_check_py_interface failed: {case} not refused.")
+                wrong_inputs_refused = False
+            except ValueError:
+                pass
+
         # call stability check python interface without settings, which have to be
         # passed as none so that the library uses its default settings, the results of
         # the mock start opposite to the expected ones
@@ -808,6 +933,9 @@ class PyInterfaceUnitTests(unittest.TestCase):
             and stable_with_failed_logger
             and stable_without_direction
             and callback_error_reported
+            and interruption_raised
+            and h_diag_converted
+            and wrong_inputs_refused
             and no_settings_passed,
             "test_stability_check_py_interface failed",
         )
@@ -819,12 +947,13 @@ class PyInterfaceUnitTests(unittest.TestCase):
         this function checks that the optional callback functions of a settings object
         are unset and that every other field holds its reference value, the names of
         the stability check settings carry the prefix "stability_settings.", the host
-        context is skipped since the Python wrapper never writes it
+        context and the initialization flag are skipped since the Python wrapper
+        exposes neither
         """
         test_passed = True
         for field_info in settings.c_struct._fields_:
             field_name, field_type = field_info[:2]
-            if field_name == "context":
+            if field_name in ("context", "initialized"):
                 continue
             if field_type == c_void_p:
                 if getattr(settings, field_name) is not None:
@@ -856,6 +985,163 @@ class PyInterfaceUnitTests(unittest.TestCase):
         return test_passed
 
     @staticmethod
+    def _settings_values(settings):
+        """
+        this function returns the bytes of the C struct of a settings object without
+        the C callback functions, which every settings object builds for itself, also
+        those of the nested stability check settings
+        """
+        settings_c = type(settings.settings_c).from_buffer_copy(settings.settings_c)
+        structs = [(settings_c, settings)]
+        if hasattr(settings, "stability_settings"):
+            structs.append((settings_c.stability_settings, settings.stability_settings))
+        for struct, owner in structs:
+            for name in owner.callback_fields:
+                setattr(struct, name, None)
+        return bytes(settings_c)
+
+    def _settings_safeguarded(self, test_name, settings):
+        """
+        this function checks that a settings object accepts no attribute that is not a
+        setting or a callback function and that its copies hold the settings in a C
+        struct of their own, a copy sharing the callback functions and a deep copy
+        copying them, also for the nested stability check settings
+        """
+        test_passed = True
+
+        # neither the initialization flag nor the host context nor a misspelled
+        # setting can be set
+        for name in ["initialized", "context", "conv_tl"]:
+            try:
+                setattr(settings, name, 0)
+                print(f" {test_name} failed: Attribute {name} could be set.")
+                test_passed = False
+            except AttributeError:
+                pass
+
+        # change a setting, so that only a copy of the values holds it, and set a
+        # callback function that a deep copy copies, on the nested settings too
+        all_settings = [settings]
+        if hasattr(settings, "stability_settings"):
+            all_settings.append(settings.stability_settings)
+        for some_settings in all_settings:
+            some_settings.conv_tol = 3 * some_settings.conv_tol
+            some_settings.precond = partial(self._mock_precond)
+
+        for copy_function, shared, case in [
+            (copy.copy, True, "copy"),
+            (copy.deepcopy, False, "deep copy"),
+        ]:
+            settings_copy = copy_function(settings)
+            copies = [settings_copy]
+            if hasattr(settings_copy, "stability_settings"):
+                copies.append(settings_copy.stability_settings)
+            for original, duplicate in zip(all_settings, copies):
+                # the copy holds the same settings, a change of which leaves the
+                # original unchanged
+                if self._settings_values(duplicate) != self._settings_values(original):
+                    print(f" {test_name} failed: The {case} holds other settings.")
+                    test_passed = False
+                conv_tol = original.conv_tol
+                duplicate.conv_tol = 2 * conv_tol
+                if original.conv_tol != conv_tol:
+                    print(
+                        f" {test_name} failed: Changing the {case} changed the "
+                        "original."
+                    )
+                    test_passed = False
+
+                # a copy shares the callback functions, a deep copy copies them
+                if (duplicate.precond is original.precond) != shared or not callable(
+                    duplicate.precond
+                ):
+                    print(
+                        f" {test_name} failed: Callback function wrong for the "
+                        f"{case}."
+                    )
+                    test_passed = False
+
+        # settings with a context, which only the wiring of a factory sets, whose object
+        # calls the callback functions of these settings, can not be copied, also when
+        # nested
+        for some_settings in all_settings:
+            some_settings.settings_c.context = 0x1000
+            for copy_function, case in [
+                (copy.copy, "copy"),
+                (copy.deepcopy, "deep copy"),
+            ]:
+                try:
+                    copy_function(some_settings)
+                    print(f" {test_name} failed: Wired settings allow a {case}.")
+                    test_passed = False
+                except TypeError:
+                    pass
+            some_settings.settings_c.context = None
+
+        return test_passed
+
+    @staticmethod
+    def _callbacks_wired(test_name, settings_class):
+        """
+        this function checks that the C callback functions of a settings object report
+        an exception raised by the callable assigned to a callback function during a
+        call as an error and keep it with the exceptions of the call, also for the
+        nested stability check settings
+        """
+        test_passed = True
+        n_param = 2
+        vector = np.zeros(n_param)
+        vector_ptr = vector.ctypes.data_as(POINTER(c_real))
+        arguments = {
+            "precond": (vector_ptr, pointer(c_real(1.0)), vector_ptr),
+            "precond_pd": (vector_ptr, vector_ptr),
+            "project": (vector_ptr,),
+            "get_extra_trial_vectors": (vector_ptr, 1),
+            "conv_check": (pointer(c_bool()),),
+            "stability_hess_x": (vector_ptr, vector_ptr),
+            "approx_hess_x": (vector_ptr, vector_ptr),
+        }
+
+        def raising(failure):
+            def callback(*args):
+                raise failure
+
+            return callback
+
+        # every callback function with an error code raises an exception of its own
+        settings = settings_class()
+        all_settings = [(settings, "")]
+        if hasattr(settings, "stability_settings"):
+            all_settings.append((settings.stability_settings, "stability_settings."))
+        failures = {}
+        for some_settings, prefix in all_settings:
+            for name in arguments.keys() & some_settings.callback_fields.keys():
+                failures[prefix + name] = ValueError(prefix + name)
+                setattr(some_settings, name, raising(failures[prefix + name]))
+
+        # hand the settings the exception collector of a call and call the C callback
+        # function of each callback function
+        exception = {}
+        settings.prepare_call(n_param, exception)
+        for some_settings, prefix in all_settings:
+            for name in arguments.keys() & some_settings.callback_fields.keys():
+                exception.clear()
+                interface = cast(
+                    c_void_p(getattr(some_settings.settings_c, name)),
+                    some_settings.callback_fields[name][1],
+                )
+                if interface(*arguments[name], None) != 1 or (
+                    exception.get("exc") is not failures[prefix + name]
+                ):
+                    print(
+                        f" {test_name} failed: Exception raised by {prefix}{name} not "
+                        "reported as error or not kept."
+                    )
+                    test_passed = False
+
+        return test_passed
+
+    @staticmethod
     def _state_holds_reference(test_name, state, prefix, location=""):
         """
         this function checks that every field of a state object holds its reference
@@ -882,6 +1168,21 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 test_passed = False
         return test_passed
 
+    def _state_copies_kept(self, test_name, state, prefix):
+        """
+        this function checks that a copy and a deep copy of a state holding the
+        reference values keep them when the original state is reset, since they hold
+        them in a C struct of their own
+        """
+        test_passed = True
+        copies = [copy.copy(state), copy.deepcopy(state)]
+        memset(addressof(state.state_c), 0, sizeof(state.c_struct))
+        for state_copy, case in zip(copies, ["copy", "deep copy"]):
+            test_passed &= self._state_holds_reference(
+                test_name, state_copy, prefix, f" for the {case} of a reset state"
+            )
+        return test_passed
+
     @staticmethod
     def _state_holds_defaults(test_name, state, location=""):
         """
@@ -905,22 +1206,65 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 test_passed = False
         return test_passed
 
+    def test_defer_interruption(self):
+        """
+        this function tests that the handler of SIGINT only records an interruption
+        while the library runs and raises it otherwise
+        """
+        test_passed = True
+        try:
+            for stack, deferred, case in [
+                ((False,), True, "while the library is innermost"),
+                ((False, True, False), True, "while a nested call is innermost"),
+                ((False, True), False, "while a callback function is innermost"),
+                ((), False, "outside a call into the library"),
+            ]:
+                interruption_state.stack = stack
+                interruption_state.pending = None
+                raised = False
+                try:
+                    defer_interruption(signal.SIGINT, None)
+                except KeyboardInterrupt:
+                    raised = True
+                if raised == deferred:
+                    print(
+                        " test_defer_interruption failed: Interruption "
+                        f"{'raised' if raised else 'not raised'} {case}."
+                    )
+                    test_passed = False
+                if (
+                    isinstance(interruption_state.pending, KeyboardInterrupt)
+                    != deferred
+                ):
+                    print(
+                        " test_defer_interruption failed: Interruption "
+                        f"{'not recorded' if deferred else 'recorded'} {case}."
+                    )
+                    test_passed = False
+        finally:
+            interruption_state.stack = ()
+            interruption_state.pending = None
+
+        self.assertTrue(test_passed, "test_defer_interruption failed")
+        print(" test_defer_interruption PASSED")
+
     def test_callback_interfaces(self):
         """
         this function tests that the interfaces to the Python callback functions,
         those of the settings reached through the C callback functions the settings
-        build, report an exception raised by a callback function as an error and keep
-        it, also a call before the number of parameters is known, that the
-        convergence check interfaces pass on the result and that the logging interface
-        keeps the first exception the logging function raises
+        build, report an exception or an interruption as an error and keep it, also
+        one of the interface itself and a call before the number of parameters is
+        known, that they hand the callback functions their inputs read-only and mark
+        a callback function as innermost while it runs, that the convergence check
+        interfaces pass on the result and that the logging interface keeps its first
+        exception and records an interruption
         """
         test_passed = True
         n_param = 2
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
-
-        def raising(*args):
-            raise ValueError("callback function failure")
+        output = np.zeros(n_param)
+        output_ptr = output.ctypes.data_as(POINTER(c_real))
 
         # settings whose C callback functions are called below, kept alive until then,
         # since these belong to the settings and a garbage collection frees them
@@ -938,79 +1282,64 @@ class PyInterfaceUnitTests(unittest.TestCase):
             called_settings.append(settings)
             return interface_type(getattr(settings.settings_c, name))
 
-        for name, call in [
-            (
-                "orbital update",
-                lambda exc: UpdateOrbsInterface(raising, n_param, exc).call(
-                    vector_ptr, pointer(c_real()), vector_ptr, vector_ptr, None
-                ),
+        # every interface, called with a callback function and an exception collector,
+        # with the vector as its input and the output as its output
+        interfaces = {
+            "objective function": lambda func, exc: ObjFuncInterface(
+                func, n_param, exc
+            )(vector_ptr, pointer(c_real()), None),
+            "Hessian linear transformation": lambda func, exc: HessXInterface(
+                func, n_param, exc
+            )(vector_ptr, output_ptr, None),
+            "orbital update": lambda func, exc: UpdateOrbsInterface(func, n_param, exc)(
+                vector_ptr, pointer(c_real()), output_ptr, output_ptr, None, None
             ),
-            (
-                "preconditioner",
-                lambda exc: settings_callback(
-                    SolverSettings(), "precond", raising, precond_interface_type, exc
-                )(vector_ptr, pointer(c_real(1.0)), vector_ptr, None),
-            ),
-            (
-                "positive-definite preconditioner",
-                lambda exc: settings_callback(
-                    SolverSettings(),
-                    "precond_pd",
-                    raising,
-                    precond_pd_interface_type,
-                    exc,
-                )(vector_ptr, vector_ptr, None),
-            ),
-            (
-                "projection",
-                lambda exc: settings_callback(
-                    SolverSettings(), "project", raising, project_interface_type, exc
-                )(vector_ptr, None),
-            ),
-            (
-                "extra trial vector function",
-                lambda exc: settings_callback(
-                    SolverSettings(),
-                    "get_extra_trial_vectors",
-                    raising,
-                    get_extra_trial_vectors_interface_type,
-                    exc,
-                )(vector_ptr, 1, None),
-            ),
-            (
-                "convergence check",
-                lambda exc: settings_callback(
-                    SolverSettings(),
-                    "conv_check",
-                    raising,
-                    conv_check_interface_type,
-                    exc,
-                )(pointer(c_bool()), None),
-            ),
-            (
-                "Hessian linear transformation of the stability check",
-                lambda exc: settings_callback(
+            "preconditioner": lambda func, exc: settings_callback(
+                SolverSettings(), "precond", func, precond_interface_type, exc
+            )(vector_ptr, pointer(c_real(1.0)), output_ptr, None),
+            "positive-definite preconditioner": lambda func, exc: settings_callback(
+                SolverSettings(), "precond_pd", func, precond_pd_interface_type, exc
+            )(vector_ptr, output_ptr, None),
+            "projection": lambda func, exc: settings_callback(
+                SolverSettings(), "project", func, project_interface_type, exc
+            )(vector_ptr, None),
+            "extra trial vector function": lambda func, exc: settings_callback(
+                SolverSettings(),
+                "get_extra_trial_vectors",
+                func,
+                get_extra_trial_vectors_interface_type,
+                exc,
+            )(output_ptr, 1, None),
+            "convergence check": lambda func, exc: settings_callback(
+                SolverSettings(), "conv_check", func, conv_check_interface_type, exc
+            )(pointer(c_bool()), None),
+            "Hessian linear transformation of the stability check": (
+                lambda func, exc: settings_callback(
                     SolverSettings(),
                     "stability_hess_x",
-                    raising,
+                    func,
                     hess_x_interface_type,
                     exc,
-                )(vector_ptr, vector_ptr, None),
+                )(vector_ptr, output_ptr, None)
             ),
-        ]:
-            exception = {}
-            if call(exception) != 1:
-                print(
-                    f" test_callback_interfaces failed: Exception raised by {name} "
-                    "not reported as error."
-                )
-                test_passed = False
-            if not isinstance(exception.get("exc"), ValueError):
-                print(
-                    f" test_callback_interfaces failed: Exception raised by {name} "
-                    "not kept."
-                )
-                test_passed = False
+        }
+
+        # every interface reports an exception or an interruption as an error and keeps
+        # it, and those whose callback function receives an input hand it over
+        # read-only
+        test_passed &= check_callback_interfaces(
+            "test_callback_interfaces",
+            interfaces,
+            [
+                "objective function",
+                "Hessian linear transformation",
+                "orbital update",
+                "preconditioner",
+                "positive-definite preconditioner",
+                "Hessian linear transformation of the stability check",
+            ],
+            vector,
+        )
 
         # a callback function of settings called before the number of parameters of a
         # call is known reports an error
@@ -1059,6 +1388,25 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 )
                 test_passed = False
 
+        # the Hessian linear transformation an orbital update returns reports an
+        # exception it raises as an error and keeps it with those of the orbital update
+        def raising_hess_x(x, hess_x):
+            raise ValueError("Hessian linear transformation failure")
+
+        exception = {}
+        hess_x_funptr = pointer(hess_x_interface_type())
+        UpdateOrbsInterface(
+            lambda kappa, grad, h_diag: (0.0, raising_hess_x), n_param, exception
+        ).call(vector_ptr, pointer(c_real()), vector_ptr, vector_ptr, hess_x_funptr)
+        if hess_x_funptr[0](vector_ptr, output_ptr, None) != 1 or not isinstance(
+            exception.get("exc"), ValueError
+        ):
+            print(
+                " test_callback_interfaces failed: Exception raised by Hessian linear "
+                "transformation returned by orbital update not reported."
+            )
+            test_passed = False
+
         # the convergence check interface passes on that the optimization has not
         # converged
         converged = c_bool(True)
@@ -1096,6 +1444,91 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "logging function not kept."
             )
             test_passed = False
+
+        # an exception raised by an interface itself, as for a pointer it can not
+        # write the result through, is reported as an error and kept
+        exception = {}
+        if ObjFuncInterface(lambda kappa: 0.0, n_param, exception)(
+            vector_ptr, None, None
+        ) != 1 or not isinstance(exception.get("exc"), TypeError):
+            print(
+                " test_callback_interfaces failed: Exception raised by interface not "
+                "reported as error."
+            )
+            test_passed = False
+
+        # an interface marks a callback function as innermost while it runs and
+        # unmarks it afterwards, also when it raises
+        try:
+            for error_type, case in [(None, "returns"), (ValueError, "raises")]:
+                interruption_state.stack = (False,)
+                marks = []
+
+                def marking(kappa):
+                    marks.append(interruption_state.stack)
+                    if error_type is not None:
+                        raise error_type("objective function failure")
+                    return 0.0
+
+                ObjFuncInterface(marking, n_param, {})(
+                    vector_ptr, pointer(c_real()), None
+                )
+                if marks != [(False, True)] or interruption_state.stack != (False,):
+                    print(
+                        " test_callback_interfaces failed: Callback function not "
+                        f"marked as innermost while it runs when it {case}."
+                    )
+                    test_passed = False
+        finally:
+            interruption_state.stack = ()
+
+        # the logging interface records an interruption, which the next callback
+        # function with an error code reports without being called
+        try:
+            interruption = KeyboardInterrupt()
+
+            def interrupted_logger(message):
+                raise interruption
+
+            exception = {}
+            settings_callback(
+                SolverSettings(),
+                "logger",
+                interrupted_logger,
+                logger_interface_type,
+                exception,
+            )(b"test", None)
+            settings_callback(
+                SolverSettings(),
+                "logger",
+                lambda message: None,
+                logger_interface_type,
+                exception,
+            )(b"test", None)
+            if interruption_state.pending is not interruption or "logger" in exception:
+                print(
+                    " test_callback_interfaces failed: Interruption of logging "
+                    "function not recorded."
+                )
+                test_passed = False
+            obj_func_calls = []
+            error = ObjFuncInterface(obj_func_calls.append, n_param, exception)(
+                vector_ptr, pointer(c_real()), None
+            )
+            if error != 1 or exception.get("exc") is not interruption or obj_func_calls:
+                print(
+                    " test_callback_interfaces failed: Recorded interruption not "
+                    "reported as error by next callback function."
+                )
+                test_passed = False
+            if interruption_state.pending is not None:
+                print(
+                    " test_callback_interfaces failed: Recorded interruption kept "
+                    "after it was reported."
+                )
+                test_passed = False
+        finally:
+            interruption_state.pending = None
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")
         print(" test_callback_interfaces PASSED")
@@ -1180,8 +1613,8 @@ class PyInterfaceUnitTests(unittest.TestCase):
         this function tests that an error returned by the library is raised with its
         code and the exception of a failed callback function as its cause, that a
         failed logging function is reported as a warning with its exception as the
-        cause both with and without an error and that nothing is reported without
-        either
+        cause both with and without an error, that nothing is reported without either
+        and that an interruption of a callback function is raised as it is
         """
         test_passed = True
         callback_failure = ValueError("callback function failure")
@@ -1243,8 +1676,250 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 )
                 test_passed = False
 
+        # an interruption of a callback function is raised as it is, rather than as an
+        # error of the library
+        interruption = KeyboardInterrupt()
+        raised = None
+        try:
+            raise_on_failure(7, {"exc": interruption}, "solver")
+        except BaseException as e:
+            raised = e
+        if raised is not interruption:
+            print(
+                " test_raise_on_failure failed: Interruption of callback function not "
+                "raised as it is."
+            )
+            test_passed = False
+
         self.assertTrue(test_passed, "test_raise_on_failure failed")
         print(" test_raise_on_failure PASSED")
+
+    def test_raise_callback_error(self):
+        """
+        this function tests that the error of a C function called from Python raises
+        a RuntimeError, with the exception of a failing Python callback function it
+        reached as its cause, while an interruption of such a function is raised as it
+        is and no error raises nothing
+        """
+        test_passed = True
+        failure = ValueError("callback function failure")
+        interruption = KeyboardInterrupt()
+        for error, exception, expected, case in [
+            (0, {"exc": failure}, None, "without error"),
+            (1, {"exc": failure}, failure, "with a failing callback function"),
+            (1, None, None, "without exception collector"),
+            (1, {"exc": interruption}, interruption, "with an interruption"),
+        ]:
+            raised = None
+            try:
+                raise_callback_error(error, exception, "C function raised error.")
+            except BaseException as e:
+                raised = e
+            if expected is interruption:
+                correct = raised is interruption
+            elif error:
+                correct = (
+                    isinstance(raised, RuntimeError) and raised.__cause__ is expected
+                )
+            else:
+                correct = raised is None
+            if not correct:
+                print(f" test_raise_callback_error failed: Wrong exception {case}.")
+                test_passed = False
+
+        self.assertTrue(test_passed, "test_raise_callback_error failed")
+        print(" test_raise_callback_error PASSED")
+
+    def test_call_library(self):
+        """
+        this function tests that a call into the library passes on the arguments and
+        the error code and marks the library as innermost, that it replaces Python's
+        default handler of SIGINT in the main thread only and restores it afterwards,
+        also when the call raises, and that it raises an interruption that arrived
+        during the call
+        """
+        test_passed = True
+        seen = []
+
+        def library(*args):
+            seen.append(
+                (args, interruption_state.stack, signal.getsignal(signal.SIGINT))
+            )
+            return 7
+
+        def check_restored(case):
+            if signal.getsignal(signal.SIGINT) is not signal.default_int_handler:
+                print(f" test_call_library failed: Handler not restored {case}.")
+                return False
+            if interruption_state.stack != ():
+                print(f" test_call_library failed: Marks not restored {case}.")
+                return False
+            return True
+
+        original_handler = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            # the outermost call from the main thread defers interruptions
+            seen.clear()
+            if call_library(library, 1, "a") != 7 or seen != [
+                ((1, "a"), (False,), defer_interruption)
+            ]:
+                print(
+                    " test_call_library failed: Outermost call from the main thread "
+                    "not made correctly."
+                )
+                test_passed = False
+            test_passed &= check_restored("after the outermost call")
+
+            # a nested call keeps the handler and nests its mark
+            seen.clear()
+            call_library(lambda: call_library(library))
+            if seen != [((), (False, False), defer_interruption)]:
+                print(" test_call_library failed: Nested call not made correctly.")
+                test_passed = False
+            test_passed &= check_restored("after a nested call")
+
+            # a call from another thread neither replaces the handler nor marks the
+            # main thread
+            seen.clear()
+            thread = threading.Thread(target=call_library, args=(library,))
+            thread.start()
+            thread.join()
+            if seen != [((), (False,), signal.default_int_handler)]:
+                print(
+                    " test_call_library failed: Call from another thread not made "
+                    "correctly."
+                )
+                test_passed = False
+            test_passed &= check_restored("after a call from another thread")
+
+            # a call raises the exception of the library and restores the handler
+            def failing_library():
+                raise ValueError("library failure")
+
+            try:
+                call_library(failing_library)
+                print(" test_call_library failed: Exception of library not raised.")
+                test_passed = False
+            except ValueError:
+                pass
+            test_passed &= check_restored("after a call that raises")
+
+            # an interruption the library received is raised when the call returns
+            interruption = KeyboardInterrupt()
+
+            def interrupted_library():
+                interruption_state.pending = interruption
+                return 0
+
+            raised = None
+            try:
+                call_library(interrupted_library)
+            except KeyboardInterrupt as e:
+                raised = e
+            if raised is not interruption or interruption_state.pending is not None:
+                print(
+                    " test_call_library failed: Interruption received by the library "
+                    "not raised when the call returns."
+                )
+                test_passed = False
+            test_passed &= check_restored("after an interruption")
+
+            # an interruption that arrives while the handler is restored, which Python
+            # handles while it switches the handler, is raised when the call returns,
+            # after the handler is restored
+            real_signal = signal.signal
+
+            def signal_handling_pending(signum, handler):
+                if handler is signal.default_int_handler:
+                    signal.getsignal(signum)(signum, None)
+                return real_signal(signum, handler)
+
+            raised = None
+            with patch.object(signal, "signal", signal_handling_pending):
+                try:
+                    call_library(library)
+                except KeyboardInterrupt as e:
+                    raised = e
+            if raised is None or interruption_state.pending is not None:
+                print(
+                    " test_call_library failed: Interruption that arrives while the "
+                    "handler is restored not raised when the call returns."
+                )
+                test_passed = False
+            test_passed &= check_restored("after an interruption while it is restored")
+
+            # another handler is kept
+            def custom_handler(signum, frame):
+                pass
+
+            signal.signal(signal.SIGINT, custom_handler)
+            seen.clear()
+            call_library(library)
+            if seen[0][2] is not custom_handler:
+                print(" test_call_library failed: Other handler replaced.")
+                test_passed = False
+            if signal.getsignal(signal.SIGINT) is not custom_handler:
+                print(" test_call_library failed: Other handler not kept.")
+                test_passed = False
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
+            interruption_state.stack = ()
+            interruption_state.pending = None
+
+        self.assertTrue(test_passed, "test_call_library failed")
+        print(" test_call_library PASSED")
+
+    def test_check_struct_sizes(self):
+        """
+        this function tests that the check of the structure sizes passes for a library
+        whose structures have the sizes of the Python structures and raises an import
+        error for one whose structure differs in size or which exports no sizes
+        """
+        test_passed = True
+        sizes = {
+            "solver_settings": sizeof(SolverSettings.c_struct),
+            "stability_settings": sizeof(StabilitySettings.c_struct),
+            "solver_state": sizeof(SolverState.c_struct),
+            "stability_state": sizeof(StabilityState.c_struct),
+        }
+
+        def mock_library(sizes):
+            """
+            this function returns a mock library which exports the given sizes
+            """
+            return SimpleNamespace(
+                _name="mock library",
+                **{
+                    f"{name}_size": (lambda size=size: size)
+                    for name, size in sizes.items()
+                },
+            )
+
+        # the check passes for the sizes of the Python structures
+        try:
+            check_struct_sizes(mock_library(sizes))
+        except ImportError:
+            print(" test_check_struct_sizes failed: Raised for matching sizes.")
+            test_passed = False
+
+        # the check raises for a structure of another size and for a missing size
+        for name in sizes:
+            for wrong_sizes, case in [
+                ({**sizes, name: sizes[name] + 8}, f"for a differing {name} size"),
+                (
+                    {key: size for key, size in sizes.items() if key != name},
+                    f"for a missing {name} size",
+                ),
+            ]:
+                try:
+                    check_struct_sizes(mock_library(wrong_sizes))
+                    print(f" test_check_struct_sizes failed: Not raised {case}.")
+                    test_passed = False
+                except ImportError:
+                    pass
+
+        self.assertTrue(test_passed, "test_check_struct_sizes failed")
+        print(" test_check_struct_sizes PASSED")
 
     @patch.object(SolverSettings, "init_c_struct", lib.mock_init_solver_settings)
     def test_solver_settings(self):
@@ -1256,6 +1931,8 @@ class PyInterfaceUnitTests(unittest.TestCase):
         test_passed = self._settings_hold_reference(
             "test_solver_settings", settings, ""
         )
+        test_passed &= self._settings_safeguarded("test_solver_settings", settings)
+        test_passed &= self._callbacks_wired("test_solver_settings", SolverSettings)
 
         # assigning a callable writes the C callback function the settings built for it
         # into the C settings and reading returns the callable
@@ -1309,13 +1986,14 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         # a C function wired into the settings or their nested settings is read as a
         # callable around it, which hands it the arguments, calls it with the context
-        # of the settings it was read from, passes on its outputs, raises its error and
-        # keeps these settings alive
+        # of the settings it was read from while marking the library as innermost,
+        # passes on its outputs, raises its error and keeps these settings alive
         settings.settings_c.context = 6789
         settings.settings_c.stability_settings.context = 4321
         x = np.random.random(n_param)
         n_vectors = 2
         received = []
+        marks = []
         error_code = 0
 
         def as_vector(ptr):
@@ -1436,6 +2114,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
             def c_function(*args, body=body, name=name):
                 received.append((name, args[-1]))
+                marks.append(interruption_state.stack)
                 body(*args[:-1])
                 return None if name == "logger" else error_code
 
@@ -1444,6 +2123,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 case_settings.settings_c, name, cast(c_functions[-1], c_void_p).value
             )
             received.clear()
+            marks.clear()
             error_code = 0
             func = getattr(case_settings, name)
             result = read_and_call(func)
@@ -1451,6 +2131,12 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 print(
                     f" test_solver_settings failed: C function wired as {case} not "
                     "called with the context of these settings."
+                )
+                test_passed = False
+            if marks != [(False,)]:
+                print(
+                    f" test_solver_settings failed: Library not marked as innermost "
+                    f"while the C function wired as {case} runs."
                 )
                 test_passed = False
             if name == "logger":
@@ -1546,6 +2232,10 @@ class PyInterfaceUnitTests(unittest.TestCase):
         test_passed = self._settings_hold_reference(
             "test_stability_settings", settings, "stability_settings."
         )
+        test_passed &= self._settings_safeguarded("test_stability_settings", settings)
+        test_passed &= self._callbacks_wired(
+            "test_stability_settings", StabilitySettings
+        )
         self.assertTrue(test_passed, "test_stability_settings failed")
         print(" test_stability_settings PASSED")
 
@@ -1559,6 +2249,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         test_passed = self._state_holds_defaults("test_solver_state", state)
         lib.get_reference_solver_state_values(byref(state.state_c))
         test_passed &= self._state_holds_reference("test_solver_state", state, "")
+        test_passed &= self._state_copies_kept("test_solver_state", state, "")
         try:
             state.n_update_orbs = 1
             print(" test_solver_state failed: Field could be set.")
@@ -1577,6 +2268,9 @@ class PyInterfaceUnitTests(unittest.TestCase):
         test_passed = self._state_holds_defaults("test_stability_state", state)
         lib.get_reference_stability_state_values(byref(state.state_c))
         test_passed &= self._state_holds_reference(
+            "test_stability_state", state, "stability_state."
+        )
+        test_passed &= self._state_copies_kept(
             "test_stability_state", state, "stability_state."
         )
         try:
@@ -1708,22 +2402,6 @@ class PyIntegrationTests(unittest.TestCase):
         """
         test_passed = True
 
-        # check that the settings structures have the size of the bind(C) settings
-        # types, so that a field missing from either is detected, which the field
-        # checks below would not read, and stop otherwise, since filling smaller
-        # settings would write past their end
-        for settings, size in [
-            (SolverSettings, lib.solver_settings_size()),
-            (StabilitySettings, lib.stability_settings_size()),
-        ]:
-            if sizeof(settings.c_struct) != size:
-                print(
-                    f" test_settings_layout failed: Size of {settings.__name__} "
-                    "structure differs from the library's."
-                )
-                test_passed = False
-        self.assertTrue(test_passed, "test_settings_layout failed")
-
         # names of the logicals, prefixed for the nested settings
         logicals = [
             name
@@ -1781,22 +2459,6 @@ class PyIntegrationTests(unittest.TestCase):
         from a state whose fields Fortran sets one by one to the reference values
         """
         test_passed = True
-
-        # check that the state structures have the size of the bind(C) state types,
-        # so that a field missing from either is detected, which the field checks
-        # below would not read, and stop otherwise, since filling a smaller state
-        # would write past its end
-        for state, size in [
-            (SolverState, lib.solver_state_size()),
-            (StabilityState, lib.stability_state_size()),
-        ]:
-            if sizeof(state.c_struct) != size:
-                print(
-                    f" test_state_layout failed: Size of {state.__name__} structure "
-                    "differs from the library's."
-                )
-                test_passed = False
-        self.assertTrue(test_passed, "test_state_layout failed")
 
         # check that every field is read back under its own name
         state_c = SolverState.c_struct()

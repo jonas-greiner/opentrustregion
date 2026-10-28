@@ -6,7 +6,7 @@
 
 module otr_rotation_qn_c_interface_mock
 
-    use opentrustregion, only: stderr
+    use opentrustregion_core, only: stderr
     use c_interface, only: c_ip
     use otr_rotation_qn_c_interface, only: rotation_qn_factory_c_wrapper, &
                                            init_rotation_qn_settings_c
@@ -143,7 +143,7 @@ contains
         use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use otr_rotation_qn_test_reference, only: get_reference_rotation_qn_values
 
-        type(rotation_qn_settings_type_c), intent(inout) :: settings
+        type(rotation_qn_settings_type_c), intent(out) :: settings
 
         ! set reference values without logging function and host context
         call get_reference_rotation_qn_values(settings)

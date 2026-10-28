@@ -6,7 +6,7 @@
 
 module otr_mo_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use test_reference, only: tol
     use, intrinsic :: iso_c_binding, only: c_bool
 
@@ -603,7 +603,8 @@ contains
         ! MOs, if given, as those of that channel and the closed-shell density matrix
         ! evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_mo, only: mo_factory_cs, mo_type, mo_settings_type, error_mo
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
@@ -747,7 +748,8 @@ contains
         ! coefficients of the caller, the irreps of their MOs, if given, and the
         ! open-shell density matrix evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_mo, only: mo_factory_os, mo_type, mo_settings_type, error_mo
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
@@ -880,8 +882,8 @@ contains
         ! record of the state and returns its orbital updating function and objective
         ! function
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type, &
-                                   verbosity_warning
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type, verbosity_warning
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
@@ -1590,7 +1592,7 @@ contains
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type, error_mo
         use otr_common, only: hess_x_callback
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, &

@@ -100,21 +100,18 @@ class TransportInterface(CallbackInterface):
 
     transport: TransportType
     n_param: int
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(self, geodesic_ptr, tangent_vector_ptr) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make the geodesic read-only
         geodesic = np.ctypeslib.as_array(geodesic_ptr, shape=(self.n_param,))
+        geodesic.flags.writeable = False
         tangent_vector = np.ctypeslib.as_array(
             tangent_vector_ptr, shape=(self.n_param,)
         )
 
         # transport and retrieve tangent vector
-        try:
-            self.transport(geodesic, tangent_vector)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        self.transport(geodesic, tangent_vector)
 
         return 0
 
@@ -128,18 +125,14 @@ class InitHessInterface(CallbackInterface):
 
     init_hess: InitHessType
     n_param: int
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(self, vector_ptr) -> int:
         # convert matrix pointers to numpy arrays
         vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
 
         # initialize Hessian and retrieve vector
-        try:
-            self.init_hess(vector)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        self.init_hess(vector)
 
         return 0
 

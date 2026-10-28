@@ -6,8 +6,8 @@
 
 module otr_rotation_qn
 
-    use opentrustregion, only: rp, ip, kw_len, settings_type, update_orbs_type, &
-                               hess_x_type, add_error_origin
+    use opentrustregion_core, only: rp, ip, kw_len, settings_type, update_orbs_type, &
+                                    hess_x_type, add_error_origin
     use otr_common, only: extension_type, provided_roles_type
 
     implicit none
@@ -110,7 +110,7 @@ contains
         ! callback functions keep receiving the host context, and which reads the state
         ! of the solver from the record the host also passes to the solver
         !
-        use opentrustregion, only: obj_func_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, solver_state_type
         use otr_common, only: extension_solver_settings_type, update_orbs_callback, &
                               obj_func_callback
 
@@ -181,7 +181,7 @@ contains
         ! this subroutine performs a sanity check for rotation QN input parameters,
         ! after converting the updating scheme to lowercase
         !
-        use opentrustregion, only: verbosity_error, string_to_lowercase
+        use opentrustregion_core, only: verbosity_error, string_to_lowercase
 
         type(rotation_qn_settings_type), intent(inout) :: settings
         integer(ip), intent(in) :: n_param
@@ -385,7 +385,7 @@ contains
         ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
         ! https://doi.org/10.1007/BF01582063
         !
-        use opentrustregion, only: numerical_zero, verbosity_error
+        use opentrustregion_core, only: numerical_zero, verbosity_error
 
         class(sr1_updating_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)
@@ -519,7 +519,7 @@ contains
         ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
         ! https://doi.org/10.1007/BF01582063
         !
-        use opentrustregion, only: numerical_zero, verbosity_error
+        use opentrustregion_core, only: numerical_zero, verbosity_error
 
         class(bfgs_updating_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)

@@ -6,7 +6,7 @@
 
 module otr_density_qn_mock
 
-    use opentrustregion, only: ip, stderr
+    use opentrustregion_core, only: ip, stderr
     use otr_density_qn, only: density_qn_factory_common
     use otr_common, only: extension_level_type
     use otr_density_qn_test_reference, only: ref_density_qn_settings
@@ -45,7 +45,8 @@ contains
         ! the solver settings at its level of the solver, lets the settings own it and
         ! adjusts them, as the factory does
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_density_qn, only: density_qn_settings_type, density_qn_mo_type, &
                                   default_density_qn_settings, &
                                   density_qn_evaluate_dm_cs_type, &

@@ -6,8 +6,9 @@
 
 module otr_oao
 
-    use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_state_type, add_error_origin
+    use opentrustregion_core, only: rp, ip, settings_type, obj_func_type, &
+                                    update_orbs_type, hess_x_type, solver_state_type, &
+                                    add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, &
                           evaluate_dm_cs_type, evaluate_dm_os_type, &
                           extension_solver_settings_type
@@ -139,7 +140,7 @@ contains
         ! function of either shell, if one is given, wires the solver settings with it
         ! and returns its orbital updating function and objective function
         !
-        use opentrustregion, only: verbosity_warning
+        use opentrustregion_core, only: verbosity_warning
         use otr_common, only: extension_type, provided_roles_type, &
                               compute_sqrt_and_inv_sqrt, update_orbs_callback, &
                               obj_func_callback, evaluate_dm_missing_warning_msg
@@ -235,7 +236,7 @@ contains
         !
         ! this subroutine performs a sanity check for OAO input parameters
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         class(orbital_settings_type), intent(in) :: settings
         integer(ip), intent(in) :: dm_ao_shape(3), ao_overlap_shape(2), n_particle, n_ao
@@ -626,7 +627,7 @@ contains
         ! occupied-occupied and virtual-virtual parts of the Fock matrix are not
         ! individually diagonal in the OAO basis
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         class(oao_type), intent(inout) :: self
         integer(ip), intent(out) :: error

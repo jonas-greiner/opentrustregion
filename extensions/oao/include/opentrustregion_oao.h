@@ -74,11 +74,12 @@ c_int oao_factory(c_real *dm_ao_c, const c_real *ao_overlap_c, c_int n_particle_
 #endif
 
 /* ------------------------------------------------------------------
- * Small C helper functions to mimic Fortran settings%init()
+ * Small C helper functions returning the default settings, which a declared Fortran
+ * settings object holds
  * ------------------------------------------------------------------ */
 
 static inline oao_settings_type oao_settings_init(void) {
-  oao_settings_type s = {0};
+  oao_settings_type s;
   init_oao_settings(&s);
   return s;
 }

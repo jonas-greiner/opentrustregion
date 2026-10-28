@@ -6,7 +6,7 @@
 
 module otr_s_gek_test_reference
 
-    use opentrustregion, only: rp, ip, kw_len, stderr
+    use opentrustregion_core, only: rp, ip, kw_len, stderr
     use c_interface, only: c_rp, c_ip
     use otr_s_gek, only: s_gek_settings_type
     use test_reference, only: n_param, tol, tol_c

@@ -6,7 +6,7 @@
 
 module otr_density_qn_test_reference
 
-    use opentrustregion, only: ip, rp, kw_len, stderr
+    use opentrustregion_core, only: ip, rp, kw_len, stderr
     use c_interface, only: c_ip, c_rp
     use otr_density_qn, only: density_qn_settings_type, &
                               density_qn_settings_uninitialized_warning_msg

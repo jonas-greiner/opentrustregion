@@ -23,6 +23,7 @@ from pyopentrustregion.python_interface import (
     c_buffer,
     write_back,
     raise_callback_error,
+    call_library,
 )
 
 if TYPE_CHECKING:
@@ -60,10 +61,10 @@ class GetResponseInterface(CallbackInterface):
     n_ao: int
     n_particle: int
     closed_shell: bool
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(self, dm_ao_ptr, response_ptr) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make the density matrix read-only
         if self.closed_shell:
             dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=2 * (self.n_ao,))
             response = np.ctypeslib.as_array(response_ptr, shape=2 * (self.n_ao,))
@@ -74,13 +75,10 @@ class GetResponseInterface(CallbackInterface):
             response = np.ctypeslib.as_array(
                 response_ptr, shape=(self.n_particle, self.n_ao, self.n_ao)
             )
+        dm_ao.flags.writeable = False
 
         # get response
-        try:
-            self.get_response(dm_ao, response)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        self.get_response(dm_ao, response)
 
         return 0
 
@@ -95,27 +93,24 @@ class EvaluateDMInterface(CallbackInterface):
     n_ao: int
     n_particle: int
     closed_shell: bool
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
     get_response_funptr: Optional[Any] = None
 
     def call(self, dm_ao_ptr, energy_ptr, fock_ptr, get_response_funptr) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make the density matrix read-only
         shape = (
             2 * (self.n_ao,)
             if self.closed_shell
             else (self.n_particle, self.n_ao, self.n_ao)
         )
         dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=shape)
+        dm_ao.flags.writeable = False
         fock = np.ctypeslib.as_array(fock_ptr, shape=shape) if fock_ptr else None
 
         # get energy, and the Fock matrix and response function where wanted
-        try:
-            energy_ptr[0], get_response = self.evaluate_dm(
-                dm_ao, fock, bool(get_response_funptr)
-            )
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        energy_ptr[0], get_response = self.evaluate_dm(
+            dm_ao, fock, bool(get_response_funptr)
+        )
 
         if get_response_funptr:
             if get_response is None:
@@ -125,8 +120,8 @@ class EvaluateDMInterface(CallbackInterface):
                 )
                 return 1
 
-            # attach the response interface to the object so that it persists in Python
-            # to ensure that it is not garbage collected when the factory completes
+            # keep the interface of the response function on this object so that it is
+            # not garbage collected while the library still calls it
             self.get_response_funptr = get_response_interface_type(
                 GetResponseInterface(
                     get_response,
@@ -151,7 +146,7 @@ class ObjFuncPyInterface:
 
     obj_func_funptr: Any
     saved_objects: Dict[str, Any]
-    _otr_exception: Optional[Dict[str, Exception]] = None
+    _otr_exception: Optional[Dict[str, BaseException]] = None
     context: Optional[int] = None
 
     def __call__(self, kappa: np.ndarray) -> float:
@@ -162,7 +157,7 @@ class ObjFuncPyInterface:
         kappa_ptr = c_buffer(kappa).ctypes.data_as(POINTER(c_real))
 
         # objective function
-        error = self.obj_func_funptr(kappa_ptr, byref(func), self.context)
+        error = call_library(self.obj_func_funptr, kappa_ptr, byref(func), self.context)
         raise_callback_error(
             error, self._otr_exception, "Objective function raised error."
         )
@@ -174,7 +169,7 @@ def extension_functions(
     update_orbs_funptr: Any,
     obj_func_funptr: Any,
     solver_settings: SolverSettings,
-    exception: Dict[str, Exception],
+    exception: Dict[str, BaseException],
     copy_back: Optional[Callable[[], None]] = None,
 ) -> Tuple[UpdateOrbsPyInterface, ObjFuncPyInterface]:
     """
@@ -256,7 +251,7 @@ class OrbitalOwner(ExtensionOwner):
         saved_objects: Dict[str, Any],
         n_ao: int,
         n_particle: int,
-        exception: Dict[str, Exception],
+        exception: Dict[str, BaseException],
         copy_back: Optional[Callable[[], None]] = None,
     ):
         super().__init__(extension, solver_settings, saved_objects)
@@ -325,7 +320,7 @@ class UpdateOrbsPyInterface:
     hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]] = None
     # collector of the exceptions of the factory call, which the solver adopts, so that
     # it chains the exceptions raised inside the callback functions the object calls
-    _otr_exception: Optional[Dict[str, Exception]] = None
+    _otr_exception: Optional[Dict[str, BaseException]] = None
     context: Optional[int] = None
     # function copying the orbitals back to the array of the caller after every update
     # if the library moves a copy of them
@@ -349,7 +344,8 @@ class UpdateOrbsPyInterface:
         # update orbital function and copy the orbitals back, also on failure, since
         # they may have been moved by then
         try:
-            error = self.update_orbs_funptr(
+            error = call_library(
+                self.update_orbs_funptr,
                 kappa_ptr,
                 byref(func),
                 grad_ptr,

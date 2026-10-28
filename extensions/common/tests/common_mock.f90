@@ -6,9 +6,9 @@
 
 module otr_common_mock
 
-    use opentrustregion, only: rp, ip, obj_func_type, update_orbs_type, hess_x_type, &
-                               precond_type, precond_pd_type, &
-                               get_extra_trial_vectors_type
+    use opentrustregion_core, only: rp, ip, obj_func_type, update_orbs_type, &
+                                    hess_x_type, precond_type, precond_pd_type, &
+                                    get_extra_trial_vectors_type
 
     implicit none
 

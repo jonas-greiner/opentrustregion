@@ -6,11 +6,11 @@
 
 import sys
 import unittest
-from importlib.util import find_spec
 from pathlib import Path
 
-# check if pyopentrustregion is installed or import it from the source tree
-if find_spec("pyopentrustregion") is None:
+# when run as a script, import the package this file belongs to rather than another
+# one that is installed
+if not __package__:
     sys.path.insert(0, str(Path(__file__).parent.parent.absolute()))
 
 # load standard tests

@@ -6,7 +6,7 @@
 
 module otr_mo_c_interface_mock
 
-    use opentrustregion, only: ip, stderr
+    use opentrustregion_core, only: ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type
     use otr_mo_c_interface, only: mo_factory_c_wrapper, init_mo_settings_c
     use otr_mo_test_reference, only: ref_mo_settings
@@ -214,7 +214,7 @@ contains
         use otr_mo_c_interface, only: mo_settings_type_c
         use otr_mo_test_reference, only: get_reference_mo_values
 
-        type(mo_settings_type_c), intent(inout) :: settings
+        type(mo_settings_type_c), intent(out) :: settings
 
         ! set reference values without logging function and host context
         call get_reference_mo_values(settings)

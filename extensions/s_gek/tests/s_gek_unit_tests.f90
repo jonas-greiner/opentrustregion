@@ -6,7 +6,7 @@
 
 module otr_s_gek_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use test_reference, only: tol, n_param
     use otr_s_gek, only: change_reference_type, s_gek_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -77,7 +77,8 @@ contains
         ! change of reference function and wires the solver settings with it and the
         ! record of the state
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, obj_func_type, &
+                                        solver_state_type
         use opentrustregion_unit_tests, only: setup_settings, test_context_type, logger
         use otr_common_test_reference, only: same_logger_and_context
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
@@ -372,7 +373,7 @@ contains
         ! that the S-GEK Hessian linear transformation never runs on a model without
         ! points, passing on the error of the addition
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: hess_x_callback
         use otr_common_mock, only: mock_update_orbs

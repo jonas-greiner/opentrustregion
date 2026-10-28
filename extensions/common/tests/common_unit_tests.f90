@@ -6,7 +6,7 @@
 
 module otr_common_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use test_reference, only: tol
     use otr_common, only: extension_type, orbital_basis_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -105,7 +105,7 @@ contains
         ! this subroutine is a mock host orbital update function which returns no
         ! Hessian linear transformation
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use otr_common_mock, only: mock_update_orbs
 
         real(rp), intent(in), target :: kappa(:)
@@ -290,7 +290,7 @@ contains
         ! this subroutine is the orbital update of the mock extension, which records
         ! its call and context and returns what the shared mock returns
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use otr_common_mock, only: mock_hess_x
 
         class(mock_extension_type), intent(inout) :: self
@@ -655,7 +655,7 @@ contains
         ! this subroutine is a mock of the orbital update of an orbital basis, which
         ! updates nothing
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
 
         class(mock_orbital_basis_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
@@ -797,7 +797,7 @@ contains
         ! random set of orthonormal basis vectors and then summing the outer products
         ! of these
         !
-        use opentrustregion, only: numerical_zero
+        use opentrustregion_core, only: numerical_zero
 
         integer(ip), intent(in) :: n, n_occ
         real(rp) :: dm(n, n)
@@ -1067,7 +1067,7 @@ contains
         ! default settings do not carry and every other settings carry, and calls it
         ! with their host context
         !
-        use opentrustregion, only: settings_type
+        use opentrustregion_core, only: settings_type
 
         class(settings_type), intent(in) :: settings
         logical, intent(in) :: defaults
@@ -1127,9 +1127,9 @@ contains
         ! and host contexts of solver settings in the host records of the levels of an
         ! extension and wires the role callback functions into the settings
         !
-        use opentrustregion, only: solver_settings_type, stability_settings_type, &
-                                   update_orbs_type, obj_func_type, &
-                                   default_solver_settings, default_stability_settings
+        use opentrustregion_core, only: &
+            solver_settings_type, stability_settings_type, update_orbs_type, &
+            obj_func_type, default_solver_settings, default_stability_settings
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common, only: orbital_settings_type, host_record_type, &
@@ -1446,8 +1446,8 @@ contains
         ! record of the solver state, wires the solver settings with it and lets them
         ! take it over
         !
-        use opentrustregion, only: solver_settings_type, solver_state_type, &
-                                   update_orbs_type
+        use opentrustregion_core, only: solver_settings_type, solver_state_type, &
+                                        update_orbs_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common, only: extension_solver_settings_type, extension_level_type, &
@@ -1603,7 +1603,7 @@ contains
         ! context, keeps the Hessian linear transformation it returns in the host
         ! records of both levels and returns the role callback function in its place
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type
         use otr_common, only: update_orbs_extension, hess_x_callback
         use otr_common_mock, only: mock_hess_x
@@ -2038,7 +2038,7 @@ contains
         ! this function tests the orbital update, which dispatches to the extension
         ! object whose level it receives as context
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use otr_common, only: update_orbs_callback
         use otr_common_mock, only: mock_hess_x
         use test_reference, only: n_param
@@ -2834,7 +2834,7 @@ contains
         ! preconditioner based on the eigendecomposition of the static part of the
         ! Hessian of an orbital basis
         !
-        use opentrustregion, only: precond_floor
+        use opentrustregion_core, only: precond_floor
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use test_reference, only: n_param
 
@@ -2883,7 +2883,7 @@ contains
         ! preconditioner based on the eigendecomposition of the static part of the
         ! Hessian of an orbital basis
         !
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use opentrustregion_core, only: precond_floor, precond_rel_floor_factor
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use test_reference, only: n_param
 
@@ -2972,7 +2972,7 @@ contains
         ! inverse square root of a matrix
         !
         use otr_common, only: compute_sqrt_and_inv_sqrt
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix
 
@@ -3034,7 +3034,7 @@ contains
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, &
                                                  ieee_positive_inf
         use otr_common, only: matrix_exponential
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
 
@@ -3126,7 +3126,7 @@ contains
         ! level-shifted preconditioner
         !
         use otr_common, only: level_shifted_divisors
-        use opentrustregion, only: precond_floor
+        use opentrustregion_core, only: precond_floor
 
         real(rp), parameter :: mu = 0.5_rp
 
@@ -3162,7 +3162,7 @@ contains
         ! positive-definite preconditioner
         !
         use otr_common, only: positive_definite_divisors
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use opentrustregion_core, only: precond_floor, precond_rel_floor_factor
 
         real(rp), parameter :: largest = 4.0_rp
 

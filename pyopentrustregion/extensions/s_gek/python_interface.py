@@ -102,13 +102,14 @@ class ChangeReferenceInterface(CallbackInterface):
 
     change_reference: ChangeReferenceType
     n_param: int
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(
         self, new_ref_ptr, n_points, kappa_list_ptr, local_grad_list_ptr, grad_list_ptr
     ) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make the new reference read-only
         new_ref = np.ctypeslib.as_array(new_ref_ptr, shape=(self.n_param,))
+        new_ref.flags.writeable = False
         kappa_list = np.ctypeslib.as_array(
             kappa_list_ptr, shape=(n_points, self.n_param)
         )
@@ -118,11 +119,7 @@ class ChangeReferenceInterface(CallbackInterface):
         grad_list = np.ctypeslib.as_array(grad_list_ptr, shape=(n_points, self.n_param))
 
         # change reference and retrieve parameter, local gradient, and gradient lists
-        try:
-            self.change_reference(new_ref, kappa_list, local_grad_list, grad_list)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        self.change_reference(new_ref, kappa_list, local_grad_list, grad_list)
 
         return 0
 

@@ -6,7 +6,7 @@
 
 module otr_rotation_qn_c_interface
 
-    use opentrustregion, only: ip, rp, kw_len, update_orbs_type, obj_func_type
+    use opentrustregion_core, only: ip, rp, kw_len, update_orbs_type, obj_func_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
     use otr_rotation_qn, only: transport_type, init_hess_type, &
                                standard_rotation_qn_factory => rotation_qn_factory
@@ -84,7 +84,7 @@ contains
         ! solver settings and record of the solver state, and writes the solver
         ! settings the factory wired back into the C solver settings
         !
-        use opentrustregion, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c, update_orbs_f_wrapper, &
                                obj_func_f_wrapper
         use otr_rotation_qn, only: &
@@ -275,7 +275,7 @@ contains
         !
         use otr_rotation_qn, only: default_rotation_qn_settings
 
-        type(rotation_qn_settings_type_c), intent(inout) :: settings_c
+        type(rotation_qn_settings_type_c), intent(out) :: settings_c
 
         settings_c = default_rotation_qn_settings
 

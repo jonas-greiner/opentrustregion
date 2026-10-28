@@ -86,11 +86,12 @@ c_int rotation_qn_factory(c_int n_param_c, update_orbs_fp update_orbs_c_funptr,
 #endif
 
 /* ------------------------------------------------------------------
- * Small C helper functions to mimic Fortran settings%init()
+ * Small C helper functions returning the default settings, which a declared Fortran
+ * settings object holds
  * ------------------------------------------------------------------ */
 
 static inline rotation_qn_settings_type rotation_qn_settings_init(void) {
-  rotation_qn_settings_type s = {0};
+  rotation_qn_settings_type s;
   init_rotation_qn_settings(&s);
   return s;
 }

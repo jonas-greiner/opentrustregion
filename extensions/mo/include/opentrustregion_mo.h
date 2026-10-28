@@ -85,11 +85,12 @@ c_int mo_factory(c_real *mo_coeff_c, const c_real *ao_overlap_c, const c_int *n_
 #endif
 
 /* ------------------------------------------------------------------
- * Small C helper functions to mimic Fortran settings%init()
+ * Small C helper functions returning the default settings, which a declared Fortran
+ * settings object holds
  * ------------------------------------------------------------------ */
 
 static inline mo_settings_type mo_settings_init(void) {
-  mo_settings_type s = {0};
+  mo_settings_type s;
   init_mo_settings(&s);
   return s;
 }

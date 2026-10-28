@@ -82,11 +82,12 @@ c_int s_gek_factory(c_int n_param_c, update_orbs_fp update_orbs_c_funptr,
 #endif
 
 /* ------------------------------------------------------------------
- * Small C helper functions to mimic Fortran settings%init()
+ * Small C helper functions returning the default settings, which a declared Fortran
+ * settings object holds
  * ------------------------------------------------------------------ */
 
 static inline s_gek_settings_type s_gek_settings_init(void) {
-  s_gek_settings_type s = {0};
+  s_gek_settings_type s;
   init_s_gek_settings(&s);
   return s;
 }

@@ -6,7 +6,8 @@
 
 module opentrustregion_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr, solver_state_type, stability_state_type
+    use opentrustregion_core, only: rp, ip, stderr, solver_state_type, &
+                                    stability_state_type
     use c_interface, only: c_rp, c_ip
     use test_reference, only: tol, host_context_type
     use, intrinsic :: iso_c_binding, only: c_bool
@@ -95,10 +96,12 @@ module opentrustregion_unit_tests
     ! define type for the host context of the Hartmann 6D function which additionally
     ! records whether the objective function was evaluated without displacement,
     ! whether the Hessian was applied to the normalized gradient and the last
-    ! displacement passed to the orbital update
+    ! displacement passed to the orbital update, and which names the output of the
+    ! orbital update which a mock returns as not finite
     type, extends(hartmann6d_context_type) :: hartmann6d_recording_context_type
         logical :: obj_func_zero_step = .false., hess_x_normalized_grad = .false.
         real(rp) :: last_delta_vars(n_param) = 0.0_rp
+        character(len=18) :: non_finite_output = ""
     end type
 
     ! callback functions of the Hartmann 6D function into which a fault can be
@@ -211,7 +214,7 @@ contains
         ! region, the absolute Hessian diagonal floored absolutely and relative to its
         ! largest element
         !
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use opentrustregion_core, only: precond_floor, precond_rel_floor_factor
 
         real(rp), intent(in) :: h_diag(:)
         real(rp) :: metric(size(h_diag))
@@ -291,6 +294,27 @@ contains
         func = 1.0_rp + 0.0_rp * sum(delta_vars)
 
     end function constant_obj_func
+
+    function nan_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes an objective function evaluation that returns a
+        ! value which is not a number at every displacement
+        !
+        use test_reference, only: check_host_context
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        ! check host context
+        call check_host_context(context)
+
+        error = 0
+        func = ieee_value(sum(delta_vars), ieee_quiet_nan)
+
+    end function nan_obj_func
 
     subroutine mock_precond(residual, mu, precond_residual, error, context)
         !
@@ -890,7 +914,7 @@ contains
         ! this subroutine describes the orbital update equivalent for the Hartmann 6D
         ! function
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use test_reference, only: check_host_context
 
         real(rp), intent(in), target :: delta_vars(:)
@@ -937,7 +961,7 @@ contains
         ! provides a Hessian linear transformation on its first call and leaves the
         ! argument as it received it on later calls
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
 
         real(rp), intent(in), target :: delta_vars(:)
         real(rp), intent(out) :: func
@@ -962,6 +986,42 @@ contains
         if (state%n_update_orbs_calls > 1) hess_x_funptr => received_hess_x_funptr
 
     end subroutine update_orbs_hess_x_once
+
+    subroutine non_finite_update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, &
+                                      error, context)
+        !
+        ! this subroutine describes an orbital update of the Hartmann 6D function which
+        ! returns a value that is not a number in the output its recording context
+        ! names
+        !
+        use opentrustregion_core, only: hess_x_type
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+
+        real(rp), intent(in), target :: delta_vars(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:), h_diag(:)
+        procedure(hess_x_type), intent(inout), pointer :: hess_x_funptr
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! perform orbital update
+        call update_orbs(delta_vars, func, grad, h_diag, hess_x_funptr, error, context)
+        if (error /= 0) return
+
+        ! replace the named output by a value that is not a number
+        select type (context)
+        class is (hartmann6d_recording_context_type)
+            select case (context%non_finite_output)
+            case ("objective function")
+                func = ieee_value(func, ieee_quiet_nan)
+            case ("gradient")
+                grad(1) = ieee_value(func, ieee_quiet_nan)
+            case ("Hessian diagonal")
+                h_diag(1) = ieee_value(func, ieee_quiet_nan)
+            end select
+        end select
+
+    end subroutine non_finite_update_orbs
 
     function obj_func(delta_vars, error, context) result(func)
         !
@@ -1062,7 +1122,7 @@ contains
         ! module context since it receives no host context, and returns a Hessian
         ! linear transformation that does the same
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
 
         real(rp), intent(in), target :: delta_vars(:)
         real(rp), intent(out) :: func
@@ -1188,7 +1248,7 @@ contains
         ! which a fault can be injected, and which returns the Hessian linear
         ! transformation into which a fault can be injected
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
 
         real(rp), intent(in), target :: delta_vars(:)
         real(rp), intent(out) :: func
@@ -1230,7 +1290,8 @@ contains
         !
         ! this function describes the objective function evaluation of the Hartmann 6D
         ! function into which a fault can be injected and which raises the value of its
-        ! first evaluation, so that the first step is rejected
+        ! first evaluation by more than the range of the function, so that the first
+        ! step is rejected
         !
         real(rp), intent(in), target :: delta_vars(:)
         integer(ip), intent(out) :: error
@@ -1244,7 +1305,7 @@ contains
         ! raise the value of the first evaluation
         select type (context)
         class is (hartmann6d_fault_context_type)
-            if (context%n_callback_calls(fault_obj_func) == 1) func = func + 1.0_rp
+            if (context%n_callback_calls(fault_obj_func) == 1) func = func + 10.0_rp
         end select
 
     end function first_step_rejecting_obj_func
@@ -1316,7 +1377,7 @@ contains
         ! below the default convergence threshold, since it replaces the gradient
         ! criterion, and into which a fault can be injected
         !
-        use opentrustregion, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings
         use test_reference, only: check_host_context
 
         integer(ip), intent(out) :: error
@@ -1694,7 +1755,7 @@ contains
         ! this subroutine describes the orbital update equivalent for the double well
         ! function
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use test_reference, only: check_host_context
 
         real(rp), intent(in), target :: delta_vars(:)
@@ -1828,7 +1889,7 @@ contains
         ! norm of the absolute Hessian diagonal of the previous point floored relative
         ! to its largest element
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
 
         real(rp), intent(in), target :: delta_vars(:)
         real(rp), intent(out) :: func
@@ -1929,7 +1990,7 @@ contains
         ! 1/2 |x|^2, whose Newton step leads to the origin, and records the first
         ! nonvanishing displacement
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use test_reference, only: check_host_context
 
         real(rp), intent(in), target :: delta_vars(:)
@@ -1997,6 +2058,7 @@ contains
         ! context
         !
         use test_reference, only: check_host_context
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
 
         real(rp), intent(in), target :: delta_vars(:)
         integer(ip), intent(out) :: error
@@ -2044,6 +2106,9 @@ contains
             func = (x - 2.0_rp)**2 + 10.0_rp * exp(-100.0_rp * (x - 2.0_rp)**2)
         case (8)
             func = -x
+        case (10)
+            func = (x - 3.0_rp)**2
+            if (x > 2.0_rp) func = ieee_value(func, ieee_quiet_nan)
         case default
             func = 1.0_rp
         end select
@@ -2156,7 +2221,7 @@ contains
         ! this subroutine sets up a settings object for tests, which hands the test
         ! context to the mock callback functions
         !
-        use opentrustregion, only: settings_type, verbosity_info
+        use opentrustregion_core, only: settings_type, verbosity_info
 
         class(settings_type), intent(out) :: settings
         class(test_context_type), intent(inout), target :: context
@@ -2174,7 +2239,7 @@ contains
         ! passed to the mock logging function and clears the log of the test context,
         ! so that a test can check whether an error message was printed
         !
-        use opentrustregion, only: settings_type, verbosity_error
+        use opentrustregion_core, only: settings_type, verbosity_error
 
         class(settings_type), intent(inout) :: settings
         class(test_context_type), intent(inout), target :: context
@@ -2327,7 +2392,7 @@ contains
         ! in an off-diagonal element or a residual dot product, so that elements which
         ! are read or left without having been set are detected
         !
-        use opentrustregion, only: gltr_lanczos_type
+        use opentrustregion_core, only: gltr_lanczos_type
 
         type(gltr_lanczos_type), intent(out) :: lanczos
         integer(ip), intent(in) :: n_param, n_micro
@@ -2457,7 +2522,7 @@ contains
         ! step which nearly reaches it, taking it as expanded where the norm of the
         ! step lies within both the expanded and the unchanged trust radius
         !
-        use opentrustregion, only: &
+        use opentrustregion_core, only: &
             trust_radius_shrink_ratio, trust_radius_expand_ratio, &
             trust_radius_shrink_factor, trust_radius_expand_factor
 
@@ -2514,14 +2579,17 @@ contains
 
     end function check_call_counts
 
-    logical function check_reset_state_seen(context, test_name, callback_name)
+    logical function check_reset_state_seen(context, micro_iteration, test_name, &
+                                            callback_name)
         !
         ! this function checks that the first call of a callback function which reads
         ! the solver state through the pointer of a double well context saw the state
-        ! reset by the subsystem solver, without micro iterations and with the
-        ! relative residual of the vanishing solution, which is the gradient
+        ! reset by the subsystem solver, in the given micro iteration, without
+        ! Jacobi-Davidson iterations and with the relative residual of the vanishing
+        ! solution, which is the gradient
         !
         type(double_well_state_context_type), intent(in) :: context
+        integer(ip), intent(in) :: micro_iteration
         character(len=*), intent(in) :: test_name, callback_name
 
         ! assume tests pass
@@ -2531,7 +2599,7 @@ contains
             write(stderr, *) "test_"//test_name//" failed: State not read by the "// &
                 callback_name//"."
             check_reset_state_seen = .false.
-        else if (context%seen_states(1)%micro_iteration /= 0 .or. &
+        else if (context%seen_states(1)%micro_iteration /= micro_iteration .or. &
                  context%seen_states(1)%jacobi_davidson_iteration /= 0 .or. &
                  abs(context%seen_states(1)%relative_residual - 1.0_rp) > tol) then
             write(stderr, *) "test_"//test_name//" failed: State of an earlier "// &
@@ -2545,7 +2613,7 @@ contains
         !
         ! this function tests the solver subroutine
         !
-        use opentrustregion, only: &
+        use opentrustregion_core, only: &
             update_orbs_type, obj_func_type, solver_settings_type, solver, &
             default_settings => default_solver_settings, error_solver_max_iter, &
             error_update_orbs, error_conv_check, error_obj_func, error_hess_x, &
@@ -2553,6 +2621,8 @@ contains
             error_precond_pd, error_approx_hess_x, subsystem_solver_options
 
         real(rp), parameter :: var_thres = 1e-4_rp
+        character(len=*), parameter :: non_finite_outputs(3) = &
+            [character(len=18) :: "objective function", "gradient", "Hessian diagonal"]
         integer(ip) :: error, i_solver, i_case, callback, i_call, &
                        n_calls(n_fault_callbacks)
         logical :: grad_noise, expected_calls(n_fault_callbacks)
@@ -2868,6 +2938,38 @@ contains
                 "transformation not reported in the second macro iteration."
             test_solver = .false.
         end if
+
+        ! run solver with an orbital update which returns a value that is not finite in
+        ! each of its outputs in turn and check that the solver reports this as its own
+        ! error right after the orbital update, before the subproblem calls any other
+        ! callback function
+        update_orbs_funptr => non_finite_update_orbs
+        do i_case = 1, size(non_finite_outputs)
+            context%vars = distant_point
+            context%non_finite_output = non_finite_outputs(i_case)
+            context%n_hess_x_calls = 0
+            context%n_obj_func_calls = 0
+            settings = solver_settings_type()
+            call setup_error_logging(settings, context)
+            call solver(update_orbs_funptr, obj_func_funptr, n_param, error, settings)
+            if (error /= error_solver + 1) then
+                write(stderr, *) "test_solver failed: Did not report a "// &
+                    trim(non_finite_outputs(i_case))//" that is not finite."
+                test_solver = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_solver failed: No error message printed for "// &
+                    "a "//trim(non_finite_outputs(i_case))//" that is not finite."
+                test_solver = .false.
+            end if
+            if (context%n_hess_x_calls /= 0 .or. context%n_obj_func_calls /= 0) then
+                write(stderr, *) "test_solver failed: A "// &
+                    trim(non_finite_outputs(i_case))//" that is not finite not "// &
+                    "reported right after the orbital update."
+                test_solver = .false.
+            end if
+        end do
+        context%non_finite_output = ""
 
         ! run solver from the saddle point of the Hartmann 6D function, whose path
         ! depends on the settings, with the default settings and without settings and
@@ -3254,16 +3356,17 @@ contains
         end if
 
         ! inject faults by running the solver from the saddle point, where it performs
-        ! the internal stability check, with a stability check at convergence, a line
-        ! search and every optional callback function, also of the nested settings,
-        ! once without a fault to count the calls of every callback function and then
-        ! letting every one of these calls fail in turn, for every subsystem solver
-        ! without and with a perturbed gradient, whose perturbation is projected, the
-        ! latter without the extra trial vector function of the nested settings, which
-        ! takes precedence over their approximate Hessian linear transformation, and
-        ! check that the unfaulted run reaches exactly the callback functions the case
-        ! uses, that the error is reported with the origin of the failing callback
-        ! function and that the reported counters still agree with the calls
+        ! the internal stability check, with a rejected first trust-region step, a
+        ! stability check at convergence, a line search and every optional callback
+        ! function, also of the nested settings, once without a fault to count the
+        ! calls of every callback function and then letting every one of these calls
+        ! fail in turn, for every subsystem solver without and with a perturbed
+        ! gradient, whose perturbation is projected, the latter without the extra trial
+        ! vector function of the nested settings, which takes precedence over their
+        ! approximate Hessian linear transformation, and check that the unfaulted run
+        ! reaches exactly the callback functions the case uses, that the error is
+        ! reported with the origin of the failing callback function and that the
+        ! reported counters still agree with the calls
         do i_solver = 1, size(subsystem_solver_options)
             do i_case = 1, 2
                 grad_noise = i_case == 2
@@ -3331,8 +3434,9 @@ contains
         subroutine run_with_fault(fault_callback, fault_call)
             !
             ! this subroutine runs the solver from the saddle point with the subsystem
-            ! solver and the gradient perturbation of the current case and lets the
-            ! given call of the given callback function fail
+            ! solver and the gradient perturbation of the current case, rejecting its
+            ! first trust-region step, and lets the given call of the given callback
+            ! function fail
             !
             integer(ip), intent(in) :: fault_callback, fault_call
 
@@ -3374,7 +3478,7 @@ contains
 
             ! run solver
             faulty_update_orbs_funptr => faulty_update_orbs
-            faulty_obj_func_funptr => faulty_obj_func
+            faulty_obj_func_funptr => first_step_rejecting_obj_func
             call solver(faulty_update_orbs_funptr, faulty_obj_func_funptr, n_param, &
                         error, settings, state)
 
@@ -3386,7 +3490,7 @@ contains
         !
         ! this function tests the stability check subroutine
         !
-        use opentrustregion, only: &
+        use opentrustregion_core, only: &
             hess_x_type, stability_settings_type, stability_check, &
             error_stability_check, error_stability_check_max_iter, verbosity_warning, &
             error_hess_x, error_precond, error_project, error_conv_check, &
@@ -3491,7 +3595,7 @@ contains
                 "saddle point with logging function."
             test_stability_check = .false.
         end if
-        write(msg, '(A, F0.4)') unstable_warning_msg, hess_eigvals(1)
+        write(msg, '(A, ES11.4)') unstable_warning_msg, hess_eigvals(1)
         if (index(context%log_message, " "//trim(msg)) == 0) then
             write(stderr, *) "test_stability_check failed: Warning not printed for "// &
                 "saddle point."
@@ -3875,12 +3979,12 @@ contains
         ! this function tests the subroutine which performs the stability check at a
         ! stationary point and determines the step along an unstable mode
         !
-        use opentrustregion, only: solver_settings_type, hess_x_type, &
-                                   check_stationary_point, error_stability_check, &
-                                   started_at_saddle_point_warning_msg, &
-                                   reached_saddle_point_warning_msg, &
-                                   reached_saddle_point_no_grad_noise_warning_msg, &
-                                   reached_saddle_point_stability_hess_x_warning_msg
+        use opentrustregion_core, only: &
+            solver_settings_type, hess_x_type, check_stationary_point, &
+            error_stability_check, started_at_saddle_point_warning_msg, &
+            reached_saddle_point_warning_msg, &
+            reached_saddle_point_no_grad_noise_warning_msg, &
+            reached_saddle_point_stability_hess_x_warning_msg
         use test_reference, only: arm_host_context, host_context_reached
 
         type(solver_settings_type) :: settings
@@ -4120,7 +4224,7 @@ contains
         !
         ! this function tests the saddle-point step subroutine
         !
-        use opentrustregion, only: solver_settings_type, saddle_point_step
+        use opentrustregion_core, only: solver_settings_type, saddle_point_step
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
         ! cases with a gradient RMS below and well above the convergence threshold and
@@ -4188,12 +4292,12 @@ contains
             predicted_grad_rms = norm2(grad + min_eigval * kappa) / &
                                  sqrt(real(n_param, kind=rp))
             if (ieee_is_nan(predicted_grad_rms) .or. &
-                abs(predicted_grad_rms - target_grad_rms) > tol) then
+                .not. abs(predicted_grad_rms - target_grad_rms) <= tol) then
                 write(stderr, *) "test_saddle_point_step failed: Step does not "// &
                     "reach targeted gradient RMS "//trim(case_names(i))//"."
                 test_saddle_point_step = .false.
             end if
-            if (abs(kappa_norm - norm2(kappa)) > tol) then
+            if (.not. abs(kappa_norm - norm2(kappa)) <= tol) then
                 write(stderr, *) "test_saddle_point_step failed: Returned norm "// &
                     "does not match step "//trim(case_names(i))//"."
                 test_saddle_point_step = .false.
@@ -4213,8 +4317,8 @@ contains
         kappa = kappa_dir
         call saddle_point_step(grad, 0.0_rp, min_eigval, trust_radius, settings, &
                                kappa, kappa_norm)
-        if (norm2(kappa - trust_radius * kappa_dir) > tol .or. &
-            abs(kappa_norm - trust_radius) > tol) then
+        if (.not. norm2(kappa - trust_radius * kappa_dir) <= tol .or. &
+            .not. abs(kappa_norm - trust_radius) <= tol) then
             write(stderr, *) "test_saddle_point_step failed: Step does not reach "// &
                 "trust radius at vanishing gradient and convergence threshold."
             test_saddle_point_step = .false.
@@ -4249,7 +4353,7 @@ contains
         !
         ! this function tests the Newton step subroutine
         !
-        use opentrustregion, only: newton_step
+        use opentrustregion_core, only: newton_step
 
         character(len=*), parameter :: case_names(3) = &
             [character(len=10) :: "symmetric", "asymmetric", "singular"]
@@ -4320,7 +4424,7 @@ contains
         !
         ! this function tests the augmented Hessian bisection subroutine
         !
-        use opentrustregion, only: solver_settings_type, bisection_ah
+        use opentrustregion_core, only: solver_settings_type, bisection_ah
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
         type(solver_settings_type) :: settings
@@ -4348,7 +4452,7 @@ contains
                                red_space_hess_right_eigvecs)
         red_space_hess_left_eigvecs = red_space_hess_right_eigvecs
 
-        ! perform bisection, check whether error has occured and determine whether
+        ! perform bisection, check whether error has occurred and determine whether
         ! resulting solution is correct in reduced and full space and respects target
         ! trust radius
         call bisection_ah(red_space_hess, grad_norm, red_space_basis, &
@@ -4359,18 +4463,20 @@ contains
             write(stderr, *) "test_bisection_ah failed: Produced error."
             test_bisection_ah = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Solution does not respect "// &
                 "trust radius."
             test_bisection_ah = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
+        if (.not. norm2( &
+            matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - mu * &
+                   red_space_solution) + grad) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Step does not satisfy "// &
                 "level-shifted Newton equation."
             test_bisection_ah = .false.
         end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+        if (.not. all( &
+            abs(solution - matmul(red_space_basis, red_space_solution)) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Full space solution not "// &
                 "correct for symmetric Hessian."
             test_bisection_ah = .false.
@@ -4414,13 +4520,14 @@ contains
                 "has to be increased."
             test_bisection_ah = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Solution does not respect "// &
                 "trust radius when alpha has to be increased."
             test_bisection_ah = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
+        if (.not. norm2( &
+            matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - mu * &
+                   red_space_solution) + grad) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Step does not satisfy "// &
                 "level-shifted Newton equation when alpha has to be increased."
             test_bisection_ah = .false.
@@ -4474,7 +4581,7 @@ contains
                 "falling back to Newton step."
             test_bisection_ah = .false.
         end if
-        if (abs(mu) > tol) then
+        if (.not. abs(mu) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Level shift not zero for "// &
                 "Newton step fallback."
             test_bisection_ah = .false.
@@ -4483,12 +4590,12 @@ contains
             red_space_hess_right_eigvecs, &
             red_space_hess_left_eigvecs(1, :) / red_space_hess_eigvals)
         newton_solution = matmul(red_space_basis, newton_red_space_solution)
-        if (any(abs(red_space_solution - newton_red_space_solution) > tol)) then
+        if (.not. all(abs(red_space_solution - newton_red_space_solution) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Newton step fallback "// &
                 "reduced space solution not correct."
             test_bisection_ah = .false.
         end if
-        if (any(abs(solution - newton_solution) > tol)) then
+        if (.not. all(abs(solution - newton_solution) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Newton step fallback full "// &
                 "space solution not correct."
             test_bisection_ah = .false.
@@ -4514,26 +4621,27 @@ contains
             write(stderr, *) "test_bisection_ah failed: Produced error for hard case."
             test_bisection_ah = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Hard case solution does "// &
                 "not respect trust radius."
             test_bisection_ah = .false.
         end if
-        if (abs(mu - minval(red_space_hess_eigvals)) > tol) then
+        if (.not. abs(mu - minval(red_space_hess_eigvals)) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Hard case level shift not "// &
                 "equal to lowest reduced space Hessian eigenvalue."
             test_bisection_ah = .false.
         end if
         grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals) - &
                                               maxval(red_space_hess_eigvals))
-        if (any(abs(red_space_solution - [ &
+        if (.not. all(abs(red_space_solution - [ &
             grad_coupled_component, sqrt(trust_radius**2 - grad_coupled_component**2), &
-            0.0_rp]) > tol)) then
+            0.0_rp]) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Hard case reduced space "// &
                 "solution not correct."
             test_bisection_ah = .false.
         end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+        if (.not. all( &
+            abs(solution - matmul(red_space_basis, red_space_solution)) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Hard case full space "// &
                 "solution not correct."
             test_bisection_ah = .false.
@@ -4557,25 +4665,27 @@ contains
                 "case with crossover step outside trust region."
             test_bisection_ah = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Hard case solution with "// &
                 "crossover step outside trust region does not respect trust radius."
             test_bisection_ah = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
+        if (.not. norm2( &
+            matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - mu * &
+                   red_space_solution) + grad) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Hard case solution with "// &
                 "crossover step outside trust region does not satisfy "// &
                 "level-shifted Newton equation."
             test_bisection_ah = .false.
         end if
-        if (abs(mu + 5.0_rp) > tol) then
+        if (.not. abs(mu + 5.0_rp) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Hard case level shift with "// &
                 "crossover step outside trust region not that of the step along "// &
                 "gradient direction."
             test_bisection_ah = .false.
         end if
-        if (any(abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) > tol)) then
+        if (.not. all( &
+            abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Hard case solution with "// &
                 "crossover step outside trust region not along gradient direction."
             test_bisection_ah = .false.
@@ -4607,30 +4717,31 @@ contains
                 "solution contains NaN."
             test_bisection_ah = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Degenerate hard case "// &
                 "solution does not respect trust radius."
             test_bisection_ah = .false.
         end if
-        if (abs(mu - minval(red_space_hess_eigvals)) > tol) then
+        if (.not. abs(mu - minval(red_space_hess_eigvals)) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Degenerate hard case level "// &
                 "shift not equal to lowest reduced space Hessian eigenvalue."
             test_bisection_ah = .false.
         end if
         grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals) - &
                                               maxval(red_space_hess_eigvals))
-        if (abs(red_space_solution(1) - grad_coupled_component) > tol) then
+        if (.not. abs(red_space_solution(1) - grad_coupled_component) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Degenerate hard case "// &
                 "component along non-degenerate eigenvector not correct."
             test_bisection_ah = .false.
         end if
-        if (abs(norm2(red_space_solution(2:3)) - &
-                sqrt(trust_radius**2 - grad_coupled_component**2)) > tol) then
+        if (.not. abs(norm2(red_space_solution(2:3)) - &
+                      sqrt(trust_radius**2 - grad_coupled_component**2)) <= tol) then
             write(stderr, *) "test_bisection_ah failed: Degenerate hard case fill "// &
                 "magnitude within degenerate eigenspace not correct."
             test_bisection_ah = .false.
         end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+        if (.not. all( &
+            abs(solution - matmul(red_space_basis, red_space_solution)) <= tol)) then
             write(stderr, *) "test_bisection_ah failed: Degenerate hard case full "// &
                 "space solution not correct."
             test_bisection_ah = .false.
@@ -4642,8 +4753,8 @@ contains
         !
         ! this function tests the level-shift bisection subroutine
         !
-        use opentrustregion, only: solver_settings_type, bisection_mu, &
-                                   bisection_imaginary_eigval_warning_msg
+        use opentrustregion_core, only: solver_settings_type, bisection_mu, &
+                                        bisection_imaginary_eigval_warning_msg
         use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
 
         character(len=*), parameter :: case_names(4) = &
@@ -4677,7 +4788,7 @@ contains
 
         ! perform bisection in the reduced space at a point with strong negative
         ! curvature and near a minimum, for the reduced space Hessian and for this
-        ! Hessian made asymmetric, check whether error has occured and determine
+        ! Hessian made asymmetric, check whether error has occurred and determine
         ! whether the solution is a level-shifted Newton step which reaches the trust
         ! radius in the indefinite case and the Newton step within it in the positive
         ! definite case, and whether it is returned in the full space
@@ -4701,19 +4812,19 @@ contains
             end if
             if ((positive_definite .and. norm2(solution) > trust_radius) .or. &
                 (.not. positive_definite .and. &
-                 abs(norm2(solution) - trust_radius) > tol)) then
+                 .not. abs(norm2(solution) - trust_radius) <= tol)) then
                 write(stderr, *) "test_bisection_mu failed: Solution does not "// &
                     "respect trust radius for "//trim(case_names(i_case))//" Hessian."
                 test_bisection_mu = .false.
             end if
-            if (positive_definite .and. abs(mu) > tol) then
+            if (positive_definite .and. .not. abs(mu) <= tol) then
                 write(stderr, *) "test_bisection_mu failed: Level shift does not "// &
                     "vanish for "//trim(case_names(i_case))//" Hessian."
                 test_bisection_mu = .false.
             end if
-            if (norm2( &
+            if (.not. norm2( &
                 matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                       mu * red_space_solution) + grad) > tol) then
+                       mu * red_space_solution) + grad) <= tol) then
                 write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
                     "level-shifted Newton equation for "//trim(case_names(i_case))// &
                     " Hessian."
@@ -4758,13 +4869,13 @@ contains
                     "hard case with "//trim(hard_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
-            if (abs(norm2(solution) - trust_radius) > tol) then
+            if (.not. abs(norm2(solution) - trust_radius) <= tol) then
                 write(stderr, *) "test_bisection_mu failed: Hard case solution "// &
                     "does not respect trust radius for "// &
                     trim(hard_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
-            if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
+            if (.not. abs(mu - minval(red_space_hess_eigvals%re)) <= tol) then
                 write(stderr, *) "test_bisection_mu failed: Hard case level shift "// &
                     "not equal to lowest reduced space Hessian eigenvalue for "// &
                     trim(hard_case_names(i_case))//"."
@@ -4786,7 +4897,8 @@ contains
                     sqrt(trust_radius**2 - grad_norm**2 / 98.0_rp) * &
                     [1.0_rp, 1.0_rp, 0.0_rp] / sqrt(2.0_rp)
             end if
-            if (any(abs(red_space_solution - expected_red_space_solution) > tol)) then
+            if (.not. all( &
+                abs(red_space_solution - expected_red_space_solution) <= tol)) then
                 write(stderr, *) "test_bisection_mu failed: Hard case reduced "// &
                     "space solution not correct for "//trim(hard_case_names(i_case))// &
                     "."
@@ -4820,26 +4932,28 @@ contains
                 "case with step at lowest eigenvalue outside trust region."
             test_bisection_mu = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Hard case solution with "// &
                 "step at lowest eigenvalue outside trust region does not respect "// &
                 "trust radius."
             test_bisection_mu = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
+        if (.not. norm2( &
+            matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - mu * &
+                   red_space_solution) + grad) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Hard case solution with "// &
                 "step at lowest eigenvalue outside trust region does not satisfy "// &
                 "level-shifted Newton equation."
             test_bisection_mu = .false.
         end if
-        if (abs(mu + 5.0_rp) > tol) then
+        if (.not. abs(mu + 5.0_rp) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Hard case level shift with "// &
                 "step at lowest eigenvalue outside trust region not that of the "// &
                 "step along gradient direction."
             test_bisection_mu = .false.
         end if
-        if (any(abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) > tol)) then
+        if (.not. all( &
+            abs(red_space_solution - [-trust_radius, 0.0_rp, 0.0_rp]) <= tol)) then
             write(stderr, *) "test_bisection_mu failed: Hard case solution with "// &
                 "step at lowest eigenvalue outside trust region not along gradient "// &
                 "direction."
@@ -4868,13 +4982,13 @@ contains
                 "eigenvector nearly orthogonal to gradient direction."
             test_bisection_mu = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Solution does not respect "// &
                 "trust radius for lowest eigenvector nearly orthogonal to gradient "// &
                 "direction."
             test_bisection_mu = .false.
         end if
-        if (abs(mu + 2.0_rp) > tol) then
+        if (.not. abs(mu + 2.0_rp) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Level shift not equal to "// &
                 "lowest eigenvalue for lowest eigenvector nearly orthogonal to "// &
                 "gradient direction."
@@ -4910,30 +5024,31 @@ contains
                 "solution contains NaN."
             test_bisection_mu = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Degenerate hard case "// &
                 "solution does not respect trust radius."
             test_bisection_mu = .false.
         end if
-        if (abs(mu - minval(red_space_hess_eigvals%re)) > tol) then
+        if (.not. abs(mu - minval(red_space_hess_eigvals%re)) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Degenerate hard case level "// &
                 "shift not equal to lowest reduced space Hessian eigenvalue."
             test_bisection_mu = .false.
         end if
         grad_coupled_component = grad_norm / (minval(red_space_hess_eigvals%re) - &
                                               maxval(red_space_hess_eigvals%re))
-        if (abs(red_space_solution(1) - grad_coupled_component) > tol) then
+        if (.not. abs(red_space_solution(1) - grad_coupled_component) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Degenerate hard case "// &
                 "component along non-degenerate eigenvector not correct."
             test_bisection_mu = .false.
         end if
-        if (abs(norm2(red_space_solution(2:3)) - &
-                sqrt(trust_radius**2 - grad_coupled_component**2)) > tol) then
+        if (.not. abs(norm2(red_space_solution(2:3)) - &
+                      sqrt(trust_radius**2 - grad_coupled_component**2)) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Degenerate hard case fill "// &
                 "magnitude within degenerate eigenspace not correct."
             test_bisection_mu = .false.
         end if
-        if (any(abs(solution - matmul(red_space_basis, red_space_solution)) > tol)) then
+        if (.not. all( &
+            abs(solution - matmul(red_space_basis, red_space_solution)) <= tol)) then
             write(stderr, *) "test_bisection_mu failed: Degenerate hard case full "// &
                 "space solution not correct."
             test_bisection_mu = .false.
@@ -4963,7 +5078,7 @@ contains
                     "Newton step "//trim(newton_case_names(i_case))//"."
                 test_bisection_mu = .false.
             end if
-            if (abs(mu) > tol) then
+            if (.not. abs(mu) <= tol) then
                 write(stderr, *) "test_bisection_mu failed: Level shift does not "// &
                     "vanish for Newton step "//trim(newton_case_names(i_case))//"."
                 test_bisection_mu = .false.
@@ -4995,13 +5110,14 @@ contains
                 "vanishing lowest eigenvalue."
             test_bisection_mu = .false.
         end if
-        if (abs(norm2(solution) - trust_radius) > tol) then
+        if (.not. abs(norm2(solution) - trust_radius) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Solution does not respect "// &
                 "trust radius for vanishing lowest eigenvalue."
             test_bisection_mu = .false.
         end if
-        if (norm2(matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - &
-                         mu * red_space_solution) + grad) > tol) then
+        if (.not. norm2( &
+            matmul(red_space_basis, matmul(red_space_hess, red_space_solution) - mu * &
+                   red_space_solution) + grad) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Step does not satisfy "// &
                 "level-shifted Newton equation for vanishing lowest eigenvalue."
             test_bisection_mu = .false.
@@ -5032,7 +5148,7 @@ contains
                 "lowest eigenvalues."
             test_bisection_mu = .false.
         end if
-        if (abs(mu + 2.0_rp) > tol) then
+        if (.not. abs(mu + 2.0_rp) <= tol) then
             write(stderr, *) "test_bisection_mu failed: Level shift not the real "// &
                 "part of complex lowest eigenvalues."
             test_bisection_mu = .false.
@@ -5080,32 +5196,34 @@ contains
         !
         ! this function tests the bracketing function
         !
-        use opentrustregion, only: solver_settings_type, obj_func_type, bracket, &
-                                   error_obj_func
+        use opentrustregion_core, only: solver_settings_type, obj_func_type, bracket, &
+                                        error_obj_func
 
         type(solver_settings_type) :: settings
         procedure(obj_func_type), pointer :: obj_func_funptr
         real(rp) :: n
         integer(ip) :: error, i, i_call, n_calls, n_obj_func
         character(len=20) :: call_number
-        integer(ip), parameter :: n_cases = 9
+        integer(ip), parameter :: n_cases = 10
         real(rp), parameter :: direction(1) = [1.0_rp]
         character(len=*), parameter :: case_names(n_cases) = &
             [character(len=26) :: "(x - 3)^2", "(x - 2)^4", "exp(-x) + x / 100", &
              "|x - 2.2|", "sqrt(|x - 5|)", "(x - 1000)^2", "(x - 2)^2 with bump at 2", &
-             "-x", "constant"]
+             "-x", "constant", "(x - 3)^2, NaN beyond 2"]
         logical, parameter :: expect_error(n_cases) = &
             [.false., .false., .false., .false., .false., .false., .false., .true., &
-             .true.]
+             .true., .false.]
 
         ! expected multipliers, the first one at the minimum where the parabolic fit
         ! is exact, the golden ratio steps 1 + phi and 3 + sqrt(5) for functions that
-        ! reject the parabolic fits and the remaining ones reproduced with an
-        ! independent implementation of the bracketing algorithm
+        ! reject the parabolic fits, the upper bound for the function which is not a
+        ! number at the first golden ratio step, which counts as infinite there, and
+        ! the remaining ones reproduced with an independent implementation of the
+        ! bracketing algorithm
         real(rp), parameter :: expected_n(n_cases) = &
             [3.0_rp, 1.8567627457812104_rp, 4.141367271592155_rp, &
              (3.0_rp + sqrt(5.0_rp)) / 2.0_rp, 3.0_rp + sqrt(5.0_rp), &
-             1000.0000000003488_rp, 1.0_rp, 0.0_rp, 0.0_rp]
+             1000.0000000003488_rp, 1.0_rp, 0.0_rp, 0.0_rp, 1.0_rp]
         type(bracket_context_type), target :: context
 
         ! assume tests pass
@@ -5223,7 +5341,7 @@ contains
         !
         ! this function tests the subroutine for extending a matrix
         !
-        use opentrustregion, only: extend_matrix
+        use opentrustregion_core, only: extend_matrix
 
         real(rp), allocatable :: matrix(:, :)
         real(rp) :: initial_matrix(2, 2), expected(3, 3), vector1(3), vector2(3)
@@ -5268,7 +5386,7 @@ contains
         !
         ! this function tests the subroutine for adding a column to a matrix
         !
-        use opentrustregion, only: add_column
+        use opentrustregion_core, only: add_column
 
         real(rp), allocatable :: matrix(:, :)
         real(rp) :: initial_matrix(n_param, 2), new_col(n_param)
@@ -5307,7 +5425,7 @@ contains
         ! this function tests the subroutine which determines the eigenvalues and left
         ! and right eigenvectors of a symmetric or a general matrix
         !
-        use opentrustregion, only: solver_settings_type, mat_diag
+        use opentrustregion_core, only: solver_settings_type, mat_diag
 
         type(solver_settings_type) :: settings
         real(rp) :: matrix(n_param, n_param), right_eigvecs(n_param, n_param), &
@@ -5382,7 +5500,7 @@ contains
         ! this function tests the function for determining the eigenvalues and
         ! eigenvectors for a symmetric matrix
         !
-        use opentrustregion, only: solver_settings_type, symm_mat_diag
+        use opentrustregion_core, only: solver_settings_type, symm_mat_diag
 
         type(solver_settings_type) :: settings
         real(rp) :: matrix(n_param, n_param), eigvals(n_param), &
@@ -5426,7 +5544,7 @@ contains
         ! this function tests the function for determining the eigenvalues and left and
         ! right eigenvectors for a square matrix
         !
-        use opentrustregion, only: solver_settings_type, general_mat_diag
+        use opentrustregion_core, only: solver_settings_type, general_mat_diag
 
         type(solver_settings_type) :: settings
         real(rp) :: matrix(n_param, n_param), right_eigvecs(n_param, n_param), &
@@ -5577,7 +5695,7 @@ contains
         ! corresponding eigenvector of a matrix, for both the symmetric and the
         ! non-symmetric case
         !
-        use opentrustregion, only: solver_settings_type, mat_min_eig
+        use opentrustregion_core, only: solver_settings_type, mat_min_eig
 
         type(solver_settings_type) :: settings
         real(rp) :: matrix(n_param, n_param), eigval, eigvec(n_param), &
@@ -5639,8 +5757,8 @@ contains
         ! this function tests the subroutine which returns the lowest eigenpairs of a
         ! matrix
         !
-        use opentrustregion, only: solver_settings_type, mat_lowest_eigpairs, &
-                                   complex_eigval_warning_msg
+        use opentrustregion_core, only: solver_settings_type, mat_lowest_eigpairs, &
+                                        complex_eigval_warning_msg
 
         integer(ip), parameter :: n_target = 2
 
@@ -5749,7 +5867,7 @@ contains
         ! this function tests the initialization subroutine for the random number
         ! generator
         !
-        use opentrustregion, only: init_rng
+        use opentrustregion_core, only: init_rng
 
         integer(ip) :: seed1, seed2
         real(rp) :: rand_seq1(5), rand_seq2(5), rand_seq3(5)
@@ -5795,7 +5913,7 @@ contains
         ! along the lowest Hessian diagonal elements, both when any sign is accepted
         ! and when only negative curvature is wanted
         !
-        use opentrustregion, only: lowest_h_diag_unit_vectors
+        use opentrustregion_core, only: lowest_h_diag_unit_vectors
 
         integer(ip), parameter :: n_param = 4, n_vectors = 3
         real(rp), parameter :: h_diag(n_param) = [1.0_rp, -2.0_rp, 3.0_rp, -4.0_rp]
@@ -5845,9 +5963,9 @@ contains
         ! this function tests the function which generates trial vectors for the
         ! Davidson procedure
         !
-        use opentrustregion, only: solver_settings_type, generate_trial_vectors, &
-                                   lin_dep_trial_vector_warning_msg, error_project, &
-                                   error_get_extra_trial_vectors
+        use opentrustregion_core, only: solver_settings_type, generate_trial_vectors, &
+                                        lin_dep_trial_vector_warning_msg, &
+                                        error_project, error_get_extra_trial_vectors
 
         character(len=*), parameter :: case_names(5) = [ &
             character(len=48) :: "Hessian with only positive diagonal elements", &
@@ -6029,8 +6147,8 @@ contains
         ! this function tests the function which generates random trial vectors for the
         ! Davidson procedure
         !
-        use opentrustregion, only: solver_settings_type, &
-                                   generate_random_trial_vectors, error_project
+        use opentrustregion_core, only: solver_settings_type, &
+                                        generate_random_trial_vectors, error_project
 
         integer(ip), parameter :: n_fill = 2
 
@@ -6118,25 +6236,28 @@ contains
         end if
         deallocate(red_space_basis)
 
-        ! fill a trial vector behind the first unit vector with a projection onto the
-        ! first unit vector, so that every attempt produces a linearly dependent
-        ! vector, and determine whether an error is returned and an error message is
-        ! printed once the maximum number of attempts is reached
+        ! fill the trial vectors behind the first unit vector with a projection onto
+        ! the first unit vector, which leaves no further direction, and determine
+        ! whether the trial space ends with the first unit vector without an error
         call setup_settings(settings, context)
-        allocate(red_space_basis(n_param, 2))
+        allocate(red_space_basis(n_param, n_fill + 1))
         red_space_basis = 0.0_rp
         red_space_basis(1, 1) = 1.0_rp
         settings%project => mock_project_first_component
-        call setup_error_logging(settings, context)
-        call generate_random_trial_vectors(red_space_basis, 1_ip, settings, error)
-        if (error /= 1) then
-            write(stderr, *) "test_generate_random_trial_vectors failed: No error "// &
-                "returned when no linearly independent vector can be generated."
+        call generate_random_trial_vectors(red_space_basis, n_fill, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_generate_random_trial_vectors failed: Produced "// &
+                "error when the projection leaves no further direction."
             test_generate_random_trial_vectors = .false.
         end if
-        if (len_trim(context%log_message) == 0) then
-            write(stderr, *) "test_generate_random_trial_vectors failed: No error "// &
-                "message printed when no linearly independent vector can be generated."
+        if (size(red_space_basis, 2) /= 1) then
+            write(stderr, *) "test_generate_random_trial_vectors failed: Trial "// &
+                "space does not end when the projection leaves no further direction."
+            test_generate_random_trial_vectors = .false.
+        else if (any(abs(red_space_basis(2:, 1)) > 0.0_rp) .or. &
+                 abs(red_space_basis(1, 1) - 1.0_rp) > tol) then
+            write(stderr, *) "test_generate_random_trial_vectors failed: First "// &
+                "basis vector changed when the projection leaves no further direction."
             test_generate_random_trial_vectors = .false.
         end if
 
@@ -6150,8 +6271,8 @@ contains
         ! this function tests the Davidson procedure for both a single tracked
         ! eigenpair and a larger block
         !
-        use opentrustregion, only: hess_x_type, stability_settings_type, &
-                                   block_davidson, error_hess_x, error_conv_check
+        use opentrustregion_core, only: hess_x_type, stability_settings_type, &
+                                        block_davidson, error_hess_x, error_conv_check
 
         integer(ip), parameter :: n_block = 3
         character(len=*), parameter :: jacobi_davidson_case_names(5) = &
@@ -6594,10 +6715,10 @@ contains
         ! this function tests the subroutine which generates the initial trial space
         ! for the stability check
         !
-        use opentrustregion, only: stability_settings_type, get_stability_trial_space, &
-                                   approx_hess_trial_vectors_warning_msg, &
-                                   error_get_extra_trial_vectors, error_project, &
-                                   error_approx_hess_x
+        use opentrustregion_core, only: &
+            stability_settings_type, get_stability_trial_space, &
+            approx_hess_trial_vectors_warning_msg, error_get_extra_trial_vectors, &
+            error_project, error_approx_hess_x
 
         character(len=*), parameter :: case_names(6) = &
             [character(len=33) :: "Hessian diagonal leading block", "converged "// &
@@ -6791,6 +6912,31 @@ contains
             test_get_stability_trial_space = .false.
         end if
 
+        ! request two extra trial vectors from a warm start with a projection which
+        ! keeps only the first component, whose single direction the approximate
+        ! Hessian and the preconditioner keep, so that the start space and with it the
+        ! block are cut to it, and check that the trial space consists of the first
+        ! unit vector alone
+        settings%project => mock_project_first_component
+        settings%get_extra_trial_vectors => null()
+        settings%approx_hess_x => approx_hess_x_fun
+        settings%n_extra_trial_vectors = 2
+        settings%n_random_trial_vectors = 1
+        call get_stability_trial_space(h_diag, red_space_basis, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_get_stability_trial_space failed: Produced "// &
+                "error for warm start with projection."
+            test_get_stability_trial_space = .false.
+        else if (size(red_space_basis, 2) /= 1) then
+            write(stderr, *) "test_get_stability_trial_space failed: Incorrect "// &
+                "number of trial vectors for warm start with projection."
+            test_get_stability_trial_space = .false.
+        else if (.not. abs(abs(red_space_basis(1, 1)) - 1.0_rp) <= tol) then
+            write(stderr, *) "test_get_stability_trial_space failed: Trial vector "// &
+                "not along the first unit vector for warm start with projection."
+            test_get_stability_trial_space = .false.
+        end if
+
         ! check that the errors of a failing extra trial vector function, of a
         ! failing projection and of a failing approximate Hessian linear
         ! transformation, which the extra trial vector function takes precedence over,
@@ -6823,9 +6969,9 @@ contains
         !
         ! this function tests the subroutine which orthogonalizes trial vectors
         !
-        use opentrustregion, only: stability_settings_type, &
-                                   orthogonalize_trial_vectors, &
-                                   lin_dep_trial_vector_warning_msg
+        use opentrustregion_core, only: stability_settings_type, &
+                                        orthogonalize_trial_vectors, &
+                                        lin_dep_trial_vector_warning_msg
 
         type(stability_settings_type) :: settings
         real(rp), allocatable :: red_space_basis(:, :)
@@ -6908,8 +7054,8 @@ contains
         ! this function tests the Gram-Schmidt subroutine which orthonormalizes a
         ! vector to a given basis
         !
-        use opentrustregion, only: solver_settings_type, gram_schmidt, &
-                                   error_gram_schmidt_lin_dep
+        use opentrustregion_core, only: solver_settings_type, gram_schmidt, &
+                                        error_gram_schmidt_lin_dep
 
         type(solver_settings_type) :: settings
         real(rp) :: vector(n_param), lin_trans_vector(n_param), vector_small(2), &
@@ -6925,13 +7071,12 @@ contains
         ! setup settings object
         call setup_settings(settings, context)
 
-        ! generate vector to be orthogonalized, scaled to a norm between the threshold
-        ! of the routine for a numerically zero vector and the one for linear
-        ! dependence, so that the check for linear dependence has to be relative to
-        ! the size of the vector, and orthonormal space spanned by eigenvectors of a
-        ! symmetric matrix
+        ! generate vector to be orthogonalized, scaled to a tiny norm as a
+        ! preconditioned residual can have, so that the checks for a vanishing vector
+        ! and for linear dependence have to be relative to the size of the vector, and
+        ! orthonormal space spanned by eigenvectors of a symmetric matrix
         call random_number(vector)
-        vector = 1e-15_rp * vector / norm2(vector)
+        vector = 1e-20_rp * vector / norm2(vector)
         call ref_symm_mat_diag(generate_random_symm_matrix(n_param), eigvals, eigvecs)
         space = eigvecs(:, :2)
 
@@ -7078,8 +7223,9 @@ contains
         ! this function tests the subroutine that constructs the level-shifted diagonal
         ! preconditioner
         !
-        use opentrustregion, only: solver_settings_type, level_shifted_diag_precond, &
-                                   error_precond, error_project
+        use opentrustregion_core, only: solver_settings_type, &
+                                        level_shifted_diag_precond, error_precond, &
+                                        error_project
 
         real(rp) :: vector(3), mu, h_diag(3), precond_vector(3)
         type(solver_settings_type) :: settings
@@ -7093,10 +7239,11 @@ contains
         ! setup settings object
         call setup_settings(settings, context)
 
-        ! initialize quantities
+        ! initialize quantities, with a level-shifted Hessian diagonal element that
+        ! vanishes and one that is negative, whose sign the preconditioner keeps
         vector = [1.0_rp, 1.0_rp, 1.0_rp]
         mu = -2.0_rp
-        h_diag = [-2.0_rp, 1.0_rp, 2.0_rp]
+        h_diag = [-2.0_rp, 1.0_rp, -3.0_rp]
 
         ! call subroutine and check if results match
         call level_shifted_diag_precond(vector, mu, h_diag, precond_vector, settings, &
@@ -7106,7 +7253,7 @@ contains
                 "error for default preconditioner."
             test_level_shifted_diag_precond = .false.
         end if
-        if (any(abs(precond_vector - [1e10_rp, 1.0_rp / 3, 0.25_rp]) > tol)) then
+        if (any(abs(precond_vector - [1e10_rp, 1.0_rp / 3, -1.0_rp]) > tol)) then
             write(stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
                 "preconditioned vector not correct for default preconditioner."
             test_level_shifted_diag_precond = .false.
@@ -7123,7 +7270,7 @@ contains
                 "error for custom projection function."
             test_level_shifted_diag_precond = .false.
         end if
-        if (any(abs(precond_vector - [2e10_rp, 2.0_rp / 3, 0.5_rp]) > tol)) then
+        if (any(abs(precond_vector - [2e10_rp, 2.0_rp / 3, -2.0_rp]) > tol)) then
             write(stderr, *) "test_level_shifted_diag_precond failed: Returned "// &
                 "preconditioned vector not correct for custom projection function."
             test_level_shifted_diag_precond = .false.
@@ -7179,8 +7326,8 @@ contains
         ! absolute diagonal preconditioner used to define the ellipsoidal trust-region
         ! metric for TCG/GLTR
         !
-        use opentrustregion, only: solver_settings_type, rel_floor_diag_precond, &
-                                   error_precond_pd, error_project
+        use opentrustregion_core, only: solver_settings_type, rel_floor_diag_precond, &
+                                        error_precond_pd, error_project
 
         real(rp) :: vector(3), h_diag(3), precond_vector(3)
         type(solver_settings_type) :: settings
@@ -7296,7 +7443,7 @@ contains
         ! this function tests the orthogonal projection function which removes a
         ! certain direction from a vector
         !
-        use opentrustregion, only: orthogonal_projection
+        use opentrustregion_core, only: orthogonal_projection
 
         real(rp), dimension(n_param) :: vector, direction, complement
 
@@ -7330,8 +7477,8 @@ contains
         !
         ! this function tests the Jacobi-Davidson correction subroutine
         !
-        use opentrustregion, only: solver_settings_type, hess_x_type, &
-                                   jacobi_davidson_correction, error_hess_x
+        use opentrustregion_core, only: solver_settings_type, hess_x_type, &
+                                        jacobi_davidson_correction, error_hess_x
 
         type(solver_settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -7421,8 +7568,8 @@ contains
         !
         ! this function tests the minimum residual method subroutine
         !
-        use opentrustregion, only: solver_settings_type, hess_x_type, minres, &
-                                   verbosity_warning, minres_max_iter_warning_msg
+        use opentrustregion_core, only: solver_settings_type, hess_x_type, minres, &
+                                        verbosity_warning, minres_max_iter_warning_msg
 
         type(solver_settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -7726,9 +7873,9 @@ contains
         ! this function tests the subroutine which adds a new trial vector to the
         ! reduced space basis
         !
-        use opentrustregion, only: solver_settings_type, hess_x_type, &
-                                   add_trial_vector, error_gram_schmidt_lin_dep, &
-                                   error_hess_x
+        use opentrustregion_core, only: solver_settings_type, hess_x_type, &
+                                        add_trial_vector, error_gram_schmidt_lin_dep, &
+                                        error_hess_x
 
         type(solver_settings_type) :: settings
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -8062,7 +8209,7 @@ contains
         !
         ! this function tests the subroutine that prints the result table
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
 
         type(solver_settings_type) :: settings
         type(test_context_type), target :: context
@@ -8119,8 +8266,8 @@ contains
         ! this function tests the subroutine which prints the warning that settings
         ! were not initialized
         !
-        use opentrustregion, only: solver_settings_type, warn_uninitialized_settings, &
-                                   verbosity_silent
+        use opentrustregion_core, only: solver_settings_type, &
+                                        warn_uninitialized_settings, verbosity_silent
 
         type(solver_settings_type) :: settings
         type(test_context_type), target :: context
@@ -8145,8 +8292,8 @@ contains
         !
         ! this function tests the logging subroutine
         !
-        use opentrustregion, only: solver_settings_type, print_message, &
-                                   verbosity_debug, verbosity_warning
+        use opentrustregion_core, only: solver_settings_type, print_message, &
+                                        verbosity_debug, verbosity_warning
 
         type(solver_settings_type) :: settings
         type(test_context_type), target :: context
@@ -8200,7 +8347,7 @@ contains
         ! this function tests the subroutine which splits strings after a space if they
         ! exceed a given maximum length
         !
-        use opentrustregion, only: split_string_by_space
+        use opentrustregion_core, only: split_string_by_space
 
         character(len=23), parameter :: message = "This is a test message."
         character(len=:), allocatable :: substrings(:)
@@ -8258,10 +8405,10 @@ contains
         !
         ! this function tests the level-shifted Davidson subroutine
         !
-        use opentrustregion, only: solver_settings_type, subsystem_solver_options, &
-                                   obj_func_type, hess_x_type, level_shifted_davidson, &
-                                   error_hess_x, error_obj_func, &
-                                   trust_radius_expand_ratio, trust_radius_expand_factor
+        use opentrustregion_core, only: &
+            solver_settings_type, subsystem_solver_options, obj_func_type, &
+            hess_x_type, level_shifted_davidson, error_hess_x, error_obj_func, &
+            trust_radius_expand_ratio, trust_radius_expand_factor
 
         integer(ip), parameter :: n_stagnation = 20
         character(len=*), parameter :: &
@@ -8539,6 +8686,47 @@ contains
             test_level_shifted_davidson = .false.
         end if
 
+        ! run level-shifted Davidson with an objective function which is not a number
+        ! at every step, so that every step is rejected until the predicted change can
+        ! not be resolved, and check that it stops with an error rather than at maximum
+        ! precision
+        obj_func_funptr => nan_obj_func
+        state%trust_radius = 0.4_rp
+        call level_shifted_davidson(0.5_rp, grad, norm2(grad), h_diag, n_param, &
+                                    obj_func_funptr, hess_x_funptr, settings, .false., &
+                                    state, solution, solution_norm, mu, error)
+        if (error /= 1) then
+            write(stderr, *) "test_level_shifted_davidson failed: Did not report "// &
+                "an objective function which is not a number at every step."
+            test_level_shifted_davidson = .false.
+        end if
+
+        ! run level-shifted Davidson near the saddle point with a single micro
+        ! iteration allowed per step and check that every step, accepted or rejected,
+        ! performs exactly one micro iteration before the objective function is
+        ! evaluated
+        call setup_settings(settings, context)
+        settings%grad_noise = .false.
+        settings%n_micro = 1
+        call setup_hartmann6d_point(context, near_saddle_point, func, grad, h_diag)
+        obj_func_funptr => obj_func
+        hess_x_funptr => hess_x_fun
+        state%trust_radius = 0.4_rp
+        state%n_obj_func = 0
+        call level_shifted_davidson(func, grad, norm2(grad), h_diag, n_param, &
+                                    obj_func_funptr, hess_x_funptr, settings, .false., &
+                                    state, solution, solution_norm, mu, error)
+        if (error /= 0) then
+            write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "with a single micro iteration."
+            test_level_shifted_davidson = .false.
+        end if
+        if (state%micro_iteration /= state%n_obj_func) then
+            write(stderr, *) "test_level_shifted_davidson failed: Not exactly one "// &
+                "micro iteration performed per step when a single one is allowed."
+            test_level_shifted_davidson = .false.
+        end if
+
         ! let the residual stagnate with a quadratic model whose gradient only couples
         ! to the second unit vector and a preconditioner which returns the following
         ! unit vectors, which can never reduce the residual, and check that the
@@ -8588,6 +8776,53 @@ contains
                 test_level_shifted_davidson = .false.
             end if
         end do
+
+        ! let the residual stagnate in the same way on a quadratic model with a
+        ! diagonal Hessian whose eigenvalues grow with the cube of their index and a
+        ! gradient spread evenly over the first half of its eigenvectors, the
+        ! preconditioner only returning the others, so that the Jacobi-Davidson method,
+        ! which the stagnation switches to, decreases the residual by less than a fifth
+        ! in its first micro iteration and needs several to solve the subproblem, and
+        ! check that it gets them and solves the subproblem in the first step instead
+        ! of stopping right after the switch, the gradient is small enough for the
+        ! step to rotate no parameter by more than pi / 4, which would reject it
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        settings%n_random_trial_vectors = 0
+        settings%precond => mock_precond_next_unit_vector
+        settings%subsystem_solver = "jacobi-davidson_ls"
+        quadratic_context%hess = identity_matrix(n_stagnation)
+        do i = 1, n_stagnation
+            quadratic_context%hess(i, i) = real(i, kind=rp)**3
+        end do
+        quadratic_context%grad = spread(0.0_rp, 1, n_stagnation)
+        quadratic_context%grad(:n_stagnation / 2) = 0.01_rp
+        quadratic_context%next_unit_vector = n_stagnation / 2
+        h_diag_stagnation = [(quadratic_context%hess(i, i), i=1, n_stagnation)]
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 10.0_rp
+        state%n_obj_func = 0
+        call level_shifted_davidson( &
+            0.0_rp, quadratic_context%grad, norm2(quadratic_context%grad), &
+            h_diag_stagnation, n_stagnation, obj_func_funptr, hess_x_funptr, settings, &
+            .false., state, solution_stagnation, solution_norm, mu, error)
+        if (error /= 0) then
+            write(stderr, *) "test_level_shifted_davidson failed: Produced error "// &
+                "when Jacobi-Davidson needs several micro iterations after stagnation."
+            test_level_shifted_davidson = .false.
+        end if
+        if (state%jacobi_davidson_iteration < 2) then
+            write(stderr, *) "test_level_shifted_davidson failed: Jacobi-Davidson "// &
+                "method not given more than one micro iteration after stagnation."
+            test_level_shifted_davidson = .false.
+        end if
+        if (state%n_obj_func /= 1) then
+            write(stderr, *) "test_level_shifted_davidson failed: Step rejected "// &
+                "although Jacobi-Davidson method can solve the subproblem after "// &
+                "stagnation."
+            test_level_shifted_davidson = .false.
+        end if
 
         ! let the reduced space grow until it can no longer be expanded, a vanishing
         ! reduction factor prevents natural convergence, and one large Hessian
@@ -8794,9 +9029,9 @@ contains
                 "with a state of an earlier subproblem."
             test_level_shifted_davidson = .false.
         end if
-        if (.not. check_reset_state_seen(state_context, "level_shifted_davidson", &
-                                         "Hessian linear transformation")) &
-            test_level_shifted_davidson = .false.
+        if (.not. check_reset_state_seen( &
+            state_context, 0_ip, "level_shifted_davidson", &
+            "Hessian linear transformation")) test_level_shifted_davidson = .false.
 
     contains
 
@@ -8957,9 +9192,11 @@ contains
         !
         ! this function tests the truncated conjugate gradient subroutine
         !
-        use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
-                                   truncated_conjugate_gradient, error_hess_x, &
-                                   error_obj_func, trust_region_shape_options
+        use opentrustregion_core, only: obj_func_type, hess_x_type, &
+                                        solver_settings_type, &
+                                        truncated_conjugate_gradient, error_hess_x, &
+                                        error_obj_func, trust_region_shape_options
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
 
         type(solver_settings_type) :: settings
         type(solver_state_type), target :: state
@@ -9365,6 +9602,64 @@ contains
             test_truncated_conjugate_gradient = .false.
         end if
 
+        ! run truncated conjugate gradient on a quadratic model with an objective
+        ! function which is not a number at every step, so that every step is rejected
+        ! until the predicted change can not be resolved, and check that the subproblem
+        ! stops with an error rather than at maximum precision
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%grad = 1.0_rp
+        h_diag = 1.0_rp
+        obj_func_funptr => nan_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        call truncated_conjugate_gradient( &
+            0.5_rp, quadratic_context%grad, h_diag, n_param, obj_func_funptr, &
+            hess_x_funptr, settings, state, solution, solution_norm, error)
+        if (error /= 1) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Did not "// &
+                "report an objective function which is not a number at every step."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
+        ! run truncated conjugate gradient on a quadratic model with an infinite
+        ! curvature along the first parameter, as from a Hessian linear transformation
+        ! which overflows, and check that the subproblem reports this as an error with
+        ! an error message right after the first Hessian linear transformation, without
+        ! evaluating the objective function
+        call setup_settings(settings, quadratic_context)
+        call setup_error_logging(settings, quadratic_context)
+        settings%grad_noise = .false.
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%hess(1, 1) = ieee_value(1.0_rp, ieee_positive_inf)
+        quadratic_context%grad = 1.0_rp
+        h_diag = 1.0_rp
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        state%n_hess_x = 0
+        state%n_obj_func = 0
+        call truncated_conjugate_gradient( &
+            0.0_rp, quadratic_context%grad, h_diag, n_param, obj_func_funptr, &
+            hess_x_funptr, settings, state, solution, solution_norm, error)
+        if (error /= 1) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Did not "// &
+                "report a Hessian linear transformation which is not finite."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (len_trim(quadratic_context%log_message) == 0) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: No error "// &
+                "message printed for a Hessian linear transformation which is not "// &
+                "finite."
+            test_truncated_conjugate_gradient = .false.
+        end if
+        if (state%n_hess_x /= 1 .or. state%n_obj_func /= 0) then
+            write(stderr, *) "test_truncated_conjugate_gradient failed: Hessian "// &
+                "linear transformation which is not finite not reported right after it."
+            test_truncated_conjugate_gradient = .false.
+        end if
+
         ! solve the subproblem of the double well function with a state holding the
         ! values of an earlier subproblem and a positive-definite preconditioner which
         ! reads the state through the pointer in its context, and check that the first
@@ -9385,9 +9680,10 @@ contains
                 "error with a state of an earlier subproblem."
             test_truncated_conjugate_gradient = .false.
         end if
-        if (.not. check_reset_state_seen( &
-            state_context, "truncated_conjugate_gradient", "positive-definite "// &
-            "preconditioner")) test_truncated_conjugate_gradient = .false.
+        if (.not. check_reset_state_seen(state_context, 0_ip, &
+                                         "truncated_conjugate_gradient", &
+                                         "positive-definite preconditioner")) &
+            test_truncated_conjugate_gradient = .false.
 
     end function test_truncated_conjugate_gradient
 
@@ -9395,9 +9691,10 @@ contains
         !
         ! this function tests the generalized Lanczos trust region subroutine
         !
-        use opentrustregion, only: obj_func_type, hess_x_type, solver_settings_type, &
-                                   generalized_lanczos_trust_region, error_obj_func, &
-                                   trust_region_shape_options
+        use opentrustregion_core, only: &
+            obj_func_type, hess_x_type, solver_settings_type, &
+            generalized_lanczos_trust_region, error_obj_func, trust_region_shape_options
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
 
         character(len=*), parameter :: restart_case_names(3) = &
             [character(len=28) :: "inside the trust region", &
@@ -9909,6 +10206,67 @@ contains
             test_generalized_lanczos_trust_region = .false.
         end if
 
+        ! run generalized Lanczos trust region on a quadratic model with an objective
+        ! function which is not a number at every step, so that every step is rejected
+        ! until the predicted change can not be resolved, and check that the subproblem
+        ! stops with an error rather than at maximum precision
+        call setup_settings(settings, quadratic_context)
+        settings%grad_noise = .false.
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%grad = 1.0_rp
+        h_diag = 1.0_rp
+        obj_func_funptr => nan_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        call generalized_lanczos_trust_region(0.5_rp, quadratic_context%grad, h_diag, &
+                                              n_param, obj_func_funptr, hess_x_funptr, &
+                                              settings, .false., state, solution, &
+                                              solution_norm, lambda, error)
+        if (error /= 1) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: Did "// &
+                "not report an objective function which is not a number at every step."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
+        ! run generalized Lanczos trust region on a quadratic model with an infinite
+        ! curvature along the first parameter, as from a Hessian linear transformation
+        ! which overflows, and check that the subproblem reports this as an error with
+        ! an error message right after the first Hessian linear transformation,
+        ! without evaluating the objective function
+        call setup_settings(settings, quadratic_context)
+        call setup_error_logging(settings, quadratic_context)
+        settings%grad_noise = .false.
+        quadratic_context%hess = identity_matrix(n_param)
+        quadratic_context%hess(1, 1) = ieee_value(1.0_rp, ieee_positive_inf)
+        quadratic_context%grad = 1.0_rp
+        h_diag = 1.0_rp
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+        state%trust_radius = 0.4_rp
+        state%n_hess_x = 0
+        state%n_obj_func = 0
+        call generalized_lanczos_trust_region(0.0_rp, quadratic_context%grad, h_diag, &
+                                              n_param, obj_func_funptr, hess_x_funptr, &
+                                              settings, .false., state, solution, &
+                                              solution_norm, lambda, error)
+        if (error /= 1) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: Did "// &
+                "not report a Hessian linear transformation which is not finite."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (len_trim(quadratic_context%log_message) == 0) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: No "// &
+                "error message printed for a Hessian linear transformation which "// &
+                "is not finite."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+        if (state%n_hess_x /= 1 .or. state%n_obj_func /= 0) then
+            write(stderr, *) "test_generalized_lanczos_trust_region failed: "// &
+                "Hessian linear transformation which is not finite not reported "// &
+                "right after it."
+            test_generalized_lanczos_trust_region = .false.
+        end if
+
         ! solve the subproblem of the double well function with a state holding the
         ! values of an earlier subproblem and a positive-definite preconditioner which
         ! reads the state through the pointer in its context, and check that the first
@@ -9930,9 +10288,10 @@ contains
                 "Produced error with a state of an earlier subproblem."
             test_generalized_lanczos_trust_region = .false.
         end if
-        if (.not. check_reset_state_seen( &
-            state_context, "generalized_lanczos_trust_region", "positive-definite "// &
-            "preconditioner")) test_generalized_lanczos_trust_region = .false.
+        if (.not. check_reset_state_seen(state_context, 0_ip, &
+                                         "generalized_lanczos_trust_region", &
+                                         "positive-definite preconditioner")) &
+            test_generalized_lanczos_trust_region = .false.
 
     end function test_generalized_lanczos_trust_region
 
@@ -9941,22 +10300,22 @@ contains
         ! this function tests the subroutine which determines whether to accept a
         ! trust-region step
         !
-        use opentrustregion, only: &
+        use opentrustregion_core, only: &
             solver_settings_type, accept_trust_region_step, trust_radius_shrink_ratio, &
             trust_radius_expand_ratio, trust_radius_shrink_factor, &
             trust_radius_expand_factor, function_unchanged_warning_msg
-        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, &
-                                                 ieee_quiet_nan
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_negative_inf, &
+                                                 ieee_positive_inf, ieee_quiet_nan
 
         ! cases with the reason for accepting or rejecting the step, the size of the
         ! first rotation, the norm of the step, the ratio of actual to predicted
         ! function change, whether the micro iterations converged, and the expected
         ! acceptance and trust radius, for a starting trust radius of one
         character(len=*), parameter :: case_names(7) = &
-            [character(len=47) :: "micro iterations have not converged", "ratio is "// &
-             "negative", "individual rotations are too large", "ratio is too small", &
-             "ratio is acceptable", "ratio is too large at the trust region boundary", &
-             "ratio is too large within the trust region"]
+            [character(len=47) :: "micro iterations have not converged", &
+             "function value increases", "individual rotations are too large", &
+             "ratio is too small", "ratio is acceptable", "ratio is too large at "// &
+             "the trust region boundary", "ratio is too large within the trust region"]
         real(rp), parameter :: &
             case_rotations(7) = &
                 [0.3_rp, 0.3_rp, 1.0_rp, 0.3_rp, 0.3_rp, 0.3_rp, 0.3_rp], &
@@ -9993,31 +10352,45 @@ contains
         real(rp), parameter :: &
             precision_case_funcs(9) = [-1.0_rp, -2000.0_rp, -1.0_rp, 0.0_rp, -1.0_rp, &
                                        -1.0_rp, -1.0_rp, -1.0_rp, -1.0_rp], &
-            precision_case_actual(9) = [0.0_rp, 1e-13_rp, 1e-13_rp, 0.0_rp, 1e-3_rp, &
-                                        1e-3_rp, -1e-3_rp, 1e10_rp, 1e-20_rp], &
-            precision_case_predicted(9) = [0.0_rp, 1e-13_rp, 1e-13_rp, 0.0_rp, &
-                                           1e-20_rp, -1e-20_rp, -1e-20_rp, -1e-6_rp, &
-                                           1e-3_rp]
+            precision_case_actual(9) = [0.0_rp, 1e-13_rp, -1e-13_rp, 0.0_rp, -1e-3_rp, &
+                                        1e-3_rp, -1e-3_rp, 1e10_rp, -1e-20_rp], &
+            precision_case_predicted(9) = [0.0_rp, 1e-13_rp, -1e-13_rp, 0.0_rp, &
+                                           -1e-20_rp, -1e-20_rp, -1e-20_rp, -1e-6_rp, &
+                                           -1e-3_rp]
         logical, parameter :: &
             precision_case_converged(9) = [.true., .true., .true., .true., .true., &
                                            .true., .false., .true., .true.], &
             precision_case_reached(9) = [.true., .true., .false., .true., .false., &
                                          .true., .true., .false., .false.]
 
-        ! cases of an actual or predicted function change which is not finite, as for
+        ! cases of function changes which reject the step whatever their ratio, a
+        ! predicted increase, as for a Newton step along a slightly negative curvature,
+        ! also where the function value decreases, a function value which does not
+        ! change and an actual or predicted function change which is not finite, as for
         ! an objective function or a Hessian linear transformation which overflows at
         ! the step
-        character(len=*), parameter :: non_finite_case_names(3) = &
-            [character(len=23) :: "overflowing function", "function not a number", &
-             "overflowing prediction"]
-        real(rp) :: non_finite_actual(3), non_finite_predicted(3)
+        character(len=*), parameter :: rejecting_case_names(5) = &
+            [character(len=23) :: "predicted increase", "unchanged function", &
+             "overflowing function", "function not a number", "overflowing prediction"]
+        real(rp) :: rejecting_actual(5), rejecting_predicted(5)
+
+        ! cases of a step whose norm is not finite, as from a Hessian linear
+        ! transformation or a preconditioner which returns values that are not finite,
+        ! and of a function change which is not finite at a step whose predicted change
+        ! can not be resolved, as from an objective function which fails, which are
+        ! errors
+        character(len=*), parameter :: error_case_names(3) = &
+            [character(len=51) :: "step norm not a number", &
+             "function not a number at an unresolvable prediction", &
+             "overflowing function at an unresolvable prediction"]
+        real(rp) :: error_step_norms(3), error_actual(3), error_predicted(3)
 
         logical :: accept_step
         real(rp) :: solution(3)
         type(solver_state_type) :: state
         type(solver_settings_type) :: settings
         type(test_context_type), target :: context
-        integer(ip) :: i
+        integer(ip) :: i, error
 
         ! assume tests pass
         test_accept_trust_region_step = .true.
@@ -10034,9 +10407,14 @@ contains
             state%trust_radius = 1.0_rp
             state%max_precision_reached = .true.
             solution(1) = case_rotations(i)
-            accept_step = accept_trust_region_step(solution, case_step_norms(i), &
-                                                   -1.0_rp, case_ratios(i), 1.0_rp, &
-                                                   case_converged(i), settings, state)
+            accept_step = accept_trust_region_step( &
+                solution, case_step_norms(i), -1.0_rp, -case_ratios(i), -1.0_rp, &
+                case_converged(i), settings, state, error)
+            if (error /= 0) then
+                write(stderr, *) "test_accept_trust_region_step failed: Produced "// &
+                    "error when "//trim(case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
             if (accept_step .neqv. case_accepted(i)) then
                 write(stderr, *) "test_accept_trust_region_step failed: Step "// &
                     "acceptance incorrect when "//trim(case_names(i))//"."
@@ -10054,32 +10432,38 @@ contains
             end if
         end do
 
-        ! check for every case of a function change which is not finite, with changes
-        ! of the same sign which would otherwise accept the step, that the step is
-        ! rejected and the trust radius reduced without maximum precision being
-        ! reported
-        non_finite_actual = [ieee_value(1.0_rp, ieee_positive_inf), &
-                             ieee_value(1.0_rp, ieee_quiet_nan), 1.0_rp]
-        non_finite_predicted = [1.0_rp, 1.0_rp, ieee_value(1.0_rp, ieee_positive_inf)]
-        do i = 1, size(non_finite_case_names)
+        ! check for every case of function changes which reject the step, where the
+        ! changes which are not finite otherwise have the same sign, which would accept
+        ! the step, that the step is rejected and the trust radius reduced without
+        ! maximum precision being reported
+        rejecting_actual = [-0.5_rp, 0.0_rp, ieee_value(1.0_rp, ieee_negative_inf), &
+                            ieee_value(1.0_rp, ieee_quiet_nan), -1.0_rp]
+        rejecting_predicted = &
+            [1.0_rp, -1.0_rp, -1.0_rp, -1.0_rp, ieee_value(1.0_rp, ieee_negative_inf)]
+        do i = 1, size(rejecting_case_names)
             state%trust_radius = 1.0_rp
             accept_step = accept_trust_region_step( &
-                solution, 0.5_rp, -1.0_rp, non_finite_actual(i), &
-                non_finite_predicted(i), .true., settings, state)
+                solution, 0.5_rp, -1.0_rp, rejecting_actual(i), &
+                rejecting_predicted(i), .true., settings, state, error)
+            if (error /= 0) then
+                write(stderr, *) "test_accept_trust_region_step failed: Produced "// &
+                    "error for "//trim(rejecting_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
             if (accept_step) then
                 write(stderr, *) "test_accept_trust_region_step failed: Step "// &
-                    "accepted for "//trim(non_finite_case_names(i))//"."
+                    "accepted for "//trim(rejecting_case_names(i))//"."
                 test_accept_trust_region_step = .false.
             end if
             if (abs(state%trust_radius - trust_radius_shrink_factor) > tol) then
                 write(stderr, *) "test_accept_trust_region_step failed: Trust "// &
-                    "radius not reduced for "//trim(non_finite_case_names(i))//"."
+                    "radius not reduced for "//trim(rejecting_case_names(i))//"."
                 test_accept_trust_region_step = .false.
             end if
             if (state%max_precision_reached) then
                 write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
                     "precision reported as reached for "// &
-                    trim(non_finite_case_names(i))//"."
+                    trim(rejecting_case_names(i))//"."
                 test_accept_trust_region_step = .false.
             end if
         end do
@@ -10094,7 +10478,12 @@ contains
             accept_step = accept_trust_region_step( &
                 solution, 0.5_rp, precision_case_funcs(i), precision_case_actual(i), &
                 precision_case_predicted(i), precision_case_converged(i), settings, &
-                state)
+                state, error)
+            if (error /= 0) then
+                write(stderr, *) "test_accept_trust_region_step failed: Produced "// &
+                    "error for "//trim(precision_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
             if (state%max_precision_reached .neqv. precision_case_reached(i)) then
                 write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
                     "precision detected incorrectly for "// &
@@ -10123,6 +10512,41 @@ contains
             end if
         end do
 
+        ! check for every error case that the error is reported with an error message
+        ! and that the step is rejected without maximum precision being reported as
+        ! reached
+        call setup_error_logging(settings, context)
+        error_step_norms = [ieee_value(1.0_rp, ieee_quiet_nan), 0.5_rp, 0.5_rp]
+        error_actual = [1.0_rp, ieee_value(1.0_rp, ieee_quiet_nan), &
+                        ieee_value(1.0_rp, ieee_positive_inf)]
+        error_predicted = [1.0_rp, -1e-20_rp, -1e-20_rp]
+        do i = 1, size(error_case_names)
+            context%log_message = ""
+            accept_step = accept_trust_region_step( &
+                solution, error_step_norms(i), -1.0_rp, error_actual(i), &
+                error_predicted(i), .true., settings, state, error)
+            if (error /= 1) then
+                write(stderr, *) "test_accept_trust_region_step failed: Did not "// &
+                    "report an error for "//trim(error_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (len_trim(context%log_message) == 0) then
+                write(stderr, *) "test_accept_trust_region_step failed: No error "// &
+                    "message printed for "//trim(error_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (accept_step) then
+                write(stderr, *) "test_accept_trust_region_step failed: Step "// &
+                    "accepted for "//trim(error_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+            if (state%max_precision_reached) then
+                write(stderr, *) "test_accept_trust_region_step failed: Maximum "// &
+                    "precision reported as reached for "//trim(error_case_names(i))//"."
+                test_accept_trust_region_step = .false.
+            end if
+        end do
+
     end function test_accept_trust_region_step
 
     logical(c_bool) function test_init_defaults() bind(C)
@@ -10130,7 +10554,7 @@ contains
         ! this function tests the subroutine that resolves settings defaults that
         ! depend on other settings
         !
-        use opentrustregion, only: &
+        use opentrustregion_core, only: &
             solver_settings_type, init_defaults, default_spherical_trust_radius, &
             default_ellipsoidal_trust_radius, verbosity_info, verbosity_debug
 
@@ -10347,7 +10771,7 @@ contains
         ! settings of solver settings inherit the solver's preconditioning, projection
         ! and logging functions and its host context
         !
-        use opentrustregion, only: solver_settings_type, inherit_solver_callbacks
+        use opentrustregion_core, only: solver_settings_type, inherit_solver_callbacks
 
         type(solver_settings_type) :: settings
         type(test_context_type), target :: context, stability_context
@@ -10417,21 +10841,23 @@ contains
         ! this function tests the subroutine which performs a sanity check for the
         ! solver
         !
-        use opentrustregion, only: solver_settings_type, solver_sanity_check, &
-                                   project_warning_msg, &
-                                   random_trial_vector_warning_msg, &
-                                   subsystem_solver_options, trust_region_shape_options
+        use opentrustregion_core, only: &
+            solver_settings_type, solver_sanity_check, project_warning_msg, &
+            random_trial_vector_warning_msg, subsystem_solver_options, &
+            trust_region_shape_options
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, &
+                                                 ieee_quiet_nan
 
         ! settings which the sanity check rejects and the settings that carry a
         ! projection
-        character(len=*), parameter :: error_case_names(9) = &
+        character(len=*), parameter :: error_case_names(11) = &
             [character(len=61) :: "vanishing number of parameters", &
              "negative number of parameters", "vanishing number of micro iterations", &
-             "negative number of random trial vectors", &
-             "extra trial vector function without extra trial vectors", &
-             "unknown subsystem solver", "unknown trust region shape", &
-             "ellipsoidal trust region with Davidson-based subsystem solver", &
-             "rejected nested stability check settings"]
+             "negative number of random trial vectors", "infinite starting trust "// &
+             "radius", "NaN starting trust radius", "extra trial vector function "// &
+             "without extra trial vectors", "unknown subsystem solver", "unknown "// &
+             "trust region shape", "ellipsoidal trust region with Davidson-based "// &
+             "subsystem solver", "rejected nested stability check settings"]
         character(len=*), parameter :: projection_case_names(2) = &
             [character(len=42) :: "solver settings", &
              "solver settings and inheriting nested ones"]
@@ -10502,16 +10928,20 @@ contains
             case (4)
                 settings%n_random_trial_vectors = -1
             case (5)
+                settings%start_trust_radius = ieee_value(1.0_rp, ieee_positive_inf)
+            case (6)
+                settings%start_trust_radius = ieee_value(1.0_rp, ieee_quiet_nan)
+            case (7)
                 settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
                 settings%n_extra_trial_vectors = 0
-            case (6)
-                settings%subsystem_solver = "unknown"
-            case (7)
-                settings%trust_region_shape = "unknown"
             case (8)
+                settings%subsystem_solver = "unknown"
+            case (9)
+                settings%trust_region_shape = "unknown"
+            case (10)
                 settings%subsystem_solver = "davidson_ls"
                 settings%trust_region_shape = "ellipsoidal"
-            case (9)
+            case (11)
                 ! the nested settings print the error message of their own check
                 call setup_error_logging(settings%stability_settings, context)
                 settings%stability_settings%diag_solver = "unknown"
@@ -10603,7 +11033,7 @@ contains
         ! this function tests the subroutine which performs a sanity check for the
         ! stability check
         !
-        use opentrustregion, only: &
+        use opentrustregion_core, only: &
             stability_settings_type, stability_sanity_check, project_warning_msg, &
             random_trial_vector_warning_msg, diag_solver_options, &
             standalone_n_random_trial_vectors
@@ -10784,7 +11214,7 @@ contains
         ! this function tests the subroutine that adds the error origin to an error
         ! code
         !
-        use opentrustregion, only: solver_settings_type, add_error_origin
+        use opentrustregion_core, only: solver_settings_type, add_error_origin
 
         type(solver_settings_type) :: settings
         integer(ip) :: error
@@ -10843,7 +11273,7 @@ contains
         !
         ! this function tests the function that transfers strings to lowercase
         !
-        use opentrustregion, only: string_to_lowercase
+        use opentrustregion_core, only: string_to_lowercase
 
         character(len=*), parameter :: input = "OpenTrustRegion123!", &
                                        expect = "opentrustregion123!"
@@ -10865,7 +11295,7 @@ contains
         ! this function tests the function that checks whether a string is contained in
         ! another string
         !
-        use opentrustregion, only: string_in
+        use opentrustregion_core, only: string_in
 
         character(len=*), parameter :: input = "OpenTrustRegion123!"
 
@@ -10891,8 +11321,9 @@ contains
         ! this function tests the subroutine which runs the Lanczos process of
         ! generalized Lanczos trust region
         !
-        use opentrustregion, only: hess_x_type, solver_settings_type, &
-                                   gltr_lanczos_type, gltr_lanczos_process, error_hess_x
+        use opentrustregion_core, only: hess_x_type, solver_settings_type, &
+                                        gltr_lanczos_type, gltr_lanczos_process, &
+                                        error_hess_x
 
         ! starting value of the function and of the micro iterations, which the
         ! Lanczos process continues counting
@@ -11266,8 +11697,8 @@ contains
         ! this function tests the subroutine which returns the preconditioned residual
         ! of generalized Lanczos trust region and its dot product with the residual
         !
-        use opentrustregion, only: solver_settings_type, gltr_precondition_residual, &
-                                   trust_region_shape_options
+        use opentrustregion_core, only: &
+            solver_settings_type, gltr_precondition_residual, trust_region_shape_options
 
         type(solver_settings_type) :: settings
         real(rp), dimension(n_param) :: residual, h_diag, precond_residual, &
@@ -11324,9 +11755,10 @@ contains
         ! region subproblem of generalized Lanczos trust region from the solution of
         ! the reduced problem and the preconditioned residuals of the Lanczos process
         !
-        use opentrustregion, only: hess_x_type, solver_settings_type, &
-                                   gltr_lanczos_type, gltr_assemble_solution, &
-                                   error_hess_x
+        use opentrustregion_core, only: hess_x_type, solver_settings_type, &
+                                        gltr_lanczos_type, gltr_assemble_solution, &
+                                        error_hess_x
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
 
         ! size of the reduced space, which leaves the last stored preconditioned
         ! residual unused, the step sizes of the Lanczos iterations, of both signs, and
@@ -11389,13 +11821,18 @@ contains
         ! performed, then in the hard case that it is completed along the eigenvector
         ! of the reduced problem in the Lanczos vectors, scaled to unit norm, by the
         ! step size of the hard case and that one Hessian linear transformation is
-        ! performed and counted, and that the error of a failing one is reported with
-        ! its origin
-        do i_case = 1, 3
+        ! performed and counted, that the error of a failing one is reported with its
+        ! origin and that one which returns values that are not finite is reported as
+        ! an error with an error message
+        do i_case = 1, 4
             lanczos%hard_case = i_case > 1
             fault_context%n_callback_calls = 0
             fault_context%fault_callback = merge(fault_hess_x, 0_ip, i_case == 3)
             fault_context%fault_call = 1
+            if (i_case == 4) then
+                call setup_error_logging(settings, fault_context)
+                fault_context%hess(1, 1) = ieee_value(1.0_rp, ieee_positive_inf)
+            end if
             n_hess_x = 7
             call gltr_assemble_solution(lanczos, hess_x_funptr, solution, settings, &
                                         n_hess_x, error)
@@ -11433,6 +11870,18 @@ contains
                         "its origin."
                     test_gltr_assemble_solution = .false.
                 end if
+            case (4)
+                if (error /= 1) then
+                    write(stderr, *) "test_gltr_assemble_solution failed: Hessian "// &
+                        "linear transformation which is not finite not reported."
+                    test_gltr_assemble_solution = .false.
+                end if
+                if (len_trim(fault_context%log_message) == 0) then
+                    write(stderr, *) "test_gltr_assemble_solution failed: No error "// &
+                        "message printed for a Hessian linear transformation which "// &
+                        "is not finite."
+                    test_gltr_assemble_solution = .false.
+                end if
             end select
         end do
 
@@ -11443,7 +11892,7 @@ contains
         ! this function tests the subroutine which solves the trust region subproblem
         ! of the leading part of the Lanczos tridiagonal matrix
         !
-        use opentrustregion, only: gltr_lanczos_type, solve_lanczos_subproblem
+        use opentrustregion_core, only: gltr_lanczos_type, solve_lanczos_subproblem
 
         ! size of the leading part, which leaves the rest of the stored Lanczos
         ! factorization unused
@@ -11521,7 +11970,8 @@ contains
         ! this function tests the subroutine which perturbs a vector by a random vector
         ! of a given size relative to it
         !
-        use opentrustregion, only: solver_settings_type, perturb_vector, error_project
+        use opentrustregion_core, only: solver_settings_type, perturb_vector, &
+                                        error_project
 
         real(rp), parameter :: noise = 1e-3_rp
         type(solver_settings_type) :: settings
@@ -11599,7 +12049,7 @@ contains
         ! this function tests the function which returns the relative size of the
         ! gradient perturbation
         !
-        use opentrustregion, only: solver_settings_type, noise_level
+        use opentrustregion_core, only: solver_settings_type, noise_level
 
         type(solver_settings_type) :: settings
 
@@ -11633,8 +12083,8 @@ contains
         ! this function tests the function which returns the residual norm at which the
         ! micro iterations stop
         !
-        use opentrustregion, only: solver_settings_type, micro_conv_tol, &
-                                   level_shift_local_thres, residual_norm_floor
+        use opentrustregion_core, only: solver_settings_type, micro_conv_tol, &
+                                        level_shift_local_thres, residual_norm_floor
 
         ! cases with the level shift, the gradient perturbation and the initial
         ! residual norm
@@ -11680,7 +12130,8 @@ contains
         ! this function tests the function which returns the dot product of a residual
         ! and its preconditioned residual
         !
-        use opentrustregion, only: solver_settings_type, get_preconditioned_residual_dot
+        use opentrustregion_core, only: solver_settings_type, &
+                                        get_preconditioned_residual_dot
 
         ! scales of a positive-definite and of a negative-definite preconditioner, at
         ! the order of the residual and shrinking it so far that the dot product lies
@@ -11766,7 +12217,7 @@ contains
         ! this function tests the subroutine which moves a solution within the trust
         ! region along a basis vector to the trust region boundary
         !
-        use opentrustregion, only: find_point_on_boundary
+        use opentrustregion_core, only: find_point_on_boundary
 
         real(rp), parameter :: trust_radius = 1.0_rp
         real(rp) :: basis_vec(n_param), solution(n_param), start_solution(n_param), &
@@ -11832,7 +12283,7 @@ contains
         ! this function tests the subroutine which solves the trust region subproblem
         ! of a tridiagonal matrix
         !
-        use opentrustregion, only: solve_tridiagonal_subproblem
+        use opentrustregion_core, only: solve_tridiagonal_subproblem
 
         integer(ip), parameter :: n_elem = 4
         real(rp), parameter :: rel_tol = 1e-12_rp, &
@@ -12028,7 +12479,7 @@ contains
         ! this function tests the function which computes the lowest eigenvalue of a
         ! symmetric tridiagonal matrix
         !
-        use opentrustregion, only: get_tridiagonal_lowest_eigenvalue
+        use opentrustregion_core, only: get_tridiagonal_lowest_eigenvalue
 
         real(rp), parameter :: rel_tol = 1e-12_rp
         character(len=*), parameter :: position_names(3) = &
@@ -12100,7 +12551,7 @@ contains
         ! this function tests the subroutine which computes an eigenvector of the
         ! lowest eigenvalue of a symmetric tridiagonal matrix
         !
-        use opentrustregion, only: get_tridiagonal_lowest_eigenvector
+        use opentrustregion_core, only: get_tridiagonal_lowest_eigenvector
 
         real(rp) :: diagonal(n_param), off_diagonal(n_param - 1), eigenvec(n_param), &
                     ref_eigvals(n_param), ref_eigvecs(n_param, n_param)
@@ -12143,7 +12594,7 @@ contains
         ! this function tests the subroutine which solves a shifted tridiagonal system
         ! with one step of iterative refinement given its factorization
         !
-        use opentrustregion, only: solve_tridiagonal
+        use opentrustregion_core, only: solve_tridiagonal
 
         real(rp), parameter :: lambda = 0.3_rp, fact_error = 1e-7_rp
         real(rp) :: diagonal_fact(n_param), off_diagonal_fact(n_param - 1), &
@@ -12198,7 +12649,7 @@ contains
         ! this function tests the subroutine which solves a tridiagonal system in place
         ! given its LDL^T factorization
         !
-        use opentrustregion, only: solve_factorized_tridiagonal
+        use opentrustregion_core, only: solve_factorized_tridiagonal
 
         real(rp) :: diagonal_fact(n_param), off_diagonal_fact(n_param - 1), &
                     rhs(n_param), solution(n_param)
@@ -12231,7 +12682,7 @@ contains
         ! this function tests the subroutine which performs forward substitution for a
         ! unit lower bidiagonal matrix
         !
-        use opentrustregion, only: forward_substitution
+        use opentrustregion_core, only: forward_substitution
 
         real(rp) :: off_diagonal(n_param - 1), rhs(n_param), solution(n_param)
 
@@ -12260,7 +12711,7 @@ contains
         ! this function tests the subroutine which performs backward substitution for
         ! the transpose of a unit lower bidiagonal matrix
         !
-        use opentrustregion, only: backward_substitution
+        use opentrustregion_core, only: backward_substitution
 
         real(rp) :: off_diagonal(n_param - 1), rhs(n_param), solution(n_param)
 
@@ -12289,7 +12740,7 @@ contains
         ! this function tests the subroutine which finds the real roots of a quadratic
         ! equation
         !
-        use opentrustregion, only: quadratic_roots
+        use opentrustregion_core, only: quadratic_roots
 
         ! cases with the coefficients of the constant, linear and quadratic terms and
         ! the expected roots in ascending order, zero where there is no root, which
@@ -12336,7 +12787,7 @@ contains
         !
         ! this function tests the function which lists options
         !
-        use opentrustregion, only: option_list
+        use opentrustregion_core, only: option_list
 
         ! assume tests pass
         test_option_list = .true.

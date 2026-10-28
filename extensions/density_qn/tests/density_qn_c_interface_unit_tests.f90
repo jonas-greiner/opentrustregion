@@ -6,7 +6,7 @@
 
 module otr_density_qn_c_interface_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip
     use otr_density_qn_c_interface, only: density_qn_evaluate_dm_c_type
     use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_ptr, c_funptr, &
@@ -112,7 +112,7 @@ contains
         ! closed-shell MO object and an open-shell OAO object, held by holders whose
         ! level of the solver is the context of the C solver settings
         !
-        use opentrustregion, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                assignment(=)
         use otr_common, only: extension_type, orbital_basis_type

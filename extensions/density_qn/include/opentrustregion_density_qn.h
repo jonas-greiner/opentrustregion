@@ -78,11 +78,12 @@ c_int density_qn_factory(density_qn_evaluate_dm_fp evaluate_dm_c_funptr,
 #endif
 
 /* ------------------------------------------------------------------
- * Small C helper functions to mimic Fortran settings%init()
+ * Small C helper functions returning the default settings, which a declared Fortran
+ * settings object holds
  * ------------------------------------------------------------------ */
 
 static inline density_qn_settings_type density_qn_settings_init(void) {
-  density_qn_settings_type s = {0};
+  density_qn_settings_type s;
   init_density_qn_settings(&s);
   return s;
 }

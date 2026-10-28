@@ -6,7 +6,7 @@
 
 module otr_density_qn_c_interface
 
-    use opentrustregion, only: ip, rp, kw_len, obj_func_type, update_orbs_type
+    use opentrustregion_core, only: ip, rp, kw_len, obj_func_type, update_orbs_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
     use otr_density_qn, only: &
         standard_density_qn_factory_common => density_qn_factory_common, &
@@ -81,7 +81,7 @@ contains
         ! the C solver settings, returning the holder as the extension the host
         ! releases before that of the orbital basis object
         !
-        use opentrustregion, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c
         use otr_density_qn, only: &
             density_qn_settings_type, default_density_qn_settings, &
@@ -316,7 +316,7 @@ contains
         !
         use otr_density_qn, only: default_density_qn_settings
 
-        type(density_qn_settings_type_c), intent(inout) :: settings_c
+        type(density_qn_settings_type_c), intent(out) :: settings_c
 
         settings_c = default_density_qn_settings
 

@@ -6,8 +6,8 @@
 
 module otr_s_gek
 
-    use opentrustregion, only: rp, ip, pi, settings_type, update_orbs_type, &
-                               hess_x_type, add_error_origin
+    use opentrustregion_core, only: rp, ip, pi, settings_type, update_orbs_type, &
+                                    hess_x_type, add_error_origin
     use otr_common, only: extension_type, provided_roles_type
 
     implicit none
@@ -91,7 +91,7 @@ contains
         ! keep receiving the host context, and which reads the state of the solver from
         ! the record the host also passes to the solver
         !
-        use opentrustregion, only: obj_func_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, solver_state_type
         use otr_common, only: extension_solver_settings_type, update_orbs_callback, &
                               obj_func_callback
 
@@ -153,7 +153,7 @@ contains
         !
         ! this subroutine performs a sanity check for S-GEK input parameters
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         type(s_gek_settings_type), intent(in) :: settings
         integer(ip), intent(in) :: n_param
@@ -569,7 +569,7 @@ contains
         !
         ! this subroutine sets up the kriging model for the S-GEK method
         !
-        use opentrustregion, only: symm_mat_diag
+        use opentrustregion_core, only: symm_mat_diag
 
         class(s_gek_type), intent(inout) :: self
         real(rp), intent(in) :: kappa_list(:, :), grad_list(:, :), obj_func_list(:)
@@ -649,7 +649,7 @@ contains
         ! weights by solving x = R^{-1} (y - mu f) where R is the covariance matrix, y
         ! is a vector including values and gradients and mu is the trend function
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         class(s_gek_type), intent(inout) :: self
         real(rp), intent(in) :: obj_func_list(:), trans_grad_list(:, :)
@@ -1085,7 +1085,7 @@ contains
         ! Hessian of the object applied to a vector x according to T. H. Fischer and J.
         ! Almloef, JPC 96, 9768 (1992), doi:10.1021/j100203a036
         !
-        use opentrustregion, only: numerical_zero
+        use opentrustregion_core, only: numerical_zero
 
         class(s_gek_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)

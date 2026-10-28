@@ -6,7 +6,7 @@
 
 module otr_mo_c_interface
 
-    use opentrustregion, only: ip, rp, obj_func_type, update_orbs_type
+    use opentrustregion_core, only: ip, rp, obj_func_type, update_orbs_type
     use c_interface, only: c_ip, c_rp
     use otr_mo, only: standard_mo_factory_cs => mo_factory_cs, &
                       standard_mo_factory_os => mo_factory_os
@@ -48,7 +48,7 @@ contains
         ! host's C solver settings and record of the solver state, and writes the
         ! solver settings the factory wired back into the C solver settings
         !
-        use opentrustregion, only: warn_uninitialized_settings, add_error_origin
+        use opentrustregion_core, only: warn_uninitialized_settings, add_error_origin
         use c_interface, only: solver_settings_type_c
         use otr_mo, only: mo_settings_type, default_mo_settings, &
                           mo_settings_uninitialized_warning_msg, error_mo
@@ -209,7 +209,7 @@ contains
         !
         use otr_mo, only: default_mo_settings
 
-        type(mo_settings_type_c), intent(inout) :: settings_c
+        type(mo_settings_type_c), intent(out) :: settings_c
 
         settings_c = default_mo_settings
 

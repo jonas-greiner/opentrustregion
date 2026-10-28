@@ -4,7 +4,7 @@
 ! License, v. 2.0. If a copy of the MPL was not distributed with this
 ! file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-module opentrustregion
+module opentrustregion_core
 
     use, intrinsic :: iso_fortran_env, only: int32, int64, real64, &
                                              stdout => output_unit, stderr => error_unit
@@ -287,6 +287,7 @@ module opentrustregion
         procedure(project_type), pointer, nopass :: project => null()
         procedure(get_extra_trial_vectors_type), pointer, nopass :: &
             get_extra_trial_vectors => null()
+        procedure(conv_check_type), pointer, nopass :: conv_check => null()
     end type
 
     type, extends(optimizer_settings_type) :: stability_settings_type
@@ -296,7 +297,6 @@ module opentrustregion
                        jacobi_davidson_start = 50
         character(len=kw_len) :: diag_solver = "davidson"
         procedure(hess_x_type), pointer, nopass :: approx_hess_x => null()
-        procedure(conv_check_type), pointer, nopass :: conv_check => null()
     end type
 
     type, extends(optimizer_settings_type) :: solver_settings_type
@@ -310,7 +310,6 @@ module opentrustregion
                                  trust_region_shape = "none"
         type(stability_settings_type) :: stability_settings = stability_settings_type()
         procedure(precond_pd_type), pointer, nopass :: precond_pd => null()
-        procedure(conv_check_type), pointer, nopass :: conv_check => null()
         procedure(hess_x_type), pointer, nopass :: stability_hess_x => null()
     contains
         procedure :: print_results
@@ -329,6 +328,8 @@ contains
         !
         ! this subroutine is the main solver for orbital optimization
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         procedure(update_orbs_type), intent(in), pointer :: update_orbs
         procedure(obj_func_type), intent(in), pointer :: obj_func
         integer(ip), intent(in) :: n_param
@@ -426,6 +427,18 @@ contains
                 if (.not. associated(hess_x_funptr)) then
                     call local_settings%log("Orbital update did not provide a "// &
                                             "Hessian linear transformation.", &
+                                            verbosity_error, .true.)
+                    error = error_solver + 1
+                    return
+                end if
+
+                ! an orbital update which returns an objective function, gradient or
+                ! Hessian diagonal that is not finite leaves no point to optimize from
+                if (.not. (ieee_is_finite(func) .and. all(ieee_is_finite(grad)) .and. &
+                           all(ieee_is_finite(h_diag)))) then
+                    call local_settings%log("Orbital update returned an objective "// &
+                                            "function, gradient or Hessian "// &
+                                            "diagonal that is not finite.", &
                                             verbosity_error, .true.)
                     error = error_solver + 1
                     return
@@ -695,7 +708,7 @@ contains
         ! determine if saddle point
         stable = eigval > local_settings%stability_thresh
         if (.not. stable) then
-            write(msg, '(A, F0.4)') unstable_warning_msg, eigval
+            write(msg, '(A, ES11.4)') unstable_warning_msg, eigval
             call local_settings%log(msg, verbosity_warning)
         end if
 
@@ -1156,7 +1169,7 @@ contains
                                   red_space_hess_eigvals(min_idx)) > numerical_zero
         if (red_space_hess_eigvals(min_idx)%re < numerical_zero) then
             ! check if the (possibly degenerate) eigenspace of the lowest eigenvalue
-            ! has a gradient component or if the minimum eigenvalue has a significant
+            ! has no gradient component or if the minimum eigenvalue has a significant
             ! imaginary part since both cases lead to no pole in the solution norm at
             ! the lowest eigenvalue
             if (sqrt(sum(red_space_hess_left_eigvecs(1, :)**2, &
@@ -1183,7 +1196,7 @@ contains
             ! check if reduced space Hessian is non-positive definite otherwise accept
             ! interior solution as Newton step
             if (red_space_hess_eigvals(min_idx)%re <= newton_eigval_thresh) then
-                ! hard case occured if lowest eigenvalue is real, trust radius cannot
+                ! hard case occurred if lowest eigenvalue is real, trust radius cannot
                 ! be reached because the eigenvector corresponding to the lowest
                 ! eigenvalue is orthogonal to the gradient, leading to no pole in the
                 ! solution norm
@@ -1235,7 +1248,7 @@ contains
             call get_level_shifted_step(lower_mu, .false.)
             if (error /= 0) return
 
-            ! find an lower bound for mu where the step falls within the trust region
+            ! find a lower bound for mu where the step falls within the trust region
             do while (current_norm > trust_radius)
                 if (lower_mu < -1e15_rp) then
                     call settings%log("Unable to find lower bound for mu in "// &
@@ -1390,13 +1403,9 @@ contains
         n_kappa = 0.0_rp
 
         ! evaluate function at upper and lower bounds
-        f_lower = obj_func(lower * kappa, error, settings%context)
-        n_obj_func = n_obj_func + 1
-        call add_error_origin(error, error_obj_func, settings)
+        call evaluate(lower, f_lower)
         if (error /= 0) return
-        f_upper = obj_func(upper * kappa, error, settings%context)
-        n_obj_func = n_obj_func + 1
-        call add_error_origin(error, error_obj_func, settings)
+        call evaluate(upper, f_upper)
         if (error /= 0) return
 
         ! ensure f_a > f_b
@@ -1414,9 +1423,7 @@ contains
 
         ! default step
         n_c = n_b + golden_ratio * (n_b - n_a)
-        f_c = obj_func(n_c * kappa, error, settings%context)
-        n_obj_func = n_obj_func + 1
-        call add_error_origin(error, error_obj_func, settings)
+        call evaluate(n_c, f_c)
         if (error /= 0) return
 
         ! continue looping until function at middle point is lower than at brackets
@@ -1435,9 +1442,7 @@ contains
             ! check if u is between n_b and n_c
             if ((n_u - n_c) * (n_b - n_u) > 0.0_rp) then
                 ! evaluate function at n_u
-                f_u = obj_func(n_u * kappa, error, settings%context)
-                n_obj_func = n_obj_func + 1
-                call add_error_origin(error, error_obj_func, settings)
+                call evaluate(n_u, f_u)
                 if (error /= 0) return
 
                 ! check if minimum between n_b and n_c
@@ -1447,7 +1452,7 @@ contains
                     f_a = f_b
                     f_b = f_u
                     exit
-                ! check if minium between n_a and n_u
+                ! check if minimum between n_a and n_u
                 else if (f_u > f_b) then
                     n_c = n_u
                     f_c = f_u
@@ -1456,23 +1461,17 @@ contains
 
                 ! parabolic fit did not help, default step
                 n_u = n_c + golden_ratio * (n_c - n_b)
-                f_u = obj_func(n_u * kappa, error, settings%context)
-                n_obj_func = n_obj_func + 1
-                call add_error_origin(error, error_obj_func, settings)
+                call evaluate(n_u, f_u)
                 if (error /= 0) return
             ! limit parabolic fit to its maximum allowed value
             else if ((n_u - n_u_lim) * (n_u_lim - n_c) >= 0.0_rp) then
                 n_u = n_u_lim
-                f_u = obj_func(n_u * kappa, error, settings%context)
-                n_obj_func = n_obj_func + 1
-                call add_error_origin(error, error_obj_func, settings)
+                call evaluate(n_u, f_u)
                 if (error /= 0) return
             ! parabolic fit is between n_c and its allowed limit
             else if ((n_u - n_u_lim) * (n_c - n_u) > 0.0_rp) then
                 ! evaluate function at n_u
-                f_u = obj_func(n_u * kappa, error, settings%context)
-                n_obj_func = n_obj_func + 1
-                call add_error_origin(error, error_obj_func, settings)
+                call evaluate(n_u, f_u)
                 if (error /= 0) return
 
                 if (f_u < f_c) then
@@ -1481,17 +1480,13 @@ contains
                     n_u = n_c + golden_ratio * (n_c - n_b)
                     f_b = f_c
                     f_c = f_u
-                    f_u = obj_func(n_u * kappa, error, settings%context)
-                    n_obj_func = n_obj_func + 1
-                    call add_error_origin(error, error_obj_func, settings)
+                    call evaluate(n_u, f_u)
                     if (error /= 0) return
                 end if
             ! reject parabolic fit and use default step
             else
                 n_u = n_c + golden_ratio * (n_c - n_b)
-                f_u = obj_func(n_u * kappa, error, settings%context)
-                n_obj_func = n_obj_func + 1
-                call add_error_origin(error, error_obj_func, settings)
+                call evaluate(n_u, f_u)
                 if (error /= 0) return
             end if
             ! remove oldest point
@@ -1511,7 +1506,7 @@ contains
             end if
         end do
 
-        ! check if miniumum is bracketed
+        ! check if minimum is bracketed
         if (.not. ( &
             ((f_b < f_c .and. f_b <= f_a) .or. (f_b < f_a .and. f_b <= f_c)) .and. &
             ((n_a < n_b .and. n_b < n_c) .or. (n_c < n_b .and. n_b < n_a)))) then
@@ -1523,6 +1518,27 @@ contains
 
         ! set new multiplier
         n_kappa = n_b
+
+    contains
+
+        subroutine evaluate(n, f)
+            !
+            ! this subroutine evaluates the objective function at a multiple of the
+            ! step, where a value that is not a number counts as an infinite one, so
+            ! that the line search moves away from it as from an overflowing value
+            !
+            use, intrinsic :: ieee_arithmetic, only: ieee_is_nan, ieee_value, &
+                                                     ieee_positive_inf
+
+            real(rp), intent(in) :: n
+            real(rp), intent(out) :: f
+
+            f = obj_func(n * kappa, error, settings%context)
+            n_obj_func = n_obj_func + 1
+            call add_error_origin(error, error_obj_func, settings)
+            if (ieee_is_nan(f)) f = ieee_value(f, ieee_positive_inf)
+
+        end subroutine evaluate
 
     end function bracket
 
@@ -1965,9 +1981,10 @@ contains
         !
         ! this subroutine generates random trial vectors, filling the trailing columns
         ! of the provided space, projecting them and orthogonalizing them against the
-        ! leading ones
+        ! leading ones, and drops the columns that are left once the projection leaves
+        ! no further direction
         !
-        real(rp), intent(inout) :: red_space_basis(:, :)
+        real(rp), allocatable, intent(inout) :: red_space_basis(:, :)
         integer(ip), intent(in) :: n_fill
         class(optimizer_settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
@@ -1991,12 +2008,13 @@ contains
             n_attempts = 0
             do while (error == error_gram_schmidt_lin_dep)
                 n_attempts = n_attempts + 1
+
+                ! a random vector which stays linearly dependent on the columns before
+                ! it can only come from a projection whose directions these columns
+                ! already span, so the trial space ends there
                 if (n_attempts > max_rnd_trial_attempts) then
-                    call settings%log("Maximum number of attempts to generate a "// &
-                                      "random trial vector linearly independent of "// &
-                                      "the existing trial space reached.", &
-                                      verbosity_error, .true.)
-                    error = 1
+                    red_space_basis = red_space_basis(:, :i - 1)
+                    error = 0
                     return
                 end if
                 call random_number(red_space_basis(:, i))
@@ -2247,6 +2265,15 @@ contains
                 call add_error_origin(error, error_stability_check, settings)
                 if (error /= 0) return
 
+                ! a projection whose range holds fewer directions than the block leaves
+                ! the start space only these, which then bound the block, since the
+                ! Davidson procedure determines no more eigenvectors than its space
+                ! holds
+                if (size(start_space, 2) < n_extra) then
+                    n_extra = size(start_space, 2, kind=ip)
+                    leading_block = leading_block(:, :n_extra)
+                end if
+
                 ! the warm start keeps a state of its own, so that its iterations stay
                 ! out of the state of the stability check and its approximate Hessian
                 ! linear transformations, which are cheap relative to the exact ones,
@@ -2381,7 +2408,7 @@ contains
         real(rp), allocatable :: orth(:)
         real(rp) :: norm
         integer(ip) :: n_param, n_vectors, iter, i
-        real(rp), parameter :: zero_thres = 1e-16_rp, orth_thres = 1e-14_rp
+        real(rp), parameter :: orth_thres = 1e-14_rp
         real(rp), external :: ddot, dnrm2
         external :: dgemv
 
@@ -2395,7 +2422,7 @@ contains
         n_vectors = size(space, 2)
 
         norm = dnrm2(n_param, vector, 1_ip)
-        if (norm < zero_thres) then
+        if (norm < tiny(1.0_rp)) then
             call settings%log("Vector passed to Gram-Schmidt procedure is "// &
                               "numerically zero.", verbosity_error, .true.)
             error = 1
@@ -2614,7 +2641,7 @@ contains
         ! initialize error flag
         error = 0
 
-        ! initialze boolean to stop iterations
+        ! initialize boolean to stop iterations
         stop_iteration = .false.
 
         ! size of problem
@@ -3238,6 +3265,11 @@ contains
                         jacobi_davidson_iter = 1
                         state%jacobi_davidson_iteration = &
                             state%jacobi_davidson_iteration + 1
+
+                        ! give Jacobi-Davidson its own micro iterations to decrease
+                        ! the residual before it counts as stagnating
+                        initial_imicro = imicro
+                        initial_residual_norm = residual_norm
                     end if
                 ! check if residual has not decreased sufficiently
                 else if (imicro - initial_imicro >= 10 .and. residual_norm > &
@@ -3306,7 +3338,8 @@ contains
             accept_step = accept_trust_region_step( &
                 solution, dnrm2(n_param, solution, 1_ip), func, new_func - func, &
                 ddot(n_param, solution, 1_ip, perturbed_grad + 0.5_rp * h_solution, &
-                     1_ip), micro_converged, settings, state)
+                     1_ip), micro_converged, settings, state, error)
+            if (error /= 0) return
             if (state%max_precision_reached) exit
 
             ! the Hessian linear transformation may have changed with the objective
@@ -3347,6 +3380,8 @@ contains
         ! implementation is based on the implementation of the Steihaug-Toint method
         ! in the GALAHAD library (https://github.com/ralna/GALAHAD)
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         real(rp), intent(in) :: func, grad(:), h_diag(:)
         integer(ip), intent(in) :: n_param
         procedure(obj_func_type), intent(in), pointer :: obj_func
@@ -3498,6 +3533,18 @@ contains
                 call add_error_origin(error, error_hess_x, settings)
                 if (error /= 0) exit
 
+                ! a Hessian linear transformation which returns values that are not
+                ! finite leaves no predicted function change, which restarting with a
+                ! smaller trust region can not restore since it transforms the same
+                ! vectors again
+                if (.not. all(ieee_is_finite(vector))) then
+                    call settings%log("Hessian linear transformation returned "// &
+                                      "values that are not finite.", verbosity_error, &
+                                      .true.)
+                    error = 1
+                    exit
+                end if
+
                 ! obtain the curvature
                 curvature = ddot(n_param, vector, 1_ip, basis_vec, 1_ip)
 
@@ -3564,10 +3611,10 @@ contains
             if (error /= 0) exit
 
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, solution_norm, func, &
-                                                   new_func - func, pred_func - func, &
-                                                   micro_converged, settings, state)
-            if (state%max_precision_reached) exit
+            accept_step = accept_trust_region_step( &
+                solution, solution_norm, func, new_func - func, pred_func - func, &
+                micro_converged, settings, state, error)
+            if (error /= 0 .or. state%max_precision_reached) exit
 
         end do
 
@@ -3706,10 +3753,10 @@ contains
             if (error /= 0) exit
 
             ! decide whether to accept step and modify trust radius
-            accept_step = accept_trust_region_step(solution, solution_norm, func, &
-                                                   new_func - func, pred_func - func, &
-                                                   micro_converged, settings, state)
-            if (state%max_precision_reached) exit
+            accept_step = accept_trust_region_step( &
+                solution, solution_norm, func, new_func - func, pred_func - func, &
+                micro_converged, settings, state, error)
+            if (error /= 0 .or. state%max_precision_reached) exit
 
             ! restart Lanczos with smaller trust region if step is not accepted, unless
             ! the Hessian linear transformation may have changed with the objective
@@ -3728,24 +3775,41 @@ contains
 
     logical function accept_trust_region_step(solution, solution_norm, func, &
                                               actual_func_diff, pred_func_diff, &
-                                              micro_converged, settings, state)
+                                              micro_converged, settings, state, error)
         !
         ! this function checks whether the trust region step is accepted and modifies
         ! the trust radius in the state accordingly, where it also flags whether the
         ! function changes could not be resolved anymore
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         real(rp), intent(in) :: solution(:), solution_norm, func, actual_func_diff, &
                                 pred_func_diff
         logical, intent(in) :: micro_converged
         type(solver_settings_type), intent(in) :: settings
         type(solver_state_type), intent(inout), target :: state
+        integer(ip), intent(out) :: error
 
         real(rp), parameter :: func_resolution_safety_factor = 10.0_rp
         real(rp) :: ratio, func_resolution
         logical :: finite_changes
 
+        ! initialize error flag
+        error = 0
+
         ! default to maximum precision not yet reached
         state%max_precision_reached = .false.
+
+        ! a step whose norm is not finite, as from a Hessian linear transformation or a
+        ! preconditioner which returns values that are not finite, can not be cut back
+        ! to a smaller trust region
+        if (.not. ieee_is_finite(solution_norm)) then
+            call settings%log("Trust-region step is not finite.", verbosity_error, &
+                              .true.)
+            error = 1
+            accept_trust_region_step = .false.
+            return
+        end if
 
         ! check if function value has not decreased up to floating point precision, in
         ! which case the step is not taken
@@ -3761,19 +3825,29 @@ contains
         ! calculate ratio of evaluated function and predicted function
         ratio = actual_func_diff / pred_func_diff
 
-        ! decrease trust radius if micro iterations are unable to converge, if function
-        ! value has not decreased, if the function changes are not finite, as for an
-        ! objective function which overflows at the step, or if individual orbitals
-        ! change too much
-        finite_changes = abs(actual_func_diff) <= huge(1.0_rp) .and. &
-                         abs(pred_func_diff) <= huge(1.0_rp)
-        if (.not. micro_converged .or. ratio < 0.0_rp .or. .not. finite_changes .or. &
+        ! decrease trust radius if micro iterations are unable to converge, if the step
+        ! is not predicted to decrease the function value (e. g. Newton step along a
+        ! slightly negative curvature), if function value has not decreased, if the
+        ! function changes are not finite, as for an objective function which
+        ! overflows at the step, or if individual orbitals change too much
+        finite_changes = ieee_is_finite(actual_func_diff) .and. &
+                         ieee_is_finite(pred_func_diff)
+        if (.not. micro_converged .or. pred_func_diff >= 0.0_rp .or. &
+            actual_func_diff >= 0.0_rp .or. .not. finite_changes .or. &
             any(abs(solution) > pi / 4)) then
             ! a rejected step whose predicted function change can not be resolved can
             ! not be improved by a smaller trust radius, as when the objective function
             ! and the orbital update disagree by more than the resolution, so the step
-            ! is not taken and maximum precision is reached
+            ! is not taken and maximum precision is reached, unless the objective
+            ! function is not finite even at such a short step, which is an error
             if (abs(pred_func_diff) <= func_resolution) then
+                if (.not. finite_changes) then
+                    call settings%log("Objective function returned a value that is "// &
+                                      "not finite.", verbosity_error, .true.)
+                    error = 1
+                    accept_trust_region_step = .false.
+                    return
+                end if
                 call settings%log(function_unchanged_warning_msg, verbosity_warning)
                 state%max_precision_reached = .true.
                 accept_trust_region_step = .false.
@@ -3880,6 +3954,8 @@ contains
         !
         ! this subroutine performs a sanity check for solver input parameters
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         type(solver_settings_type), intent(inout) :: settings
         integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
@@ -3910,6 +3986,15 @@ contains
         if (settings%n_random_trial_vectors < 0) then
             call settings%log("Number of random trial vectors should not be "// &
                               "negative.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
+
+        ! check that the starting trust radius is finite, init_defaults resolves a
+        ! non-positive one from the trust region shape
+        if (.not. ieee_is_finite(settings%start_trust_radius)) then
+            call settings%log("Starting trust radius should be finite.", &
+                              verbosity_error, .true.)
             error = 1
             return
         end if
@@ -4148,6 +4233,8 @@ contains
         ! while its solution is interior and on the reduced problem once it reaches
         ! the trust region boundary, from where the solution is assembled
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         real(rp), intent(in) :: func, h_diag(:), noise
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(inout) :: residual(:), solution(:)
@@ -4329,6 +4416,16 @@ contains
             call add_error_origin(error, error_hess_x, settings)
             if (error /= 0) exit
 
+            ! a Hessian linear transformation which returns values that are not finite
+            ! leaves no predicted function change, which a smaller trust region can
+            ! not restore since it reuses the Lanczos tridiagonal matrix
+            if (.not. all(ieee_is_finite(vector))) then
+                call settings%log("Hessian linear transformation returned values "// &
+                                  "that are not finite.", verbosity_error, .true.)
+                error = 1
+                exit
+            end if
+
             ! obtain the curvature
             curvature = ddot(n_param, vector, 1_ip, basis_vec, 1_ip)
 
@@ -4483,6 +4580,8 @@ contains
         ! alternating in sign with the step sizes, and completes it in the hard case
         ! along the eigenvector of the lowest eigenvalue assembled in the same way
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
         type(gltr_lanczos_type), intent(in) :: lanczos
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(out) :: solution(:)
@@ -4526,6 +4625,15 @@ contains
             n_hess_x = n_hess_x + 1
             call add_error_origin(error, error_hess_x, settings)
             if (error /= 0) return
+
+            ! a Hessian linear transformation which returns values that are not finite
+            ! leaves no step along the eigenvector
+            if (.not. all(ieee_is_finite(hess_eigenvec))) then
+                call settings%log("Hessian linear transformation returned values "// &
+                                  "that are not finite.", verbosity_error, .true.)
+                error = 1
+                return
+            end if
             u_norm = sqrt(-ddot(size(eigenvec, kind=ip), hess_eigenvec, 1_ip, &
                                 eigenvec, 1_ip) / lanczos%lambda)
             solution = solution + (lanczos%hard_case_step_size / u_norm) * eigenvec
@@ -5342,5 +5450,27 @@ contains
         end do
 
     end function option_list
+
+end module opentrustregion_core
+
+! the interface of OpenTrustRegion for Fortran programs, the counterpart of the C
+! header and the Python package, which re-exports the entities of the implementation
+! that form the interface, while the other entities of the implementation can change in
+! any version
+module opentrustregion
+
+    use opentrustregion_core, only: &
+        rp, ip, solver, stability_check, solver_settings_type, &
+        stability_settings_type, solver_state_type, stability_state_type, &
+        update_orbs_type, obj_func_type, hess_x_type, precond_type, precond_pd_type, &
+        project_type, conv_check_type, get_extra_trial_vectors_type, logger_type, &
+        error_solver, error_solver_max_iter, error_stability_check, &
+        error_stability_check_max_iter, error_obj_func, error_update_orbs, &
+        error_hess_x, error_precond, error_conv_check, error_project, &
+        error_get_extra_trial_vectors, error_precond_pd, error_approx_hess_x, &
+        verbosity_silent, verbosity_error, verbosity_warning, verbosity_info, &
+        verbosity_debug
+
+    implicit none
 
 end module opentrustregion

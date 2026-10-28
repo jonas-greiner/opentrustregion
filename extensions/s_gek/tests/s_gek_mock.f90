@@ -6,7 +6,7 @@
 
 module otr_s_gek_mock
 
-    use opentrustregion, only: ip, stderr
+    use opentrustregion_core, only: ip, stderr
     use otr_s_gek, only: s_gek_factory
     use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
 
@@ -38,7 +38,8 @@ contains
         ! object reading the given state, points the context of the solver settings at
         ! its level of the solver and lets the settings own it, as the factory does
         !
-        use opentrustregion, only: update_orbs_type, obj_func_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, obj_func_type, &
+                                        solver_state_type
         use otr_common, only: extension_type, extension_solver_settings_type
         use otr_s_gek, only: change_reference_type, s_gek_settings_type, s_gek_type, &
                              default_s_gek_settings

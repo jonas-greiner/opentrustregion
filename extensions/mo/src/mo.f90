@@ -6,8 +6,9 @@
 
 module otr_mo
 
-    use opentrustregion, only: rp, ip, settings_type, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_state_type, add_error_origin
+    use opentrustregion_core, only: rp, ip, settings_type, obj_func_type, &
+                                    update_orbs_type, hess_x_type, solver_state_type, &
+                                    add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, channel_rows, &
                           evaluate_dm_cs_type, evaluate_dm_os_type, &
                           extension_solver_settings_type
@@ -162,7 +163,7 @@ contains
         ! function of either shell, if one is given, wires the solver settings with it
         ! and returns its orbital updating function and objective function
         !
-        use opentrustregion, only: verbosity_warning
+        use opentrustregion_core, only: verbosity_warning
         use otr_common, only: extension_type, provided_roles_type, &
                               update_orbs_callback, obj_func_callback, &
                               evaluate_dm_missing_warning_msg
@@ -295,7 +296,7 @@ contains
         ! the number of particle channels of the factory and, if given, the irreps of
         ! the MOs of every particle channel
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         class(orbital_settings_type), intent(in) :: settings
         integer(ip), intent(in) :: mo_coeff_shape(3), ao_overlap_shape(2), n_occ(:), &
@@ -1090,7 +1091,7 @@ contains
         ! eigenvectors of every irrep at the orbitals of that irrep, so that they never
         ! mix irreps, even where eigenvalues of different irreps are degenerate
         !
-        use opentrustregion, only: symm_mat_diag
+        use opentrustregion_core, only: symm_mat_diag
 
         real(rp), intent(in) :: matrix(:, :)
         integer(ip), intent(in) :: irreps(:)

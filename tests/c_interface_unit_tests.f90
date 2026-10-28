@@ -6,15 +6,15 @@
 
 module c_interface_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
                            obj_func_c_type, precond_c_type, precond_pd_c_type, &
                            project_c_type, get_extra_trial_vectors_c_type, &
                            conv_check_c_type, logger_c_type
     use test_reference, only: tol_c, n_param, n_param_c
-    use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_loc, c_funptr, c_funloc, &
-                                           c_char, c_associated, c_null_ptr, &
-                                           c_null_char, c_null_funptr, c_f_pointer
+    use, intrinsic :: iso_c_binding, only: &
+        c_bool, c_ptr, c_loc, c_funptr, c_funloc, c_char, c_associated, c_null_ptr, &
+        c_null_char, c_null_funptr, c_f_pointer, c_sizeof
 
     implicit none
 
@@ -83,7 +83,9 @@ contains
                                         context_c) result(error) bind(C)
         !
         ! this function is a test function for an orbital update C function which
-        ! reports success but does not provide a Hessian linear transformation
+        ! reports success but does not provide a Hessian linear transformation, so it
+        ! leaves the function pointer as it received it, which the wrapper has to
+        ! have cleared
         !
         real(c_rp), intent(in), target :: kappa(*)
         real(c_rp), intent(out) :: func
@@ -92,8 +94,16 @@ contains
         type(c_ptr), intent(in), value :: context_c
         integer(c_ip) :: error
 
+        type(c_funptr) :: received_hess_x_c_funptr
+
+        received_hess_x_c_funptr = hess_x_c_funptr
         error = mock_update_orbs(kappa, func, grad, h_diag, hess_x_c_funptr, context_c)
-        hess_x_c_funptr = c_null_funptr
+        hess_x_c_funptr = received_hess_x_c_funptr
+        if (c_associated(received_hess_x_c_funptr)) then
+            write(stderr, *) "test_update_orbs_f_wrapper failed: Hessian linear "// &
+                "transformation not cleared before the orbital update."
+            error = 3
+        end if
 
     end function mock_update_orbs_no_hess_x
 
@@ -343,7 +353,7 @@ contains
         !
         ! this subroutine is a test subroutine for the C logging function
         !
-        use opentrustregion, only: stability_settings_uninitialized_warning_msg
+        use opentrustregion_core, only: stability_settings_uninitialized_warning_msg
         use test_reference, only: host_context_type, check_host_context_c, &
                                   ref_character_from_c
 
@@ -355,6 +365,12 @@ contains
 
         ! check host context
         call check_host_context_c(context_c)
+
+        ! count every message in host context
+        if (c_associated(context_c)) then
+            call c_f_pointer(context_c, context)
+            context%n_messages = context%n_messages + 1
+        end if
 
         ! record call with null-terminated test message in host context
         message = transfer(message_c(1:4), message)
@@ -441,7 +457,9 @@ contains
         !
         ! this function tests the C wrapper for the solver
         !
-        use opentrustregion, only: standard_solver => solver, default_solver_settings
+        use opentrustregion_core, only: standard_solver => solver, &
+                                        default_solver_settings, solver_state_type, &
+                                        error_solver, verbosity_error
         use c_interface, only: solver_settings_type_c, solver_state_type_c, solver, &
                                solver_c_wrapper
         use opentrustregion_mock, only: &
@@ -451,13 +469,15 @@ contains
         use test_reference, only: host_context_type, get_reference_solver_values, &
                                   get_reference_solver_state_values, host_context, &
                                   arm_host_context_c, host_context_reached, &
-                                  same_callbacks, ref_solver_settings, operator(/=)
+                                  same_callbacks, unset_callbacks, &
+                                  ref_solver_settings, operator(/=), operator(==)
 
         type(c_funptr) :: update_orbs_c_funptr, obj_func_c_funptr
         type(solver_settings_type_c) :: settings
         type(solver_state_type_c), target :: state
         type(host_context_type), target :: nested_host_context
         integer(c_ip) :: error
+        integer(ip) :: i_case
 
         ! assume tests pass
         test_solver_c_wrapper = .true.
@@ -604,6 +624,57 @@ contains
         end if
         if (.not. test_passed) test_solver_c_wrapper = .false.
 
+        ! call the solver without an orbital update and without an objective function,
+        ! the wrapper has to return an error with an error message, which is the only
+        ! message passed to the logging function, without calling the solver
+        do i_case = 1, 2
+            call get_reference_solver_values(settings)
+            call unset_callbacks(settings)
+            settings%logger = c_funloc(mock_logger)
+            call arm_host_context_c(settings%context)
+            settings%verbose = int(verbosity_error, kind=c_ip)
+            settings%initialized = .true.
+            settings%stability_settings%initialized = .true.
+            test_passed = .false.
+            if (i_case == 1) then
+                error = solver_c_wrapper(c_null_funptr, obj_func_c_funptr, n_param_c, &
+                                         settings, c_null_ptr)
+            else
+                error = solver_c_wrapper(update_orbs_c_funptr, c_null_funptr, &
+                                         n_param_c, settings, c_null_ptr)
+            end if
+            if (error /= error_solver + 1) then
+                write(stderr, *) "test_solver_c_wrapper failed: No error returned "// &
+                    "without "//trim(merge("orbital update    ", "objective function", &
+                                           i_case == 1))//"."
+                test_solver_c_wrapper = .false.
+            end if
+            if (host_context%n_messages == 0) then
+                write(stderr, *) "test_solver_c_wrapper failed: No error message "// &
+                    "printed without "//trim(merge( &
+                        "orbital update    ", "objective function", i_case == 1))//"."
+                test_solver_c_wrapper = .false.
+            end if
+            if (test_passed) then
+                write(stderr, *) "test_solver_c_wrapper failed: Solver called "// &
+                    "without "//trim(merge("orbital update    ", "objective function", &
+                                           i_case == 1))//"."
+                test_solver_c_wrapper = .false.
+            end if
+        end do
+
+        ! call the solver without an orbital update and without settings, whose
+        ! logging function would copy the state into the host's record, the wrapper
+        ! has to leave the default state there itself
+        call get_reference_solver_state_values(state)
+        error = solver_c_wrapper(c_null_funptr, obj_func_c_funptr, n_param_c, &
+                                 state_c_ptr=c_loc(state))
+        if (.not. (state == solver_state_type())) then
+            write(stderr, *) "test_solver_c_wrapper failed: Default state not left "// &
+                "in the host's record without orbital update."
+            test_solver_c_wrapper = .false.
+        end if
+
         ! restore the procedure pointer so later tests do not inherit the mock
         solver => standard_solver
 
@@ -613,18 +684,19 @@ contains
         !
         ! this function tests the C wrapper for the stability check
         !
-        use opentrustregion, only: standard_stability_check => stability_check, &
-                                   default_stability_settings
+        use opentrustregion_core, only: &
+            standard_stability_check => stability_check, default_stability_settings, &
+            stability_state_type, error_stability_check, verbosity_error
         use c_interface, only: stability_settings_type_c, stability_state_type_c, &
                                stability_check, stability_check_c_wrapper
         use opentrustregion_mock, only: &
             mock_stability_check, test_passed, mock_error, mock_stability_state, &
             mock_stable, received_stability_settings, received_callbacks, &
             kappa_received, stability_state_bundled
-        use test_reference, only: get_reference_stability_values, &
-                                  get_reference_stability_state_values, host_context, &
-                                  arm_host_context_c, host_context_reached, &
-                                  same_callbacks, ref_stability_settings, operator(/=)
+        use test_reference, only: &
+            get_reference_stability_values, get_reference_stability_state_values, &
+            host_context, arm_host_context_c, host_context_reached, same_callbacks, &
+            unset_callbacks, ref_stability_settings, operator(/=), operator(==)
 
         type(c_funptr) :: hess_x_c_funptr
         real(c_rp) :: h_diag(n_param)
@@ -806,6 +878,54 @@ contains
         end if
         if (.not. test_passed) test_stability_check_c_wrapper = .false.
 
+        ! call the stability check without a Hessian linear transformation, the
+        ! wrapper has to return an error with an error message, which is the only
+        ! message passed to the logging function, and an unstable point without calling
+        ! the stability check
+        call get_reference_stability_values(settings)
+        call unset_callbacks(settings)
+        settings%logger = c_funloc(mock_logger)
+        call arm_host_context_c(settings%context)
+        settings%verbose = int(verbosity_error, kind=c_ip)
+        settings%initialized = .true.
+        test_passed = .false.
+        stable = .true.
+        error = stability_check_c_wrapper(h_diag, c_null_funptr, n_param_c, stable, &
+                                          settings, c_null_ptr, c_null_ptr)
+        if (error /= error_stability_check + 1) then
+            write(stderr, *) "test_stability_check_c_wrapper failed: No error "// &
+                "returned without Hessian linear transformation."
+            test_stability_check_c_wrapper = .false.
+        end if
+        if (host_context%n_messages == 0) then
+            write(stderr, *) "test_stability_check_c_wrapper failed: No error "// &
+                "message printed without Hessian linear transformation."
+            test_stability_check_c_wrapper = .false.
+        end if
+        if (test_passed) then
+            write(stderr, *) "test_stability_check_c_wrapper failed: Stability "// &
+                "check called without Hessian linear transformation."
+            test_stability_check_c_wrapper = .false.
+        end if
+        if (stable) then
+            write(stderr, *) "test_stability_check_c_wrapper failed: Stable point "// &
+                "returned without Hessian linear transformation."
+            test_stability_check_c_wrapper = .false.
+        end if
+
+        ! call the stability check without a Hessian linear transformation and
+        ! without settings, whose logging function would copy the state into the
+        ! host's record, the wrapper has to leave the default state there itself
+        call get_reference_stability_state_values(state)
+        error = stability_check_c_wrapper(h_diag, c_null_funptr, n_param_c, stable, &
+                                          state_c_ptr=c_loc(state), &
+                                          kappa_c_ptr=c_null_ptr)
+        if (.not. (state == stability_state_type())) then
+            write(stderr, *) "test_stability_check_c_wrapper failed: Default state "// &
+                "not left in the host's record without Hessian linear transformation."
+            test_stability_check_c_wrapper = .false.
+        end if
+
         ! restore the procedure pointer so later tests do not inherit the mock
         stability_check => standard_stability_check
 
@@ -817,7 +937,7 @@ contains
         ! their optional callback functions and host contexts in the callback bundles
         ! of the solver and of its internal stability check
         !
-        use opentrustregion, only: solver_settings_type, solver_state_type
+        use opentrustregion_core, only: solver_settings_type, solver_state_type
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                c_callbacks_type, convert_solver_settings_c
         use test_reference, only: host_context_type, get_reference_solver_values, &
@@ -1120,7 +1240,7 @@ contains
         ! this function tests the subroutine that copies the state of a call into the
         ! host's records which were given
         !
-        use opentrustregion, only: solver_state_type, stability_state_type
+        use opentrustregion_core, only: solver_state_type, stability_state_type
         use c_interface, only: c_callbacks_type, solver_state_type_c, &
                                stability_state_type_c, copy_state_to_c
         use opentrustregion_mock, only: mock_solver_state, mock_stability_state
@@ -1177,7 +1297,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the orbital update
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
+        use opentrustregion_core, only: update_orbs_type, hess_x_type
         use c_interface, only: c_callbacks_type, update_orbs_f_wrapper, hess_x_f_wrapper
         use test_reference, only: check_update_orbs_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1287,7 +1407,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the Hessian linear transformation
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use c_interface, only: c_callbacks_type, hess_x_f_wrapper
         use test_reference, only: check_hess_x_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1394,7 +1514,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the objective function
         !
-        use opentrustregion, only: obj_func_type
+        use opentrustregion_core, only: obj_func_type
         use c_interface, only: c_callbacks_type, obj_func_f_wrapper
         use test_reference, only: check_obj_func_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1452,7 +1572,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the preconditioner function
         !
-        use opentrustregion, only: precond_type
+        use opentrustregion_core, only: precond_type
         use c_interface, only: c_callbacks_type, precond_f_wrapper
         use test_reference, only: check_precond_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1512,7 +1632,7 @@ contains
         ! this function tests the Fortran wrapper for the positive-definite
         ! preconditioner function
         !
-        use opentrustregion, only: precond_pd_type
+        use opentrustregion_core, only: precond_pd_type
         use c_interface, only: c_callbacks_type, precond_pd_f_wrapper
         use test_reference, only: check_precond_pd_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1571,7 +1691,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the projection function
         !
-        use opentrustregion, only: project_type
+        use opentrustregion_core, only: project_type
         use c_interface, only: c_callbacks_type, project_f_wrapper
         use test_reference, only: check_project_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1629,7 +1749,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the convergence check function
         !
-        use opentrustregion, only: conv_check_type
+        use opentrustregion_core, only: conv_check_type
         use c_interface, only: c_callbacks_type, conv_check_f_wrapper
         use test_reference, only: check_conv_check_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1704,7 +1824,7 @@ contains
         ! this function tests the Fortran wrapper for the Hessian linear transformation
         ! of the stability check
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use c_interface, only: c_callbacks_type, stability_hess_x_f_wrapper
         use test_reference, only: check_hess_x_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1769,7 +1889,7 @@ contains
         ! this function tests the Fortran wrapper for the approximate Hessian linear
         ! transformation
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use c_interface, only: c_callbacks_type, approx_hess_x_f_wrapper
         use test_reference, only: check_hess_x_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, host_context_reached
@@ -1832,7 +1952,7 @@ contains
         !
         ! this function tests the Fortran wrapper for the extra trial vector function
         !
-        use opentrustregion, only: get_extra_trial_vectors_type
+        use opentrustregion_core, only: get_extra_trial_vectors_type
         use c_interface, only: c_callbacks_type, get_extra_trial_vectors_f_wrapper
         use test_reference, only: check_get_extra_trial_vectors_funptr, host_context, &
                                   arm_host_context_c, arm_state_c, &
@@ -1941,7 +2061,7 @@ contains
         ! this function tests that the solver settings initialization routine correctly
         ! initializes all settings to their default values
         !
-        use opentrustregion, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings
         use c_interface, only: solver_settings_type_c, init_solver_settings_c
         use test_reference, only: operator(/=), get_reference_solver_values
 
@@ -1970,7 +2090,7 @@ contains
         ! this function tests that the stability check settings initialization routine
         ! correctly initializes all settings to their default values
         !
-        use opentrustregion, only: default_stability_settings
+        use opentrustregion_core, only: default_stability_settings
         use c_interface, only: stability_settings_type_c, init_stability_settings_c
         use test_reference, only: operator(/=), get_reference_stability_values
 
@@ -1994,12 +2114,89 @@ contains
 
     end function test_init_stability_settings_c
 
+    logical(c_bool) function test_solver_settings_size() bind(C)
+        !
+        ! this function tests that the size of the C solver settings is returned
+        !
+        use c_interface, only: solver_settings_type_c, solver_settings_size
+
+        type(solver_settings_type_c) :: settings
+
+        ! assume tests pass
+        test_solver_settings_size = .true.
+
+        ! check size
+        if (solver_settings_size() /= c_sizeof(settings)) then
+            write(stderr, *) "test_solver_settings_size failed: Returned size wrong."
+            test_solver_settings_size = .false.
+        end if
+
+    end function test_solver_settings_size
+
+    logical(c_bool) function test_stability_settings_size() bind(C)
+        !
+        ! this function tests that the size of the C stability check settings is
+        ! returned
+        !
+        use c_interface, only: stability_settings_type_c, stability_settings_size
+
+        type(stability_settings_type_c) :: settings
+
+        ! assume tests pass
+        test_stability_settings_size = .true.
+
+        ! check size
+        if (stability_settings_size() /= c_sizeof(settings)) then
+            write(stderr, *) "test_stability_settings_size failed: Returned size wrong."
+            test_stability_settings_size = .false.
+        end if
+
+    end function test_stability_settings_size
+
+    logical(c_bool) function test_solver_state_size() bind(C)
+        !
+        ! this function tests that the size of the C solver state is returned
+        !
+        use c_interface, only: solver_state_type_c, solver_state_size
+
+        type(solver_state_type_c) :: state
+
+        ! assume tests pass
+        test_solver_state_size = .true.
+
+        ! check size
+        if (solver_state_size() /= c_sizeof(state)) then
+            write(stderr, *) "test_solver_state_size failed: Returned size wrong."
+            test_solver_state_size = .false.
+        end if
+
+    end function test_solver_state_size
+
+    logical(c_bool) function test_stability_state_size() bind(C)
+        !
+        ! this function tests that the size of the C stability check state is returned
+        !
+        use c_interface, only: stability_state_type_c, stability_state_size
+
+        type(stability_state_type_c) :: state
+
+        ! assume tests pass
+        test_stability_state_size = .true.
+
+        ! check size
+        if (stability_state_size() /= c_sizeof(state)) then
+            write(stderr, *) "test_stability_state_size failed: Returned size wrong."
+            test_stability_state_size = .false.
+        end if
+
+    end function test_stability_state_size
+
     logical(c_bool) function test_assign_solver_f_c() bind(C)
         !
         ! this function tests that the function that converts solver settings from C to
         ! Fortran correctly perform this conversion
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion_core, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c, assignment(=)
         use test_reference, only: ref_solver_settings, get_reference_solver_values, &
                                   operator(/=), same_callbacks, unset_callbacks, &
@@ -2098,7 +2295,8 @@ contains
         ! this function tests that the function that converts stability check settings
         ! from C to Fortran correctly performs this conversion
         !
-        use opentrustregion, only: stability_settings_type, default_stability_settings
+        use opentrustregion_core, only: stability_settings_type, &
+                                        default_stability_settings
         use c_interface, only: stability_settings_type_c, assignment(=)
         use test_reference, only: ref_stability_settings, &
                                   get_reference_stability_values, operator(/=), &
@@ -2186,7 +2384,7 @@ contains
         ! this function tests that the function that converts solver settings from
         ! Fortran to C correctly performs this conversion
         !
-        use opentrustregion, only: solver_settings_type, default_solver_settings
+        use opentrustregion_core, only: solver_settings_type, default_solver_settings
         use c_interface, only: solver_settings_type_c, assignment(=)
         use test_reference, only: ref_solver_settings, operator(/=), same_callbacks, &
                                   unset_callbacks, get_reference_solver_values
@@ -2276,7 +2474,8 @@ contains
         ! this function tests that the function that converts stability check settings
         ! from Fortran to C correctly performs this conversion
         !
-        use opentrustregion, only: stability_settings_type, default_stability_settings
+        use opentrustregion_core, only: stability_settings_type, &
+                                        default_stability_settings
         use c_interface, only: stability_settings_type_c, assignment(=)
         use test_reference, only: ref_stability_settings, operator(/=), &
                                   same_callbacks, unset_callbacks, &
@@ -2353,7 +2552,7 @@ contains
         ! this function tests that the function that converts a solver state from
         ! Fortran to C correctly performs this conversion
         !
-        use opentrustregion, only: solver_state_type
+        use opentrustregion_core, only: solver_state_type
         use c_interface, only: solver_state_type_c, assignment(=)
         use test_reference, only: ref_solver_state, operator(/=)
 
@@ -2411,38 +2610,38 @@ contains
 
     logical(c_bool) function test_character_from_c() bind(C)
         !
-        ! this function tests conversion of a C null-terminated character array to a
-        ! Fortran character string
+        ! this function tests conversion of a null-terminated keyword field of the C
+        ! settings to a Fortran character string
         !
+        use opentrustregion_core, only: kw_len
         use c_interface, only: character_from_c
 
-        character(kind=c_char), parameter :: test_array(5) = &
-            ["t", "e", "s", "t", c_null_char]
+        character(kind=c_char) :: char_c(kw_len + 3)
         character(len=:), allocatable :: char_f
-        integer(ip) :: i
 
         ! assume tests pass
         test_character_from_c = .true.
 
-        ! perform conversion
-        char_f = character_from_c(test_array)
-
-        ! check equality
-        if (len(char_f) /= size(test_array) - 1) then
-            write(stderr, *) "test_character_from_c failed: Converted string has "// &
-                "wrong length."
+        ! check that a keyword terminated by a null character is converted up to it
+        char_c = c_null_char
+        char_c(1:4) = ["t", "e", "s", "t"]
+        char_f = character_from_c(char_c)
+        if (len(char_f) /= 4 .or. char_f /= "test") then
+            write(stderr, *) "test_character_from_c failed: Terminated keyword not "// &
+                "converted correctly."
             test_character_from_c = .false.
-            return
         end if
 
-        ! check characters
-        do i = 1, len(char_f)
-            if (test_array(i) /= char_f(i:i)) then
-                write(stderr, *) "test_character_from_c failed: String mismatch at "// &
-                    "character ", i, "."
-                test_character_from_c = .false.
-            end if
-        end do
+        ! check that a field without a null character is taken whole without reading
+        ! past it into the characters that follow it here
+        char_c(1:kw_len + 1) = "x"
+        char_c(kw_len + 2) = "y"
+        char_f = character_from_c(char_c)
+        if (len(char_f) /= kw_len + 1 .or. char_f /= repeat("x", kw_len + 1)) then
+            write(stderr, *) "test_character_from_c failed: Field without null "// &
+                "character not converted correctly."
+            test_character_from_c = .false.
+        end if
 
     end function test_character_from_c
 
@@ -2451,7 +2650,7 @@ contains
         ! this function tests conversion of a Fortran character string to a C
         ! null-terminated character array
         !
-        use opentrustregion, only: kw_len
+        use opentrustregion_core, only: kw_len
         use c_interface, only: character_to_c
 
         character(len=*), parameter :: test_string = "test  "

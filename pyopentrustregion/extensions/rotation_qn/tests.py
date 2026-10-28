@@ -15,6 +15,7 @@ from pyopentrustregion.tests import (
     n_param,
     add_tests,
     print_separator,
+    check_callback_interfaces,
 )
 from pyopentrustregion.python_interface import (
     c_real,
@@ -129,40 +130,25 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
     def test_callback_interfaces(self):
         """
         this function tests that the interfaces to the transport and initial Hessian
-        functions report an exception raised by the function as an error and keep it
+        functions report an exception or an interruption raised by the function as an
+        error and keep it, and that the transport function receives the geodesic
+        read-only
         """
-        test_passed = True
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
-
-        def raising(*args):
-            raise ValueError("callback function failure")
-
-        for name, call in [
-            (
-                "transport function",
-                lambda exc: TransportInterface(raising, n_param, exc).call(
-                    vector_ptr, vector_ptr
-                ),
-            ),
-            (
-                "initial Hessian function",
-                lambda exc: InitHessInterface(raising, n_param, exc).call(vector_ptr),
-            ),
-        ]:
-            exception = {}
-            if call(exception) != 1:
-                print(
-                    f" test_callback_interfaces failed: Exception raised by {name} "
-                    "not reported as error."
-                )
-                test_passed = False
-            if not isinstance(exception.get("exc"), ValueError):
-                print(
-                    f" test_callback_interfaces failed: Exception raised by {name} "
-                    "not kept."
-                )
-                test_passed = False
+        output = np.zeros(n_param)
+        output_ptr = output.ctypes.data_as(POINTER(c_real))
+        interfaces = {
+            "transport function": lambda func, exc: TransportInterface(
+                func, n_param, exc
+            )(vector_ptr, output_ptr, None),
+            "initial Hessian function": lambda func, exc: InitHessInterface(
+                func, n_param, exc
+            )(output_ptr, None),
+        }
+        test_passed = check_callback_interfaces(
+            "test_callback_interfaces", interfaces, ["transport function"], vector
+        )
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")
         print(" test_callback_interfaces PASSED")

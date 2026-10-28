@@ -6,9 +6,9 @@
 
 module otr_density_qn
 
-    use opentrustregion, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
-                               hess_x_type, solver_settings_type, solver_state_type, &
-                               add_error_origin
+    use opentrustregion_core, only: rp, ip, kw_len, obj_func_type, update_orbs_type, &
+                                    hess_x_type, solver_settings_type, &
+                                    solver_state_type, add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, extension_type, &
                           extension_solver_settings_type, channel_rows
     use otr_oao, only: oao_type
@@ -290,7 +290,7 @@ contains
         ! information of the subsystem solver after rejected steps and told whether the
         ! approximate Hessian is symmetric
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
         use otr_common, only: extension_level_type, update_orbs_callback, &
                               obj_func_callback
 
@@ -382,7 +382,7 @@ contains
         !
         ! this subroutine performs a sanity check for density QN input parameters
         !
-        use opentrustregion, only: verbosity_error, string_to_lowercase
+        use opentrustregion_core, only: verbosity_error, string_to_lowercase
 
         type(density_qn_settings_type), intent(inout) :: settings
         integer(ip), intent(out) :: error
@@ -1020,7 +1020,7 @@ contains
         ! with E the expansion directions, P the projection directions and C the
         ! coupling matrix
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
         use otr_common, only: level_shifted_divisors
 
         class(density_qn_type), intent(inout) :: self
@@ -2013,7 +2013,7 @@ contains
         ! keep optionally restricts which columns a caller trusts; omitting it uses the
         ! whole history, which is right for a response that is exact at any distance
         !
-        use opentrustregion, only: numerical_zero
+        use opentrustregion_core, only: numerical_zero
 
         real(rp), intent(in) :: vecs(:, :)
         real(rp), intent(out), allocatable :: chol(:, :)
@@ -2178,7 +2178,7 @@ contains
         ! single part of a coupled potential-difference response, from the symmetrized
         ! A of that part congruence-transformed into its own orthonormalized S-basis
         !
-        use opentrustregion, only: symm_mat_diag
+        use opentrustregion_core, only: symm_mat_diag
 
         real(rp), intent(in) :: dm_cols(:, :), v_cols(:, :)
         integer(ip), intent(in) :: map(:)
@@ -2359,7 +2359,7 @@ contains
         ! rounding noise is never inverted; the coupling is diag(A_J^+, -A_K^+) for the
         ! directions [Y_J, Y_K], or A_J^+ for Y_J alone without exact exchange
         !
-        use opentrustregion, only: symm_mat_diag
+        use opentrustregion_core, only: symm_mat_diag
 
         real(rp), intent(in) :: a_coulomb(:, :), a_exchange(:, :), dirs_coulomb(:, :), &
                                 dirs_exchange(:, :), chol(:, :)
@@ -2519,7 +2519,7 @@ contains
         ! this function reports whether a density is already held in the history of the
         ! object
         !
-        use opentrustregion, only: numerical_zero
+        use opentrustregion_core, only: numerical_zero
 
         class(density_qn_type), intent(in) :: self
         real(rp), intent(in) :: dm(:, :, :)

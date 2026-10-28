@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import c_bool, c_size_t
+from ctypes import POINTER, c_bool, c_size_t
 from unittest.mock import patch
 
 import numpy as np
@@ -15,6 +15,7 @@ from pyopentrustregion.tests import (
     n_param,
     add_tests,
     print_separator,
+    check_callback_interfaces,
 )
 from pyopentrustregion.python_interface import (
     c_real,
@@ -25,6 +26,9 @@ from pyopentrustregion.python_interface import (
 from pyopentrustregion.extensions.density_qn import (
     DensityQNSettings,
     density_qn_factory,
+)
+from pyopentrustregion.extensions.density_qn.python_interface import (
+    DensityQNEvaluateDMInterface,
 )
 from pyopentrustregion.extensions.mo.tests import setup_mo_toy_run
 from pyopentrustregion.extensions.oao.tests import setup_oao_toy_run
@@ -197,6 +201,28 @@ class DensityQNPyInterfaceTests(unittest.TestCase):
             v_nonlinear[:] = density_qn_evaluate_dm_factors[3] * dm_ao
 
         return np.sum(dm_ao)
+
+    def test_callback_interfaces(self):
+        """
+        this function tests that the interface to the density matrix evaluating
+        function reports an exception or an interruption raised by the function as an
+        error and keeps it, and that the function receives the density matrix read-only
+        """
+        dm_ao = np.full(2 * (n_ao,), 1.0)
+        dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
+        interfaces = {
+            "density matrix evaluating function": lambda func, exc: (
+                DensityQNEvaluateDMInterface(func, n_ao, 1, True, exc)(
+                    dm_ao_ptr, (c_real * 1)(), None, None, None, None, None
+                )
+            ),
+        }
+        test_passed = check_callback_interfaces(
+            "test_callback_interfaces", interfaces, list(interfaces), dm_ao
+        )
+
+        self.assertTrue(test_passed, "test_callback_interfaces failed")
+        print(" test_callback_interfaces PASSED")
 
     # replace original library with mock library, also for the release of the
     # extensions the factory returns

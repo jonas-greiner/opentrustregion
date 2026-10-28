@@ -6,7 +6,7 @@
 
 module otr_mo_mock
 
-    use opentrustregion, only: rp, ip, stderr, obj_func_type
+    use opentrustregion_core, only: rp, ip, stderr, obj_func_type
     use c_interface, only: c_ip, c_rp
     use otr_mo, only: mo_factory_cs, mo_factory_os
     use test_reference, only: tol
@@ -45,7 +45,7 @@ contains
         ! reading the given state, points the context of the solver settings at its
         ! level of the solver and lets the settings own it, as the factory does
         !
-        use opentrustregion, only: update_orbs_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, solver_state_type
         use otr_common, only: extension_type, extension_solver_settings_type
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_common_unit_tests, only: check_mock_factory_logger, &
@@ -124,7 +124,7 @@ contains
         ! the solver settings, which marks the MO coefficients of the caller it
         ! receives in place and otherwise behaves like the factory
         !
-        use opentrustregion, only: update_orbs_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, solver_state_type
         use otr_mo, only: mo_settings_type
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type
         use otr_common_test_reference, only: check_evaluate_dm_cs_funptr, &
@@ -223,7 +223,7 @@ contains
         ! the solver settings, which marks the MO coefficients of the caller it
         ! receives in place and otherwise behaves like the factory
         !
-        use opentrustregion, only: update_orbs_type, solver_state_type
+        use opentrustregion_core, only: update_orbs_type, solver_state_type
         use otr_mo, only: mo_settings_type
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type
         use otr_common_test_reference, only: check_evaluate_dm_os_funptr, &

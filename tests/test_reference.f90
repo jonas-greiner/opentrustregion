@@ -6,15 +6,14 @@
 
 module test_reference
 
-    use opentrustregion, only: &
+    use opentrustregion_core, only: &
         rp, ip, kw_len, stderr, solver_settings_type, stability_settings_type, &
         solver_state_type, stability_state_type, settings_uninitialized_warning_msg, &
         stability_settings_uninitialized_warning_msg
     use c_interface, only: c_rp, c_ip, solver_state_type_c
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_null_char, c_funptr, &
-                                           c_null_funptr, c_f_procpointer, &
-                                           c_associated, c_ptr, c_null_ptr, c_loc, &
-                                           c_f_pointer, c_intptr_t, c_size_t, c_sizeof
+    use, intrinsic :: iso_c_binding, only: &
+        c_bool, c_char, c_null_char, c_funptr, c_null_funptr, c_f_procpointer, &
+        c_associated, c_ptr, c_null_ptr, c_loc, c_f_pointer, c_intptr_t
 
     implicit none
 
@@ -94,9 +93,11 @@ module test_reference
     ! together with the bookkeeping those callback functions keep, so that a test can
     ! check the context reached all of them unchanged, and the error code the C mock
     ! callback functions report, which the Fortran mocks of the extensions return from
-    ! the call numbered failing_call or, while it is 0, from every call
+    ! the call numbered failing_call or, while it is 0, from every call, the
+    ! bookkeeping of the C logging function includes the number of messages it
+    ! received
     type :: host_context_type
-        integer(ip) :: n_calls = 0, failing_call = 0
+        integer(ip) :: n_calls = 0, failing_call = 0, n_messages = 0
         logical :: logger_called = .false., stability_warning_logged = .false.
         integer(c_ip) :: mock_error = 0
     end type
@@ -273,6 +274,7 @@ contains
         ! host context for a test
         !
         host_context%n_calls = 0
+        host_context%n_messages = 0
         host_context%logger_called = .false.
         host_context%stability_warning_logged = .false.
         host_context%mock_error = 0
@@ -290,7 +292,7 @@ contains
         ! this subroutine points a settings object at the host context the callback
         ! functions expect, by default the global one, and clears their bookkeeping
         !
-        use opentrustregion, only: settings_type
+        use opentrustregion_core, only: settings_type
 
         class(settings_type), intent(inout) :: settings
         class(host_context_type), intent(inout), target, optional :: context
@@ -456,32 +458,6 @@ contains
 
     end subroutine get_reference_stability_values
 
-    integer(c_size_t) function solver_settings_size() bind(C)
-        !
-        ! this function returns the size of the C solver settings, so that the layout
-        ! tests detect a field missing from the C or Python settings
-        !
-        use c_interface, only: solver_settings_type_c
-
-        type(solver_settings_type_c) :: settings_c
-
-        solver_settings_size = c_sizeof(settings_c)
-
-    end function solver_settings_size
-
-    integer(c_size_t) function stability_settings_size() bind(C)
-        !
-        ! this function returns the size of the C stability check settings, so that
-        ! the layout tests detect a field missing from the C or Python settings
-        !
-        use c_interface, only: stability_settings_type_c
-
-        type(stability_settings_type_c) :: settings_c
-
-        stability_settings_size = c_sizeof(settings_c)
-
-    end function stability_settings_size
-
     subroutine get_reference_solver_state_values(values_out) bind(C)
         !
         ! this subroutine exports the reference solver state as a C state whose fields
@@ -532,30 +508,6 @@ contains
         values_out%n_hess_x = ref_stability_state%n_hess_x
 
     end subroutine get_reference_stability_state_values
-
-    integer(c_size_t) function solver_state_size() bind(C)
-        !
-        ! this function returns the size of the C solver state, so that the layout
-        ! tests detect a field missing from the C or Python state
-        !
-        type(solver_state_type_c) :: state_c
-
-        solver_state_size = c_sizeof(state_c)
-
-    end function solver_state_size
-
-    integer(c_size_t) function stability_state_size() bind(C)
-        !
-        ! this function returns the size of the C stability check state, so that the
-        ! layout tests detect a field missing from the C or Python state
-        !
-        use c_interface, only: stability_state_type_c
-
-        type(stability_state_type_c) :: state_c
-
-        stability_state_size = c_sizeof(state_c)
-
-    end function stability_state_size
 
     subroutine flush_fortran_stderr() bind(C)
         !
@@ -1303,7 +1255,7 @@ contains
         ! without callback functions and host contexts, so that a C test can compare
         ! against them without values of its own
         !
-        use opentrustregion, only: default_solver_settings
+        use opentrustregion_core, only: default_solver_settings
         use c_interface, only: solver_settings_type_c
 
         type(solver_settings_type_c), intent(in) :: settings_c
@@ -1325,7 +1277,7 @@ contains
         ! values without callback functions and host context, so that a C test can
         ! compare against them without values of its own
         !
-        use opentrustregion, only: default_stability_settings
+        use opentrustregion_core, only: default_stability_settings
         use c_interface, only: stability_settings_type_c
 
         type(stability_settings_type_c), intent(in) :: settings_c
@@ -1344,7 +1296,7 @@ contains
         !
         ! this function tests a provided orbital updating function pointer
         !
-        use opentrustregion, only: update_orbs_type, hess_x_type
+        use opentrustregion_core, only: update_orbs_type, hess_x_type
 
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         character(len=*), intent(in) :: test_name, message
@@ -1505,7 +1457,7 @@ contains
         ! this function tests a provided Hessian linear transformation function
         ! pointer, which scales by 4 unless another factor is given
         !
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
 
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         character(len=*), intent(in) :: test_name, message
@@ -1622,7 +1574,7 @@ contains
         !
         ! this function tests a provided objective function function pointer
         !
-        use opentrustregion, only: obj_func_type
+        use opentrustregion_core, only: obj_func_type
 
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         character(len=*), intent(in) :: test_name, message
@@ -1734,7 +1686,7 @@ contains
         !
         ! this function tests a provided preconditioner function pointer
         !
-        use opentrustregion, only: precond_type
+        use opentrustregion_core, only: precond_type
 
         procedure(precond_type), intent(in), pointer :: precond_funptr
         character(len=*), intent(in) :: test_name, message
@@ -1845,7 +1797,7 @@ contains
         ! this function tests a provided positive-definite preconditioner function
         ! pointer
         !
-        use opentrustregion, only: precond_pd_type
+        use opentrustregion_core, only: precond_pd_type
 
         procedure(precond_pd_type), intent(in), pointer :: precond_pd_funptr
         character(len=*), intent(in) :: test_name, message
@@ -1958,7 +1910,7 @@ contains
         !
         ! this function tests a provided projection function pointer
         !
-        use opentrustregion, only: project_type
+        use opentrustregion_core, only: project_type
 
         procedure(project_type), intent(in), pointer :: project_funptr
         character(len=*), intent(in) :: test_name, message
@@ -2068,7 +2020,7 @@ contains
         !
         ! this function tests a provided extra trial vector function pointer
         !
-        use opentrustregion, only: get_extra_trial_vectors_type
+        use opentrustregion_core, only: get_extra_trial_vectors_type
 
         procedure(get_extra_trial_vectors_type), intent(in), pointer :: &
             get_extra_trial_vectors_funptr
@@ -2175,7 +2127,7 @@ contains
         !
         ! this function tests a provided convergence check function pointer
         !
-        use opentrustregion, only: conv_check_type
+        use opentrustregion_core, only: conv_check_type
 
         procedure(conv_check_type), intent(in), pointer :: conv_check_funptr
         character(len=*), intent(in) :: test_name, message

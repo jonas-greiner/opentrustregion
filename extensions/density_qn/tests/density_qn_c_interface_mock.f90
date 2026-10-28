@@ -6,7 +6,7 @@
 
 module otr_density_qn_c_interface_mock
 
-    use opentrustregion, only: ip, stderr
+    use opentrustregion_core, only: ip, stderr
     use c_interface, only: c_ip
     use otr_density_qn_test_reference, only: ref_density_qn_settings
     use otr_density_qn_c_interface, only: density_qn_factory_c_wrapper, &
@@ -122,7 +122,7 @@ contains
         use otr_density_qn_c_interface, only: density_qn_settings_type_c
         use otr_density_qn_test_reference, only: get_reference_density_qn_values
 
-        type(density_qn_settings_type_c), intent(inout) :: settings
+        type(density_qn_settings_type_c), intent(out) :: settings
 
         ! set reference values without logging function and host context
         call get_reference_density_qn_values(settings)

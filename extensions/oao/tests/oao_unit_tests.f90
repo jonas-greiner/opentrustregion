@@ -6,7 +6,7 @@
 
 module otr_oao_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use test_reference, only: tol
     use, intrinsic :: iso_c_binding, only: c_bool
 
@@ -335,7 +335,8 @@ contains
         ! density matrix of the caller as the only particle channel and the closed-shell
         ! density matrix evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_oao, only: oao_factory_cs, oao_type, oao_settings_type, error_oao
         use otr_common, only: evaluate_dm_cs_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
@@ -462,7 +463,8 @@ contains
         ! density matrix of the caller and the open-shell density matrix evaluating
         ! function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_oao, only: oao_factory_os, oao_type, oao_settings_type, error_oao
         use otr_common, only: evaluate_dm_os_type, extension_solver_settings_type, &
                               extension_level_type, update_orbs_callback, &
@@ -576,8 +578,8 @@ contains
         ! the solver settings with it and the record of the state and returns its
         ! orbital updating function and objective function
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type, &
-                                   verbosity_warning
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type, verbosity_warning
         use otr_common, only: evaluate_dm_cs_type, evaluate_dm_os_type, &
                               extension_solver_settings_type, extension_level_type, &
                               update_orbs_callback, obj_func_callback, &
@@ -1158,7 +1160,7 @@ contains
             mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type, error_oao
         use otr_common, only: hess_x_callback
-        use opentrustregion, only: hess_x_type
+        use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix

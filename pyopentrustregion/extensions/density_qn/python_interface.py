@@ -113,7 +113,7 @@ class DensityQNEvaluateDMInterface(CallbackInterface):
     n_ao: int
     n_particle: int
     closed_shell: bool
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(
         self,
@@ -124,13 +124,14 @@ class DensityQNEvaluateDMInterface(CallbackInterface):
         v_exchange_ptr,
         v_nonlinear_ptr,
     ) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make the density matrix read-only
         shape = (
             2 * (self.n_ao,)
             if self.closed_shell
             else (self.n_particle, self.n_ao, self.n_ao)
         )
         dm_ao = np.ctypeslib.as_array(dm_ao_ptr, shape=shape)
+        dm_ao.flags.writeable = False
         fock = np.ctypeslib.as_array(fock_ptr, shape=shape) if fock_ptr else None
         v_coulomb = (
             np.ctypeslib.as_array(v_coulomb_ptr, shape=shape) if v_coulomb_ptr else None
@@ -148,13 +149,9 @@ class DensityQNEvaluateDMInterface(CallbackInterface):
 
         # get energy, and the Fock matrix, Coulomb, exact-exchange and non-linear
         # potentials where wanted
-        try:
-            energy_ptr[0] = self.evaluate_dm(
-                dm_ao, fock, v_coulomb, v_exchange, v_nonlinear
-            )
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        energy_ptr[0] = self.evaluate_dm(
+            dm_ao, fock, v_coulomb, v_exchange, v_nonlinear
+        )
 
         return 0
 

@@ -6,7 +6,7 @@
 
 module otr_common_c_interface
 
-    use opentrustregion, only: ip, rp, hess_x_type, solver_state_type
+    use opentrustregion_core, only: ip, rp, hess_x_type, solver_state_type
     use c_interface, only: &
         c_ip, c_rp, c_callbacks_type, solver_state_type_c, update_orbs_c_type, &
         obj_func_c_type, hess_x_c_type, precond_c_type, precond_pd_c_type, &
@@ -168,7 +168,7 @@ contains
         ! the state, which starts from the default state as the solver's does and from
         ! which the state the object reads is refreshed
         !
-        use opentrustregion, only: settings_type, verbosity_error
+        use opentrustregion_core, only: settings_type, verbosity_error
         use c_interface, only: solver_settings_type_c, convert_solver_settings_c, &
                                assignment(=)
 
@@ -283,7 +283,7 @@ contains
         !
         ! this subroutine converts a stability check state from C to Fortran
         !
-        use opentrustregion, only: stability_state_type
+        use opentrustregion_core, only: stability_state_type
         use c_interface, only: stability_state_type_c
 
         type(stability_state_type), intent(out) :: state

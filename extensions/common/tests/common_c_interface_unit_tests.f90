@@ -6,7 +6,7 @@
 
 module otr_common_c_interface_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr, solver_state_type
+    use opentrustregion_core, only: rp, ip, stderr, solver_state_type
     use c_interface, only: c_rp, c_ip, solver_state_type_c
     use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
     use test_reference, only: tol_c, n_param
@@ -713,7 +713,7 @@ contains
         ! this function tests that the function that converts a stability check state
         ! from C to Fortran correctly performs this conversion
         !
-        use opentrustregion, only: stability_state_type
+        use opentrustregion_core, only: stability_state_type
         use c_interface, only: stability_state_type_c
         use otr_common_c_interface, only: assignment(=)
         use test_reference, only: get_reference_stability_state_values, operator(/=)
@@ -776,7 +776,7 @@ contains
         ! this function tests the subroutine which writes the solver settings a Fortran
         ! factory wired back into the host's C solver settings
         !
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
         use c_interface, only: solver_settings_type_c
         use otr_common, only: precond_callback, precond_pd_callback, project_callback, &
                               get_extra_trial_vectors_callback, conv_check_callback, &

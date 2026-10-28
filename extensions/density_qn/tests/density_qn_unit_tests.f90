@@ -6,7 +6,7 @@
 
 module otr_density_qn_unit_tests
 
-    use opentrustregion, only: rp, ip, stderr
+    use opentrustregion_core, only: rp, ip, stderr
     use test_reference, only: tol
     use otr_common_unit_tests, only: mock_orbital_basis_type
     use otr_density_qn, only: density_qn_mo_type
@@ -624,7 +624,7 @@ contains
         ! out without a non-linear response and cache every quantity in the basis of
         ! its own system, without evaluating the density matrix or changing the history
         !
-        use opentrustregion, only: solver_state_type
+        use opentrustregion_core, only: solver_state_type
         use otr_density_qn, only: density_qn_type, qn_methods, density_qn_oao_type
         use otr_mo, only: mo_type
         use otr_oao, only: oao_type
@@ -1050,7 +1050,8 @@ contains
         ! hands the level of the solver settings' context and the closed-shell density
         ! matrix evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_density_qn, only: density_qn_factory_cs, density_qn_type, &
                                   density_qn_settings_type, &
                                   density_qn_evaluate_dm_cs_type, error_density_qn
@@ -1164,7 +1165,8 @@ contains
         ! the level of the solver settings' context and the open-shell density matrix
         ! evaluating function to the common setup
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_density_qn, only: density_qn_factory_os, density_qn_type, &
                                   density_qn_settings_type, &
                                   density_qn_evaluate_dm_os_type, error_density_qn
@@ -1279,7 +1281,8 @@ contains
         ! adjusts them to the approximate Hessian and returns its orbital updating
         ! function and objective function
         !
-        use opentrustregion, only: obj_func_type, update_orbs_type, solver_state_type
+        use opentrustregion_core, only: obj_func_type, update_orbs_type, &
+                                        solver_state_type
         use otr_density_qn, only: density_qn_factory_common, density_qn_type, &
                                   density_qn_mo_type, density_qn_oao_type, &
                                   density_qn_settings_type, &
@@ -1642,7 +1645,7 @@ contains
         !
         use otr_density_qn, only: density_qn_set_solver_settings, &
                                   density_qn_settings_type, density_qn_n_micro
-        use opentrustregion, only: solver_settings_type
+        use opentrustregion_core, only: solver_settings_type
         use test_reference, only: ref_solver_settings, operator(/=)
 
         type(solver_settings_type) :: solver_settings
@@ -1905,7 +1908,7 @@ contains
             ! state holds
             !
             use test_reference, only: arm_host_context, host_context_reached
-            use opentrustregion, only: hess_x_type, solver_state_type
+            use opentrustregion_core, only: hess_x_type, solver_state_type
             use otr_common, only: hess_x_callback
             use otr_density_qn, only: density_qn_type
             use otr_oao, only: oao_type
@@ -4411,7 +4414,7 @@ contains
         ! non-linear system of a density QN object may use, from the trust radius the
         ! record of the solver state holds
         !
-        use opentrustregion, only: solver_state_type
+        use opentrustregion_core, only: solver_state_type
         use otr_density_qn, only: density_qn_type, history_window_factor
         use otr_oao, only: oao_type
         use otr_common_test_reference, only: n_ao
@@ -5426,7 +5429,7 @@ contains
         ! this function tests the function which reports whether a density is already
         ! held in the history
         !
-        use opentrustregion, only: numerical_zero
+        use opentrustregion_core, only: numerical_zero
         use otr_density_qn, only: density_qn_type, density_qn_oao_type
         use otr_common_test_reference, only: n_ao, n_particle
 

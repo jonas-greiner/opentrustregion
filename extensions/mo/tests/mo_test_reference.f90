@@ -6,7 +6,7 @@
 
 module otr_mo_test_reference
 
-    use opentrustregion, only: ip, kw_len
+    use opentrustregion_core, only: ip, kw_len
     use c_interface, only: c_ip, c_rp
     use otr_mo, only: mo_settings_type, mo_settings_uninitialized_warning_msg
     use otr_common_test_reference, only: n_particle, n_occ, ref_orbital_settings

@@ -6,7 +6,7 @@
 
 module otr_common
 
-    use opentrustregion, only: &
+    use opentrustregion_core, only: &
         rp, ip, settings_type, solver_settings_type, stability_settings_type, &
         solver_state_type, update_orbs_type, obj_func_type, hess_x_type, precond_type, &
         precond_pd_type, project_type, get_extra_trial_vectors_type, conv_check_type, &
@@ -264,7 +264,7 @@ contains
         ! function of the host for settings a factory wired, or one a factory returned
         ! for settings no factory wired
         !
-        use opentrustregion, only: inherit_solver_callbacks, verbosity_error
+        use opentrustregion_core, only: inherit_solver_callbacks, verbosity_error
 
         class(extension_type), intent(inout), target :: self
         type(solver_settings_type), intent(inout), target :: solver_settings
@@ -862,7 +862,7 @@ contains
         ! density matrix evaluating function, whose orbital update, objective function
         ! and Hessian linear transformation need one
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         class(orbital_basis_type), intent(in) :: self
         integer(ip), intent(out) :: error
@@ -1020,7 +1020,7 @@ contains
         ! this subroutine calculates the square root and inverse square root of a
         ! symmetric positive definite matrix
         !
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         real(rp), intent(in) :: A(:, :)
         real(rp), allocatable, intent(out) :: sqrtA(:, :), inv_sqrtA(:, :)
@@ -1100,7 +1100,7 @@ contains
         ! whose norm is not finite, for which no scale factor exists, is refused
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-        use opentrustregion, only: verbosity_error
+        use opentrustregion_core, only: verbosity_error
 
         real(rp), intent(in) :: A(:, :)
         class(settings_type), intent(in) :: settings
@@ -1183,7 +1183,7 @@ contains
         ! by the level shift, with divisors vanishing in magnitude replaced by a small
         ! floor
         !
-        use opentrustregion, only: precond_floor
+        use opentrustregion_core, only: precond_floor
 
         real(rp), intent(in) :: eigval_pairs(:), mu
         real(rp) :: divisors(size(eigval_pairs))
@@ -1201,7 +1201,7 @@ contains
         ! its eigenvalues, floored relative to the largest of them while guarding
         ! against vanishing eigenvalues
         !
-        use opentrustregion, only: precond_floor, precond_rel_floor_factor
+        use opentrustregion_core, only: precond_floor, precond_rel_floor_factor
 
         real(rp), intent(in) :: eigval_pairs(:)
         real(rp) :: divisors(size(eigval_pairs))

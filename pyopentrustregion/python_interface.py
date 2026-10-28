@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import sys
+import copy
+import signal
 import threading
 import warnings
 from pathlib import Path
@@ -29,6 +31,8 @@ from ctypes import (
     c_void_p,
     c_char_p,
     c_char,
+    c_size_t,
+    sizeof,
     Structure,
 )
 from dataclasses import dataclass
@@ -57,9 +61,14 @@ if sys.platform != "win32":
 conda_prefix = Path("/opt/anaconda1anaconda2anaconda3")
 
 
-def _load_lib() -> CDLL:
+def _load_lib(lib_names: list) -> CDLL:
+    """
+    this function loads the first of the given libraries it finds, searching the
+    conda prefix, the installed package, the directory of this file and ../build in
+    this order
+    """
     # try to load from installed package (conda)
-    for lib_name in lib_candidates:
+    for lib_name in lib_names:
         conda_path_unix = conda_prefix / "lib" / lib_name
         conda_path_wind = conda_prefix / "Library" / "bin" / lib_name
         if conda_path_unix.exists():
@@ -68,19 +77,19 @@ def _load_lib() -> CDLL:
             return CDLL(str(conda_path_wind))
 
     # fallback: try to load from installed package (site-packages)
-    for lib_name in lib_candidates:
+    for lib_name in lib_names:
         lib_path = resources.files("pyopentrustregion") / lib_name
         if lib_path.is_file():
             return CDLL(str(lib_path))
 
-    # fallback: try to load from same directory (editable install)
-    for lib_name in lib_candidates:
+    # fallback: try to load from the directory of this file
+    for lib_name in lib_names:
         local_path = os.path.join(os.path.dirname(__file__), lib_name)
         if os.path.exists(local_path):
             return CDLL(local_path)
 
     # fallback: try to load from ../build (development build)
-    for lib_name in lib_candidates:
+    for lib_name in lib_names:
         build_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "../build", lib_name)
         )
@@ -88,12 +97,10 @@ def _load_lib() -> CDLL:
             return CDLL(build_path)
 
     # if all failed
-    raise FileNotFoundError(
-        f"Cannot find either opentrustregion or testsuite library ({lib_candidates})"
-    )
+    raise FileNotFoundError(f"Cannot find any of the libraries {lib_names}")
 
 
-lib = _load_lib()
+lib = _load_lib(lib_candidates)
 
 # determine integer size used in library
 ilp64 = c_bool.in_dll(lib, "ilp64")
@@ -141,7 +148,7 @@ conv_check_interface_type = callback_type(c_int, POINTER(c_bool))
 logger_interface_type = callback_type(None, c_char_p)
 
 
-def adopt_collector(*callbacks: Any) -> Dict[str, Exception]:
+def adopt_collector(*callbacks: Any) -> Dict[str, BaseException]:
     """
     this function returns the exception collector to use for a run
     """
@@ -154,17 +161,73 @@ def adopt_collector(*callbacks: Any) -> Dict[str, Exception]:
     return {}
 
 
+class InterruptionState(threading.local):
+    """
+    this class keeps, separately for every thread, a stack of the running calls, True
+    for a callback function and False for the library, innermost last, and an
+    interruption that arrived while the library ran and is raised later
+    """
+
+    stack: tuple = ()
+    pending: Optional[BaseException] = None
+
+
+interruption_state = InterruptionState()
+
+
+def defer_interruption(signum, frame):
+    """
+    this function handles SIGINT during a call into the library, it raises a
+    KeyboardInterrupt right away while a callback function runs, but only records it
+    while the library runs, since Python would otherwise raise it on entering the next
+    callback function, where ctypes would drop it
+    """
+    if interruption_state.stack and not interruption_state.stack[-1]:
+        interruption_state.pending = KeyboardInterrupt()
+    else:
+        signal.default_int_handler(signum, frame)
+
+
 # define interface factories
 class CallbackInterface:
     """
     this class is the base class of the callback function interfaces, the C interface
     hands every callback function the opaque host context as its last argument while
     Python hosts carry their data in closures instead, so it is dropped here and the
-    subclasses only implement call without it
+    subclasses only implement call without it, an exception is reported to the library
+    as an error, since ctypes would drop it
     """
 
+    exception: Dict[str, BaseException]
+
     def __call__(self, *args):
-        return self.call(*args[:-1])
+        # catch every exception, since ctypes drops one that leaves this function and
+        # hands the library an undefined return value instead
+        outer = interruption_state.stack
+        try:
+            interruption_state.stack = outer + (True,)
+
+            # stop the call for an interruption that arrived while the library ran
+            if interruption_state.pending is not None:
+                pending, interruption_state.pending = interruption_state.pending, None
+                raise pending
+
+            result = self.call(*args[:-1])
+        except BaseException as e:
+            # unmark the callback function before calling fail, so that an interruption
+            # arriving during that call is recorded instead of raised outside the try
+            interruption_state.stack = outer
+            return self.fail(e)
+        interruption_state.stack = outer
+        return result
+
+    def fail(self, e: BaseException) -> Optional[int]:
+        """
+        this function keeps the exception of a callback function, which is raised once
+        the call has returned, and returns the error code that stops the call
+        """
+        self.exception["exc"] = e
+        return 1
 
 
 @dataclass
@@ -175,17 +238,14 @@ class ObjFuncInterface(CallbackInterface):
 
     obj_func: Callable[[np.ndarray], float]
     n_param: int
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(self, kappa_ptr, func_ptr) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make read-only
         kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+        kappa.flags.writeable = False
 
-        try:
-            func_ptr[0] = self.obj_func(kappa)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        func_ptr[0] = self.obj_func(kappa)
 
         return 0
 
@@ -198,19 +258,16 @@ class HessXInterface(CallbackInterface):
 
     hess_x: Callable[[np.ndarray, np.ndarray], None]
     n_param: int
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
 
     def call(self, x_ptr, hx_ptr) -> int:
-        # convert trial vector pointer to numpy array
+        # convert trial vector pointer to numpy array and make read-only
         x = np.ctypeslib.as_array(x_ptr, shape=(self.n_param,))
+        x.flags.writeable = False
         hx = np.ctypeslib.as_array(hx_ptr, shape=(self.n_param,))
 
         # perform linear transformation
-        try:
-            self.hess_x(x, hx)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        self.hess_x(x, hx)
 
         return 0
 
@@ -226,22 +283,19 @@ class UpdateOrbsInterface(CallbackInterface):
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ]
     n_param: int
-    exception: Dict[str, Exception]
+    exception: Dict[str, BaseException]
     hess_x_funptr: Optional[Any] = None
 
     def call(self, kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr) -> int:
-        # convert matrix pointers to numpy arrays
+        # convert matrix pointers to numpy arrays and make read-only
         kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+        kappa.flags.writeable = False
         grad = np.ctypeslib.as_array(grad_ptr, shape=(self.n_param,))
         h_diag = np.ctypeslib.as_array(h_diag_ptr, shape=(self.n_param,))
 
         # update orbitals and retrieve objective function, gradient, Hessian diagonal
         # and Hessian linear transformation function
-        try:
-            func_ptr[0], hess_x = self.update_orbs(kappa, grad, h_diag)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        func_ptr[0], hess_x = self.update_orbs(kappa, grad, h_diag)
 
         # an orbital update which does not provide a Hessian linear transformation
         # leaves the pointer unset so that the solver reports the missing one, while
@@ -255,8 +309,8 @@ class UpdateOrbsInterface(CallbackInterface):
             )
             return 1
 
-        # attach the response interface to the object so that it persists in Python
-        # to ensure that it is not garbage collected when the factory completes
+        # keep the interface of the Hessian linear transformation on this object so
+        # that it is not garbage collected while the library still calls it
         self.hess_x_funptr = hess_x_interface_type(
             HessXInterface(hess_x, self.n_param, self.exception)
         )
@@ -286,7 +340,7 @@ class SettingsCallbackInterface(CallbackInterface):
         return self.settings._n_param
 
     @property
-    def exception(self) -> Dict[str, Exception]:
+    def exception(self) -> Dict[str, BaseException]:
         return self.settings._exception
 
 
@@ -296,19 +350,16 @@ class PrecondInterface(SettingsCallbackInterface):
     """
 
     def call(self, residual_ptr, mu_ptr, precond_residual_ptr) -> int:
-        try:
-            # convert pointers to numpy arrays and float
-            residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
-            mu = mu_ptr[0]
-            precond_residual = np.ctypeslib.as_array(
-                precond_residual_ptr, shape=(self.n_param,)
-            )
+        # convert pointers to numpy arrays and float and make read-only
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+        residual.flags.writeable = False
+        mu = mu_ptr[0]
+        precond_residual = np.ctypeslib.as_array(
+            precond_residual_ptr, shape=(self.n_param,)
+        )
 
-            # call preconditioner
-            self.func(residual, mu, precond_residual)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        # call preconditioner
+        self.func(residual, mu, precond_residual)
 
         return 0
 
@@ -321,18 +372,15 @@ class PrecondPDInterface(SettingsCallbackInterface):
     """
 
     def call(self, residual_ptr, precond_residual_ptr) -> int:
-        try:
-            # convert pointers to numpy arrays
-            residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
-            precond_residual = np.ctypeslib.as_array(
-                precond_residual_ptr, shape=(self.n_param,)
-            )
+        # convert pointers to numpy arrays and make read-only
+        residual = np.ctypeslib.as_array(residual_ptr, shape=(self.n_param,))
+        residual.flags.writeable = False
+        precond_residual = np.ctypeslib.as_array(
+            precond_residual_ptr, shape=(self.n_param,)
+        )
 
-            # call positive-definite preconditioner
-            self.func(residual, precond_residual)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        # call positive-definite preconditioner
+        self.func(residual, precond_residual)
 
         return 0
 
@@ -343,15 +391,11 @@ class ProjectInterface(SettingsCallbackInterface):
     """
 
     def call(self, vector_ptr) -> int:
-        try:
-            # convert matrix pointers to numpy arrays
-            vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
+        # convert matrix pointers to numpy arrays
+        vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
 
-            # call projection function
-            self.func(vector)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        # call projection function
+        self.func(vector)
 
         return 0
 
@@ -362,17 +406,13 @@ class GetExtraTrialVectorsInterface(SettingsCallbackInterface):
     """
 
     def call(self, trial_vectors_ptr, n_extra_trial_vectors) -> int:
-        try:
-            # convert matrix pointer to numpy array with one trial vector per row
-            trial_vectors = np.ctypeslib.as_array(
-                trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
-            )
+        # convert matrix pointer to numpy array with one trial vector per row
+        trial_vectors = np.ctypeslib.as_array(
+            trial_vectors_ptr, shape=(n_extra_trial_vectors, self.n_param)
+        )
 
-            # call extra trial vector function
-            self.func(trial_vectors)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        # call extra trial vector function
+        self.func(trial_vectors)
 
         return 0
 
@@ -384,11 +424,7 @@ class ConvCheckInterface(SettingsCallbackInterface):
 
     def call(self, conv_ptr) -> int:
         # call convergence check
-        try:
-            conv_ptr[0] = self.func()
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        conv_ptr[0] = self.func()
 
         return 0
 
@@ -400,16 +436,13 @@ class SettingsHessXInterface(SettingsCallbackInterface):
     """
 
     def call(self, x_ptr, hx_ptr) -> int:
-        try:
-            # convert trial vector pointer to numpy array
-            x = np.ctypeslib.as_array(x_ptr, shape=(self.n_param,))
-            hx = np.ctypeslib.as_array(hx_ptr, shape=(self.n_param,))
+        # convert trial vector pointer to numpy array and make read-only
+        x = np.ctypeslib.as_array(x_ptr, shape=(self.n_param,))
+        x.flags.writeable = False
+        hx = np.ctypeslib.as_array(hx_ptr, shape=(self.n_param,))
 
-            # perform linear transformation
-            self.func(x, hx)
-        except Exception as e:
-            self.exception["exc"] = e
-            return 1
+        # perform linear transformation
+        self.func(x, hx)
 
         return 0
 
@@ -421,22 +454,34 @@ class LoggerInterface(SettingsCallbackInterface):
 
     def call(self, message):
         # call logger
-        try:
-            self.func(string_at(message).decode("utf-8"))
-        except Exception as e:
-            # the logger has no error channel since the result does not depend on it,
-            # so the first failure is kept and reported once the call into the library
-            # has returned
+        self.func(string_at(message).decode("utf-8"))
+
+    def fail(self, e: BaseException) -> None:
+        """
+        this function keeps the first exception of the logging function, which returns
+        no error code since the result does not depend on it, for a warning once the
+        call has returned, and records an interruption, so that the next callback
+        function stops the call
+        """
+        if isinstance(e, Exception):
             self.exception.setdefault("logger", e)
+        else:
+            interruption_state.pending = e
 
 
-def raise_callback_error(error: int, exception: Optional[Dict[str, Exception]], msg):
+def raise_callback_error(
+    error: int, exception: Optional[Dict[str, BaseException]], msg
+):
     """
     this function raises if a C callback function called from Python failed, with the
-    exception raised by a failing Python callback function it reached as its cause
+    exception raised by a failing Python callback function it reached as its cause,
+    while an interruption of such a function, such as a KeyboardInterrupt, is raised
+    as it is
     """
     if error != 0:
         if exception is not None and "exc" in exception:
+            if not isinstance(exception["exc"], Exception):
+                raise exception["exc"]
             raise RuntimeError(msg) from exception["exc"]
         raise RuntimeError(msg)
 
@@ -466,11 +511,11 @@ class CFunctionInterface:
     """
     this class is the base class of the Python interfaces to C callback functions,
     such as those a factory returns or wires into settings, which are called with the
-    context they belong to and keep the object they rely on alive
+    context they belong to through call_library and keep the object they rely on alive
     """
 
     funptr: Any
-    _otr_exception: Optional[Dict[str, Exception]] = None
+    _otr_exception: Optional[Dict[str, BaseException]] = None
     context: Optional[int] = None
     _owner: Any = None
 
@@ -483,7 +528,8 @@ class HessXPyInterface(CFunctionInterface):
 
     def __call__(self, x: np.ndarray, hess_x: np.ndarray):
         x_buffer, hess_x_buffer = c_buffer(x), c_buffer(hess_x)
-        error = self.funptr(
+        error = call_library(
+            self.funptr,
             x_buffer.ctypes.data_as(POINTER(c_real)),
             hess_x_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
@@ -505,7 +551,8 @@ class PrecondPyInterface(CFunctionInterface):
     def __call__(self, residual: np.ndarray, mu: float, precond_residual: np.ndarray):
         residual_buffer = c_buffer(residual)
         precond_residual_buffer = c_buffer(precond_residual)
-        error = self.funptr(
+        error = call_library(
+            self.funptr,
             residual_buffer.ctypes.data_as(POINTER(c_real)),
             byref(c_real(mu)),
             precond_residual_buffer.ctypes.data_as(POINTER(c_real)),
@@ -526,7 +573,8 @@ class PrecondPDPyInterface(CFunctionInterface):
     def __call__(self, residual: np.ndarray, precond_residual: np.ndarray):
         residual_buffer = c_buffer(residual)
         precond_residual_buffer = c_buffer(precond_residual)
-        error = self.funptr(
+        error = call_library(
+            self.funptr,
             residual_buffer.ctypes.data_as(POINTER(c_real)),
             precond_residual_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
@@ -546,7 +594,9 @@ class ProjectPyInterface(CFunctionInterface):
 
     def __call__(self, vector: np.ndarray):
         vector_buffer = c_buffer(vector)
-        error = self.funptr(vector_buffer.ctypes.data_as(POINTER(c_real)), self.context)
+        error = call_library(
+            self.funptr, vector_buffer.ctypes.data_as(POINTER(c_real)), self.context
+        )
         write_back(vector, vector_buffer)
         raise_callback_error(
             error, self._otr_exception, "Projection function raised error."
@@ -560,7 +610,8 @@ class GetExtraTrialVectorsPyInterface(CFunctionInterface):
 
     def __call__(self, trial_vectors: np.ndarray):
         trial_vectors_buffer = c_buffer(trial_vectors)
-        error = self.funptr(
+        error = call_library(
+            self.funptr,
             trial_vectors_buffer.ctypes.data_as(POINTER(c_real)),
             trial_vectors.shape[0],
             self.context,
@@ -578,7 +629,7 @@ class ConvCheckPyInterface(CFunctionInterface):
 
     def __call__(self) -> bool:
         converged = c_bool()
-        error = self.funptr(byref(converged), self.context)
+        error = call_library(self.funptr, byref(converged), self.context)
         raise_callback_error(
             error, self._otr_exception, "Convergence check function raised error."
         )
@@ -591,7 +642,7 @@ class LoggerPyInterface(CFunctionInterface):
     """
 
     def __call__(self, message: str):
-        self.funptr(message.encode("utf-8"), self.context)
+        call_library(self.funptr, message.encode("utf-8"), self.context)
 
 
 # define classes corresponding to C structs for settings
@@ -681,6 +732,35 @@ class SolverStateC(Structure):
     ]
 
 
+def check_struct_sizes(library: CDLL) -> None:
+    """
+    this function checks that the settings and state structures have the sizes the
+    library exports, so that a library of another version, such as a separately
+    installed one or a stale build, is not read and written with the wrong layout,
+    only a layout change that keeps the sizes goes undetected
+    """
+    for name, structure in [
+        ("solver_settings", SolverSettingsC),
+        ("stability_settings", StabilitySettingsC),
+        ("solver_state", SolverStateC),
+        ("stability_state", StabilityStateC),
+    ]:
+        # a library older than this check exports no sizes
+        size_function = getattr(library, f"{name}_size", None)
+        if size_function is not None:
+            size_function.restype = c_size_t
+        if size_function is None or size_function() != sizeof(structure):
+            raise ImportError(
+                f"The {name.replace('_', ' ')} of pyopentrustregion do not match those "
+                f"of the loaded library {library._name}, which therefore comes from "
+                "another version of OpenTrustRegion. Reinstall or rebuild the library "
+                "together with pyopentrustregion."
+            )
+
+
+check_struct_sizes(lib)
+
+
 # define classes for settings
 class Settings:
 
@@ -690,6 +770,17 @@ class Settings:
     # the interface, the C function type and the Python interface to a C function of
     # every callback function of the settings
     callback_fields: Dict[str, Tuple[type, Any, type]] = {}
+
+    # attributes the settings classes set themselves besides the settings and the
+    # callback functions
+    own_attributes: Tuple[str, ...] = (
+        "settings_c",
+        "_callables",
+        "_call",
+        "_no_call_exception",
+        "_callbacks",
+        "_callback_addresses",
+    )
 
     def __init__(self, settings_c: Optional[Structure] = None):
         """
@@ -713,7 +804,7 @@ class Settings:
         # are called
         self._callables: Dict[str, Optional[Callable]] = {}
         self._call = threading.local()
-        self._no_call_exception: Dict[str, Exception] = {}
+        self._no_call_exception: Dict[str, BaseException] = {}
 
         # build the C callback function of every callback function once, which calls
         # the callable currently assigned to it, so that the C settings only change
@@ -733,10 +824,69 @@ class Settings:
         return getattr(self._call, "n_param", None)
 
     @property
-    def _exception(self) -> Dict[str, Exception]:
+    def _exception(self) -> Dict[str, BaseException]:
         return getattr(self._call, "exception", self._no_call_exception)
 
-    def prepare_call(self, n_param: Optional[int], exception: Dict[str, Exception]):
+    def __setattr__(self, name: str, value: Any) -> None:
+        """
+        this function sets an attribute only if it is a setting, a callback function or
+        one the class sets itself, so that a misspelled setting raises instead of being
+        silently ignored
+        """
+        if not (
+            isinstance(getattr(type(self), name, None), property)
+            or name in self.own_attributes
+        ):
+            raise AttributeError(f"{type(self).__name__} has no setting {name!r}.")
+        super().__setattr__(name, value)
+
+    def __copy__(self) -> Settings:
+        """
+        this function returns a copy of the settings with a C struct of its own, so
+        that changing either leaves the other unchanged, which shares the callback
+        functions
+        """
+        return self.copy_with(lambda func: func)
+
+    def __deepcopy__(self, memo: dict) -> Settings:
+        """
+        this function returns a copy of the settings with a C struct of its own and
+        deep copies of the callback functions
+        """
+        return self.copy_with(lambda func: copy.deepcopy(func, memo))
+
+    def copy_with(self, copy_callback: Callable[[Any], Any]) -> Settings:
+        """
+        this function returns a copy of the settings with a C struct of its own, whose
+        callback functions are copied by the given function, unless a factory wired
+        the settings, whose object keeps the callback functions of these settings
+        """
+        if self.settings_c.context is not None:
+            raise TypeError(
+                f"{type(self).__name__} that a factory wired can not be copied, "
+                "since the extension object they own calls their callback functions."
+            )
+        settings = type(self)()
+        memmove(
+            addressof(settings.settings_c),
+            addressof(self.settings_c),
+            sizeof(self.c_struct),
+        )
+        self.copy_callbacks(settings, copy_callback)
+        return settings
+
+    def copy_callbacks(
+        self, settings: Settings, copy_callback: Callable[[Any], Any]
+    ) -> None:
+        """
+        this function sets the callback functions of other settings to copies of
+        these, made by the given function, whose C struct holds those of these
+        settings
+        """
+        for name in self.callback_fields:
+            setattr(settings, name, copy_callback(getattr(self, name)))
+
+    def prepare_call(self, n_param: Optional[int], exception: Dict[str, BaseException]):
         """
         this function hands the callback functions the number of parameters and the
         exception collector of a call into the library in the calling thread and
@@ -758,6 +908,13 @@ class Settings:
 
 
 class SolverSettings(Settings):
+
+    # the nested stability check settings and the owner of the extension object a
+    # factory wired into the settings
+    own_attributes = Settings.own_attributes + (
+        "_stability_settings",
+        "_extension_owner",
+    )
 
     c_struct = SolverSettingsC
     init_c_struct = lib.init_solver_settings
@@ -811,7 +968,20 @@ class SolverSettings(Settings):
     def stability_settings(self) -> StabilitySettings:
         return self._stability_settings
 
-    def prepare_call(self, n_param: Optional[int], exception: Dict[str, Exception]):
+    def copy_callbacks(
+        self, settings: Settings, copy_callback: Callable[[Any], Any]
+    ) -> None:
+        """
+        this function sets the callback functions of other settings, those of the
+        nested stability check settings included, to copies of these, made by the
+        given function
+        """
+        super().copy_callbacks(settings, copy_callback)
+        self.stability_settings.copy_callbacks(
+            settings.stability_settings, copy_callback
+        )
+
+    def prepare_call(self, n_param: Optional[int], exception: Dict[str, BaseException]):
         """
         this function hands the callback functions of the settings and of their
         nested stability check settings the number of parameters and the exception
@@ -834,6 +1004,9 @@ class SolverSettings(Settings):
 
 
 class StabilitySettings(Settings):
+
+    # the solver settings the settings are nested in
+    own_attributes = Settings.own_attributes + ("_parent",)
 
     c_struct = StabilitySettingsC
     init_c_struct = lib.init_stability_settings
@@ -913,10 +1086,13 @@ def auto_bind_fields(cls: type[Settings]):
     for field_info in cls.c_struct._fields_:
         field_name, field_type = field_info[:2]
 
-        # skip if function pointer (these will be initialized separately) or nested
-        # structures
-        if field_type is c_void_p or (
-            isinstance(field_type, type) and issubclass(field_type, Structure)
+        # skip if function pointer (these will be initialized separately), nested
+        # structures or the flag of initialized C settings, which Python settings
+        # always are
+        if (
+            field_type is c_void_p
+            or (isinstance(field_type, type) and issubclass(field_type, Structure))
+            or field_name == "initialized"
         ):
             continue
 
@@ -985,6 +1161,24 @@ class State:
         """
         self.state_c = self.c_struct() if state_c is None else state_c
 
+    def __copy__(self) -> State:
+        """
+        this function returns a copy of the state with a C struct of its own, so that
+        a later call writing into the state leaves the copy unchanged
+        """
+        state = type(self)()
+        memmove(
+            addressof(state.state_c), addressof(self.state_c), sizeof(self.c_struct)
+        )
+        return state
+
+    def __deepcopy__(self, memo: dict) -> State:
+        """
+        this function returns a copy of the state with a C struct of its own, a state
+        holds nothing else that could be copied
+        """
+        return self.__copy__()
+
 
 class SolverState(State):
 
@@ -1032,13 +1226,16 @@ bind_state_fields(SolverState)
 bind_state_fields(StabilityState)
 
 
-def raise_on_failure(error: int, exception: Dict[str, Exception], name: str):
+def raise_on_failure(error: int, exception: Dict[str, BaseException], name: str):
     """
     this function raises if a call into the library failed, with the exception raised
     by a failing callback function as its cause, a failed logger cannot affect the
     result and is therefore only reported as a warning, both before an error and
-    instead of one
+    instead of one, while an interruption of a callback function, such as a
+    KeyboardInterrupt, is raised as it is
     """
+    if "exc" in exception and not isinstance(exception["exc"], Exception):
+        raise exception["exc"]
     if "logger" in exception:
         warning = RuntimeWarning(
             f"OpenTrustRegion {name} called a logging function that raised "
@@ -1051,6 +1248,36 @@ def raise_on_failure(error: int, exception: Dict[str, Exception], name: str):
         raise RuntimeError(
             f"OpenTrustRegion {name} produced error (code {error})."
         ) from exception.get("exc")
+
+
+def call_library(function: Callable[..., Any], *args) -> Any:
+    """
+    this function calls into the library and marks it as innermost while it runs, in
+    the main thread it also replaces Python's default handler of SIGINT with
+    defer_interruption meanwhile, and raises an interruption that arrived after the
+    last callback function once the call has returned
+    """
+    outer = interruption_state.stack
+    install = (
+        threading.current_thread() is threading.main_thread()
+        and signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    )
+    try:
+        if install:
+            signal.signal(signal.SIGINT, defer_interruption)
+        interruption_state.stack = outer + (False,)
+        result = function(*args)
+    finally:
+        # restore the handler while the library is still marked as innermost, since
+        # Python handles a pending signal while it switches the handler, which
+        # defer_interruption then records instead of raising it here
+        if install:
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+        interruption_state.stack = outer
+    if interruption_state.pending is not None:
+        pending, interruption_state.pending = interruption_state.pending, None
+        raise pending
+    return result
 
 
 def solver(
@@ -1093,7 +1320,8 @@ def solver(
 
     # call Fortran function
     try:
-        error = lib.solver(
+        error = call_library(
+            lib.solver,
             update_orbs_interface,
             obj_func_interface,
             n_param,
@@ -1115,6 +1343,26 @@ def stability_check(
     state: Optional[StabilityState] = None,
     kappa: Optional[np.ndarray] = None,
 ) -> bool:
+    # convert the Hessian diagonal into a contiguous array of reals, check its shape
+    # and ensure the lowest eigenvector array is writable, contiguous and has the right
+    # type and shape
+    h_diag = np.ascontiguousarray(h_diag, dtype=np.float64)
+    if h_diag.shape != (n_param,):
+        raise ValueError(
+            f"Hessian diagonal has shape {h_diag.shape} instead of ({n_param},)."
+        )
+    if kappa is not None and not (
+        isinstance(kappa, np.ndarray)
+        and kappa.dtype == np.float64
+        and kappa.shape == (n_param,)
+        and kappa.flags.c_contiguous
+        and kappa.flags.writeable
+    ):
+        raise ValueError(
+            "The array for the lowest eigenvector has to be a writeable, contiguous "
+            f"float64 array of shape ({n_param},)."
+        )
+
     # collector for exceptions raised inside the callback interfaces, adopted from a
     # factory-produced callback when there is one so its exceptions are chained too
     exception = adopt_collector(hess_x)
@@ -1145,7 +1393,8 @@ def stability_check(
 
     # call Fortran function
     try:
-        error = lib.stability_check(
+        error = call_library(
+            lib.stability_check,
             h_diag.ctypes.data_as(POINTER(c_real)),
             hess_x_interface,
             n_param,
