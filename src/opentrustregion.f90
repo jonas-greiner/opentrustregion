@@ -468,29 +468,49 @@ contains
             ! a point reached by a step along an unstable mode is not taken as
             ! converged, since this step only sets up the trust-region step that leaves
             ! the stationary point and changes the objective function too little for a
-            ! convergence check of this change
-            if (.not. stable) conv_check_passed = .false.
-            stable = .true.
-            if (conv_check_passed .or. current_state%max_precision_reached) then
-                ! always perform stability check if starting at stationary point or at
-                ! an exactly vanishing gradient and continue along the unstable mode if
-                ! the stationary point is unstable
+            ! convergence check of this change, but if the step has not raised the
+            ! gradient RMS above the convergence threshold, the point still lies next
+            ! to the stationary point, so that the curvature along the step decides
+            ! whether the mode is still unstable, along which the solver then steps
+            ! again without another stability check
+            if (.not. stable) then
+                conv_check_passed = .false.
+                if (grad_rms < local_settings%conv_tol) then
+                    call check_unstable_mode( &
+                        func, grad, grad_rms, obj_func, hess_x_funptr, local_settings, &
+                        current_state, stable, kappa, kappa_norm, error)
+                    call add_error_origin(error, error_solver, local_settings)
+                    if (error /= 0) return
+                else
+                    stable = .true.
+                end if
+            end if
+
+            ! always perform stability check if starting at stationary point or at an
+            ! exactly vanishing gradient
+            if (stable .and. &
+                (conv_check_passed .or. current_state%max_precision_reached)) then
                 if (local_settings%stability .or. imacro == 1 .or. &
                     grad_norm <= 0.0_rp) then
                     call check_stationary_point( &
                         func, grad, grad_rms, h_diag, obj_func, hess_x_funptr, imacro, &
                         local_settings, current_state, stable, kappa, kappa_norm, error)
                     if (error /= 0) return
-                    if (.not. stable .and. .not. current_state%max_precision_reached) &
-                        then
-                        current_state%micro_iteration = 0
-                        current_state%jacobi_davidson_iteration = 0
-                        current_state%relative_residual = 0.0_rp
-                        current_state%level_shift = 0.0_rp
-                        current_state%step_size = kappa_norm
-                        cycle
-                    end if
                 end if
+            end if
+
+            ! continue along an unstable mode, unless no step along it decreases the
+            ! objective function
+            if (.not. stable .and. .not. current_state%max_precision_reached) then
+                current_state%micro_iteration = 0
+                current_state%jacobi_davidson_iteration = 0
+                current_state%relative_residual = 0.0_rp
+                current_state%level_shift = 0.0_rp
+                current_state%step_size = kappa_norm
+                cycle
+            end if
+
+            if (conv_check_passed .or. current_state%max_precision_reached) then
                 ! convergence takes precedence over maximum precision, except at an
                 ! unstable point which no step along its unstable mode could leave
                 if (conv_check_passed .and. stable) &
@@ -738,9 +758,9 @@ contains
 
         ! move far enough along the unstable mode, whose eigenvalue the state of the
         ! stability check holds, so that gradient is increased by one order of
-        ! magnitude, as far as the objective function decreases
-        call saddle_point_step(func, grad, grad_rms, obj_func, settings, state, kappa, &
-                               kappa_norm, error)
+        ! magnitude, as far as the objective function decreases in either direction
+        call saddle_point_step(func, grad, grad_rms, state%stability_state%min_eigval, &
+                               obj_func, settings, state, kappa, kappa_norm, error)
         if (error /= 0) return
 
         ! a point which no step along its unstable mode can leave is not a saddle point
@@ -763,21 +783,73 @@ contains
 
     end subroutine check_stationary_point
 
-    subroutine saddle_point_step(func, grad, grad_rms, obj_func, settings, state, &
-                                 kappa, kappa_norm, error)
+    subroutine check_unstable_mode(func, grad, grad_rms, obj_func, hess_x_funptr, &
+                                   settings, state, stable, kappa, kappa_norm, error)
         !
-        ! this subroutine determines the step along the direction of negative curvature
-        ! of the eigenvalue the state of the stability check holds such that the
-        ! (linearized) gradient RMS increases to one order of magnitude above its
-        ! current value, or above the convergence threshold if the gradient is already
-        ! converged, or, if both vanish, the step to the trust radius, halves it until
-        ! the objective function decreases and, if it has to be halved until the
-        ! objective function can no longer resolve its decrease, returns no step and
-        ! flags maximum precision in the state
+        ! this subroutine determines the curvature along the given step along an
+        ! unstable mode at the point it reached, with the nested settings and, if one
+        ! is provided, the separate Hessian linear transformation the stability check
+        ! uses, and, if the mode is still unstable, returns the step along it from this
+        ! point
+        !
+        real(rp), intent(in) :: func, grad(:), grad_rms
+        procedure(obj_func_type), intent(in), pointer :: obj_func
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
+        type(solver_settings_type), intent(in) :: settings
+        type(solver_state_type), intent(inout), target :: state
+        logical, intent(out) :: stable
+        real(rp), intent(inout) :: kappa(:), kappa_norm
+        integer(ip), intent(out) :: error
+
+        procedure(hess_x_type), pointer :: stability_hess_x_funptr
+        real(rp) :: direction(size(kappa)), hess_direction(size(kappa)), curvature
+        real(rp), external :: ddot
+
+        ! initialize error flag
+        error = 0
+
+        ! use the separate Hessian for the check if one is provided
+        if (associated(settings%stability_hess_x)) then
+            stability_hess_x_funptr => settings%stability_hess_x
+        else
+            stability_hess_x_funptr => hess_x_funptr
+        end if
+
+        ! curvature along the normalized step
+        direction = kappa / kappa_norm
+        call invoke_hess_x(stability_hess_x_funptr, direction, hess_direction, &
+                           settings%stability_settings, state%n_hess_x, error)
+        if (error /= 0) return
+        curvature = ddot(size(kappa, kind=ip), direction, 1_ip, hess_direction, 1_ip)
+
+        ! the mode is stable once its curvature lies above the stability threshold,
+        ! like the lowest eigenvalue in the stability check
+        stable = curvature > settings%stability_settings%stability_thresh
+        if (stable) return
+
+        ! step along the mode from this point
+        kappa = direction
+        call saddle_point_step(func, grad, grad_rms, curvature, obj_func, settings, &
+                               state, kappa, kappa_norm, error)
+
+    end subroutine check_unstable_mode
+
+    subroutine saddle_point_step(func, grad, grad_rms, min_eigval, obj_func, settings, &
+                                 state, kappa, kappa_norm, error)
+        !
+        ! this subroutine determines the step along the direction of negative
+        ! curvature of the given eigenvalue such that the (linearized) gradient RMS
+        ! increases to one order of magnitude above its current value, or above the
+        ! convergence threshold if the gradient is already converged, or, if both
+        ! vanish, the step to the trust radius, halves it until the objective function
+        ! decreases on the side the gradient points away from or on the opposite one
+        ! and, if it has to be halved until the objective function can no longer
+        ! resolve its decrease, returns no step and flags maximum precision in the
+        ! state
         !
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
-        real(rp), intent(in) :: func, grad(:), grad_rms
+        real(rp), intent(in) :: func, grad(:), grad_rms, min_eigval
         procedure(obj_func_type), intent(in), pointer :: obj_func
         type(solver_settings_type), intent(in) :: settings
         type(solver_state_type), intent(inout), target :: state
@@ -786,7 +858,7 @@ contains
         integer(ip), intent(out) :: error
 
         integer(ip) :: n_param
-        real(rp) :: min_eigval, grad_kappa, n_kappa, target_grad_rms, pred_func_diff, &
+        real(rp) :: grad_kappa, n_kappa, target_grad_rms, pred_func_diff, &
                     func_resolution, new_func
         logical :: escaped
         real(rp), external :: ddot, dnrm2
@@ -796,9 +868,6 @@ contains
 
         ! number of parameters
         n_param = size(grad)
-
-        ! eigenvalue of the direction of negative curvature
-        min_eigval = state%stability_state%min_eigval
 
         ! project gradient onto direction of negative curvature
         grad_kappa = ddot(n_param, kappa, 1_ip, grad, 1_ip)
@@ -840,6 +909,22 @@ contains
                                        state%n_obj_func, error)
             if (error /= 0) return
             if (new_func < func) exit
+
+            ! close to a stationary point, the gradient hardly decides on which side of
+            ! it the objective function decreases, since the terms beyond the quadratic
+            ! model can outweigh its linear term, so the opposite side is evaluated as
+            ! well where the quadratic model predicts a resolvable decrease for it
+            if (-n_kappa * grad_kappa + 0.5_rp * min_eigval * n_kappa**2 < &
+                -func_resolution) then
+                new_func = invoke_obj_func(obj_func, -n_kappa * kappa, settings, &
+                                           state%n_obj_func, error)
+                if (error /= 0) return
+                if (new_func < func) then
+                    n_kappa = -n_kappa
+                    exit
+                end if
+            end if
+
             n_kappa = 0.5_rp * n_kappa
             pred_func_diff = n_kappa * grad_kappa + 0.5_rp * min_eigval * n_kappa**2
             escaped = abs(pred_func_diff) > func_resolution

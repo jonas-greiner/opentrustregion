@@ -93,6 +93,7 @@ fortran_tests = {
         "block_davidson",
         "bracket",
         "check_stationary_point",
+        "check_unstable_mode",
         "extend_matrix",
         "find_point_on_boundary",
         "forward_substitution",
