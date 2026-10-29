@@ -1567,6 +1567,30 @@ contains
                 test_obj_func_mo = .false.
             end if
 
+            ! call routine with a step which rotates a pair of orbitals by just more
+            ! than pi / 4, atan(1), and determine if a positive infinite value, which
+            ! rejects the step, is returned without an error and without evaluating the
+            ! energy, and with one just below, which has to be evaluated
+            kappa = 0.0_rp
+            kappa(1) = 1.01_rp * atan(1.0_rp)
+            mock_requests = [integer(ip) :: ]
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
+            if (error /= 0 .or. .not. energy > huge(energy) .or. &
+                size(mock_requests) /= 0) then
+                write(stderr, *) "test_obj_func_mo failed: Step rotating orbitals "// &
+                    "by more than pi / 4 not rejected without evaluation for the "// &
+                    case_name//" case."
+                test_obj_func_mo = .false.
+            end if
+            kappa(1) = 0.99_rp * atan(1.0_rp)
+            energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
+            if (error /= 0 .or. size(mock_requests) /= 1) then
+                write(stderr, *) "test_obj_func_mo failed: Step rotating orbitals "// &
+                    "by just less than pi / 4 not evaluated for the "//case_name// &
+                    " case."
+                test_obj_func_mo = .false.
+            end if
+
             ! call routine with a rotation that is not finite, which the matrix
             ! exponential refuses, and determine if its error is returned with the
             ! origin of the object

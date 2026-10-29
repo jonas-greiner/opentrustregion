@@ -10,7 +10,8 @@ module otr_density_qn
                                     hess_x_type, solver_settings_type, &
                                     solver_state_type, add_error_origin
     use otr_common, only: orbital_settings_type, orbital_basis_type, extension_type, &
-                          extension_solver_settings_type, channel_rows
+                          extension_solver_settings_type, channel_rows, &
+                          max_orbital_rotation
     use otr_oao, only: oao_type
     use otr_mo, only: mo_channel_type, mo_type
 
@@ -534,7 +535,8 @@ contains
         ! point with its Coulomb, exact-exchange and non-linear potentials to the
         ! history, unless it is already there or its energy is not finite
         !
-        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, &
+                                                 ieee_positive_inf
 
         class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
@@ -547,8 +549,16 @@ contains
                                  v_coulomb_ao(:, :, :), v_exchange_ao(:, :, :), &
                                  v_nonlinear_ao(:, :, :)
 
-        ! initialize energy in case of error
+        ! initialize error flag and energy in case of error
+        error = 0
         energy = 0.0_rp
+
+        ! a step which rotates a pair of orbitals by more than pi / 4 is rejected by an
+        ! infinite energy without evaluating it
+        if (any(abs(kappa) > max_orbital_rotation)) then
+            energy = ieee_value(energy, ieee_positive_inf)
+            return
+        end if
 
         ! number of AOs and number of particles
         n_ao = self%orbitals%n_ao

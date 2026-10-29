@@ -9,10 +9,11 @@ module otr_mo
     use opentrustregion_core, only: rp, ip, settings_type, obj_func_type, &
                                     update_orbs_type, hess_x_type, solver_state_type, &
                                     add_error_origin
-    use otr_common, only: &
-        orbital_settings_type, orbital_basis_type, channel_rows, evaluate_dm_cs_type, &
-        evaluate_dm_os_type, extension_solver_settings_type, invoke_evaluate_dm_cs, &
-        invoke_evaluate_dm_os, invoke_get_response_cs, invoke_get_response_os
+    use otr_common, only: orbital_settings_type, orbital_basis_type, channel_rows, &
+                          evaluate_dm_cs_type, evaluate_dm_os_type, &
+                          extension_solver_settings_type, invoke_evaluate_dm_cs, &
+                          invoke_evaluate_dm_os, invoke_get_response_cs, &
+                          invoke_get_response_os, max_orbital_rotation
 
     implicit none
 
@@ -392,6 +393,8 @@ contains
         !
         ! this function defines the energy evaluation in the MO basis
         !
+        use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
+
         class(mo_type), intent(inout) :: self
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -406,6 +409,13 @@ contains
         ! the energy needs the density matrix evaluating function
         call self%check_evaluate_dm(error)
         if (error /= 0) return
+
+        ! a step which rotates a pair of orbitals by more than pi / 4 is rejected by an
+        ! infinite energy without evaluating it
+        if (any(abs(kappa) > max_orbital_rotation)) then
+            energy = ieee_value(energy, ieee_positive_inf)
+            return
+        end if
 
         ! get rotated density matrix in AO basis without moving the current orbitals
         allocate(rot_mo_coeff, mold=self%mo_coeff)

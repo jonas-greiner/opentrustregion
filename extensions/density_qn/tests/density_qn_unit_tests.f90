@@ -2096,6 +2096,29 @@ contains
                 passed = .false.
             end if
 
+            ! call routine with a step which rotates a pair of orbitals by just more
+            ! than pi / 4 and determine if a positive infinite value, which rejects the
+            ! is returned without an error, without evaluating the step, energy and
+            ! without adding the point to the history, and with one just below, which
+            ! has to be evaluated
+            kappa = 0.0_rp
+            kappa(1) = 1.01_rp * atan(1.0_rp)
+            mock_requests = [integer(ip) :: ]
+            energy = density_qn%obj_func(kappa, error, level_context(density_qn, 1_ip))
+            if (error /= 0 .or. .not. energy > huge(energy) .or. &
+                size(mock_requests) /= 0 .or. size(density_qn%dm_list, 4) /= 1) then
+                write(stderr, *) test_name//" failed: Step rotating orbitals by "// &
+                    "more than pi / 4 not rejected without evaluation."
+                passed = .false.
+            end if
+            kappa(1) = 0.99_rp * atan(1.0_rp)
+            energy = density_qn%obj_func(kappa, error, level_context(density_qn, 1_ip))
+            if (error /= 0 .or. size(mock_requests) /= 1) then
+                write(stderr, *) test_name//" failed: Step rotating orbitals by "// &
+                    "just less than pi / 4 not evaluated."
+                passed = .false.
+            end if
+
             ! check that the host context reached the callback functions unchanged
             if (.not. host_context_reached("obj_func_density_qn", context)) &
                 passed = .false.

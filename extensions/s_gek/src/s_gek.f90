@@ -6,7 +6,7 @@
 
 module otr_s_gek
 
-    use opentrustregion_core, only: rp, ip, pi, settings_type, update_orbs_type, &
+    use opentrustregion_core, only: rp, ip, settings_type, update_orbs_type, &
                                     hess_x_type, add_error_origin
     use otr_common, only: extension_type, provided_roles_type
 
@@ -66,6 +66,9 @@ module otr_s_gek
         procedure :: predict_hess
         procedure :: bfgs_inv_hess_x
     end type
+
+    ! mathematical constants
+    real(rp), parameter :: pi = 4.0_rp * atan(1.0_rp)
 
     ! bias
     real(rp), parameter :: bias = 10.0_rp

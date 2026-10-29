@@ -96,6 +96,10 @@ module otr_common
         procedure :: wire => wire_extension_solver_settings
     end type
 
+    ! largest rotation of a pair of orbitals, pi / 4, that a step of an orbital basis
+    ! or density QN object may contain
+    real(rp), parameter :: max_orbital_rotation = atan(1.0_rp)
+
     ! warning for orbital bases set up without a density matrix evaluating function
     character(len=*), parameter :: evaluate_dm_missing_warning_msg = &
         "No density matrix evaluating function was given, so the orbital updating "// &
