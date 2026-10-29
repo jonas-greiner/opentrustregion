@@ -126,10 +126,16 @@ module opentrustregion_unit_tests
     ! define type for the host context of the Hartmann 6D function which counts the
     ! calls of every callback function, lets the call fault_call of the callback
     ! function fault_callback fail with a fault of kind fault_kind and records the
-    ! number of calls of all callback functions up to the failing one
+    ! number of calls of all callback functions up to the failing one, and which
+    ! points at the state of the solver and keeps the length of the first step the
+    ! objective function evaluated and whether it raised a trust-region step, with
+    ! which the objective function decides which steps it rejects
     type, extends(hartmann6d_context_type) :: hartmann6d_fault_context_type
         integer(ip) :: fault_callback = 0, fault_call = 0, fault_kind = error_fault, &
                        n_callback_calls(n_fault_callbacks) = 0, n_calls_at_fault = 0
+        type(solver_state_type), pointer :: solver_state => null()
+        real(rp) :: first_step_norm = -1.0_rp
+        logical :: step_rejected = .false.
     end type
 
     ! define type for the host context handed to the mock callback functions of a
@@ -1126,6 +1132,48 @@ contains
 
     end function first_step_rejecting_obj_func
 
+    function escape_and_step_rejecting_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes the objective function evaluation of the Hartmann 6D
+        ! function into which a fault can be injected and which raises its value by
+        ! more than the range of the function at the steps from the point of the first
+        ! orbital update which are longer than a tenth of the first of them, so that
+        ! the step along an unstable mode from there is halved until it no longer
+        ! raises the gradient above the convergence threshold, and at the first step
+        ! of a trust-region subproblem, so that this step is rejected
+        !
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        class(hartmann6d_fault_context_type), pointer :: fault_context
+
+        ! evaluate objective function and inject fault
+        func = faulty_obj_func(delta_vars, error, context)
+        if (error /= 0) return
+
+        ! raise the value of the longer steps from the point of the first orbital
+        ! update and of the first step of a trust-region subproblem, which the solver
+        ! evaluates after micro iterations
+        select type (context)
+        class is (hartmann6d_fault_context_type)
+            fault_context => context
+            if (fault_context%n_update_orbs_calls == 1) then
+                if (fault_context%first_step_norm < 0.0_rp) &
+                    fault_context%first_step_norm = norm2(delta_vars)
+                if (norm2(delta_vars) > 0.1_rp * fault_context%first_step_norm) &
+                    func = func + 10.0_rp
+            else if (.not. fault_context%step_rejected .and. &
+                     fault_context%solver_state%micro_iteration + &
+                     fault_context%solver_state%jacobi_davidson_iteration > 0) then
+                fault_context%step_rejected = .true.
+                func = func + 10.0_rp
+            end if
+        end select
+
+    end function escape_and_step_rejecting_obj_func
+
     subroutine faulty_precond(residual, mu, precond_residual, error, context)
         !
         ! this subroutine describes the identity preconditioner into which a fault can
@@ -1509,6 +1557,32 @@ contains
         func = double_well_func(state%vars + delta_vars)
 
     end function double_well_obj_func
+
+    function escape_rejecting_obj_func(delta_vars, error, context) result(func)
+        !
+        ! this function describes the objective function evaluation for the double
+        ! well function which raises the value of its first eight evaluations, which,
+        ! from the saddle point at the origin, where the gradient vanishes, so that
+        ! both sides of the step along the unstable mode are evaluated at every
+        ! length, are those of this step at its full length and its first three
+        ! halvings
+        !
+        real(rp), intent(in), target :: delta_vars(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        ! evaluate objective function
+        func = double_well_obj_func(delta_vars, error, context)
+        if (error /= 0) return
+
+        ! raise the value of the first eight evaluations
+        select type (context)
+        class is (double_well_context_type)
+            if (context%n_obj_func_calls <= 8) func = func + 1.0_rp
+        end select
+
+    end function escape_rejecting_obj_func
 
     function double_well_conv_check(error, context) result(converged)
         !
@@ -2199,7 +2273,7 @@ contains
             default_settings => default_solver_settings, error_solver_max_iter, &
             error_update_orbs, error_conv_check, error_obj_func, error_hess_x, &
             error_solver, error_precond, error_project, error_get_extra_trial_vectors, &
-            subsystem_solver_options, error_stability_check
+            subsystem_solver_options, error_stability_check, unstable_warning_msg
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error, i_solver, i_case, callback, i_call, &
@@ -2224,7 +2298,7 @@ contains
         type(double_well_state_context_type), target :: state_context
         type(solver_state_type), target :: state
         type(solver_state_type) :: explicit_state
-        integer(ip) :: n_updates, i_update
+        integer(ip) :: n_updates, i_update, i_unstable
         real(rp), allocatable :: step_norms(:)
         character(len=60) :: case_name
 
@@ -2859,6 +2933,46 @@ contains
             end if
         end do
 
+        ! start at the saddle point of the double well function at the origin, where
+        ! the gradient vanishes exactly, with an objective function which rejects the
+        ! step along the unstable mode at its full length and its first three
+        ! halvings, so that the gradient at the point this step reaches stays below
+        ! the convergence threshold, and with a trust radius so small that a
+        ! trust-region step from there converges next to the saddle point again, and
+        ! check that the solver, after determining the curvature along the step there,
+        ! steps along the unstable mode again without another stability check, which
+        ! would find the unstable mode again, and stops at a minimum
+        call setup_settings(settings, double_well_context)
+        settings%stability = .true.
+        settings%start_trust_radius = 1e-6_rp
+        double_well_context%vars = [0.0_rp, 0.0_rp]
+        double_well_context%n_obj_func_calls = 0
+        update_orbs_funptr => double_well_update_orbs
+        obj_func_funptr => escape_rejecting_obj_func
+        call solver(update_orbs_funptr, obj_func_funptr, 2_ip, error, settings, state)
+        if (error /= 0) then
+            write(stderr, *) "test_solver failed: Produced error after a step "// &
+                "along the unstable mode which leaves the gradient converged."
+            test_solver = .false.
+        end if
+        if (.not. is_close(abs(double_well_context%vars(2)), 1.0_rp / sqrt(2.0_rp), &
+                           var_thres)) then
+            write(stderr, *) "test_solver failed: Did not reach a minimum after a "// &
+                "step along the unstable mode which leaves the gradient converged."
+            test_solver = .false.
+        end if
+        i_unstable = index(double_well_context%log_message, unstable_warning_msg)
+        if (i_unstable == 0) then
+            write(stderr, *) "test_solver failed: Saddle point of the double well "// &
+                "function not found to be unstable."
+            test_solver = .false.
+        else if (index(double_well_context%log_message(i_unstable + 1:), &
+                       unstable_warning_msg) /= 0) then
+            write(stderr, *) "test_solver failed: Stability checked again after a "// &
+                "step along the unstable mode which leaves the gradient converged."
+            test_solver = .false.
+        end if
+
         ! start at the minimum of the quadratic model 1/2 |x|^2 at the origin, where
         ! the gradient vanishes exactly, with a vanishing convergence threshold, which
         ! the gradient can therefore not pass, and check that the solver stops there
@@ -2909,19 +3023,22 @@ contains
         end if
 
         ! inject faults by running the solver from the saddle point, where it performs
-        ! the internal stability check, with a rejected first trust-region step, a
-        ! stability check at convergence, a line search and every optional callback
-        ! function, also of the nested settings, once without a fault to count the
-        ! calls of every callback function and then letting every one of these calls
-        ! fail in turn, by returning an error and, where the callback function returns
-        ! values, a value that is not a number, for every subsystem solver without and
-        ! with a perturbed gradient, whose perturbation is projected, and check that
-        ! the unfaulted run reaches every callback function, that an error is reported
-        ! with the origin of the failing callback function, a value that is not a
-        ! number as an error of the solver or of its internal stability check, which a
-        ! mock can not tell apart, unless it is an objective function value, which
-        ! only rejects the step, that no callback function is called after the failing
-        ! call and that the reported counters still agree with the calls
+        ! the internal stability check, with a step along the unstable mode which has
+        ! to be halved until it no longer raises the gradient above the convergence
+        ! threshold, so that the solver checks the curvature along it and steps along
+        ! it again, a rejected first trust-region step, a stability check at
+        ! convergence, a line search and every optional callback function, also of the
+        ! nested settings, once without a fault to count the calls of every callback
+        ! function and then letting every one of these calls fail in turn, by returning
+        ! an error and, where the callback function returns values, a value that is not
+        ! a number, for every subsystem solver without and with a perturbed gradient,
+        ! whose perturbation is projected, and check that the unfaulted run reaches
+        ! every callback function, that an error is reported with the origin of the
+        ! failing callback function, a value that is not a number as an error of the
+        ! solver or of its internal stability check, which a mock can not tell apart,
+        ! unless it is an objective function value, which only rejects the step, that
+        ! no callback function is called after the failing call and that the reported
+        ! counters still agree with the calls
         do i_solver = 1, size(subsystem_solver_options)
             do i_case = 1, 2
                 grad_noise = i_case == 2
@@ -3016,6 +3133,9 @@ contains
             fault_context%fault_kind = kind
             fault_context%n_calls_at_fault = 0
             fault_context%stability_state => state%stability_state
+            fault_context%solver_state => state
+            fault_context%first_step_norm = -1.0_rp
+            fault_context%step_rejected = .false.
 
             ! set up settings with every optional callback function, also of the nested
             ! settings
@@ -3036,7 +3156,7 @@ contains
 
             ! run solver
             faulty_update_orbs_funptr => faulty_update_orbs
-            faulty_obj_func_funptr => first_step_rejecting_obj_func
+            faulty_obj_func_funptr => escape_and_step_rejecting_obj_func
             call solver(faulty_update_orbs_funptr, faulty_obj_func_funptr, n_param, &
                         error, settings, state)
 
@@ -3797,6 +3917,130 @@ contains
 
     end function test_check_stationary_point
 
+    logical(c_bool) function test_check_unstable_mode() bind(C)
+        !
+        ! this function tests the subroutine which checks the curvature along a step
+        ! along an unstable mode at the point it reached and, if the mode is still
+        ! unstable, determines the step along it from there
+        !
+        use opentrustregion_core, only: solver_settings_type, obj_func_type, &
+                                        hess_x_type, check_unstable_mode, error_hess_x
+
+        type(solver_settings_type) :: settings
+        type(solver_state_type) :: state
+        type(quadratic_context_type), target :: context, stability_context
+        type(hartmann6d_fault_context_type), target :: fault_context
+        procedure(obj_func_type), pointer :: obj_func_funptr
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        real(rp) :: direction(n_param), hess(n_param, n_param), grad(n_param), &
+                    kappa(n_param), kappa_norm, grad_rms
+        logical :: stable
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_check_unstable_mode = .true.
+
+        ! set up a quadratic model with a converged gradient whose Hessian has the
+        ! curvature -0.5 along a random direction, for the solver settings and for the
+        ! nested settings, which hold a context of their own
+        call setup_settings(settings, context)
+        call random_number(direction)
+        direction = direction / norm2(direction)
+        hess = generate_random_symm_matrix(n_param)
+        hess = hess - (dot_product(direction, matmul(hess, direction)) + 0.5_rp) * &
+               identity_matrix(n_param)
+        call random_number(grad)
+        grad = 0.5_rp * settings%conv_tol * grad
+        grad_rms = norm2(grad) / sqrt(real(n_param, kind=rp))
+        context%grad = grad
+        context%hess = hess
+        stability_context%grad = grad
+        stability_context%hess = hess
+        settings%stability_settings%context => stability_context
+        obj_func_funptr => quadratic_obj_func
+        hess_x_funptr => quadratic_hess_x
+
+        ! check the curvature along a step of three times the unit length along this
+        ! direction and check that the Hessian linear transformation is called once
+        ! with the context of the nested settings and counted by the state, that the
+        ! mode is found unstable and that the step along it is returned with its norm
+        ! and the length the gradient and the curvature along the normalized step set,
+        ! which the objective function, which decreases there, accepts
+        kappa = 3.0_rp * direction
+        kappa_norm = 3.0_rp
+        state%n_hess_x = 5
+        stability_context%n_calls = 0
+        call check_unstable_mode(0.0_rp, grad, grad_rms, obj_func_funptr, &
+                                 hess_x_funptr, settings, state, stable, kappa, &
+                                 kappa_norm, error)
+        if (error /= 0) then
+            write(stderr, *) "test_check_unstable_mode failed: Produced error for "// &
+                "an unstable mode."
+            test_check_unstable_mode = .false.
+        end if
+        if (stability_context%n_calls /= 1 .or. state%n_hess_x /= 6) then
+            write(stderr, *) "test_check_unstable_mode failed: Hessian linear "// &
+                "transformation not called once with the context of the nested "// &
+                "settings and counted."
+            test_check_unstable_mode = .false.
+        end if
+        if (stable) then
+            write(stderr, *) "test_check_unstable_mode failed: Unstable mode not "// &
+                "found to be unstable."
+            test_check_unstable_mode = .false.
+        end if
+        if (.not. all(is_close(kappa, dot_product(kappa, direction) * direction)) .or. &
+            .not. is_close(kappa_norm, norm2(kappa))) then
+            write(stderr, *) "test_check_unstable_mode failed: Step not returned "// &
+                "with its norm along the unstable mode."
+            test_check_unstable_mode = .false.
+        end if
+        if (.not. is_close( &
+            norm2(grad - 0.5_rp * kappa) / sqrt(real(n_param, kind=rp)), &
+            10.0_rp * settings%conv_tol)) then
+            write(stderr, *) "test_check_unstable_mode failed: Step along the "// &
+                "unstable mode does not raise the linearized gradient RMS to ten "// &
+                "times the convergence threshold with the curvature along it."
+            test_check_unstable_mode = .false.
+        end if
+
+        ! with a stability threshold of the nested settings below this curvature, the
+        ! mode has to be found stable, without a step and without evaluating the
+        ! objective function
+        settings%stability_settings%stability_thresh = -1.0_rp
+        kappa = 3.0_rp * direction
+        kappa_norm = 3.0_rp
+        state%n_obj_func = 0
+        call check_unstable_mode(0.0_rp, grad, grad_rms, obj_func_funptr, &
+                                 hess_x_funptr, settings, state, stable, kappa, &
+                                 kappa_norm, error)
+        if (error /= 0 .or. .not. stable .or. &
+            .not. all(is_close(kappa, 3.0_rp * direction, 0.0_rp)) .or. &
+            state%n_obj_func /= 0) then
+            write(stderr, *) "test_check_unstable_mode failed: Mode with a "// &
+                "curvature above the stability threshold not found to be stable "// &
+                "without a step."
+            test_check_unstable_mode = .false.
+        end if
+
+        ! let the Hessian linear transformation fail and check that its error is
+        ! reported with its origin
+        fault_context%hess = hess
+        fault_context%fault_callback = fault_hess_x
+        fault_context%fault_call = 1
+        settings%stability_settings%context => fault_context
+        hess_x_funptr => faulty_hess_x
+        call check_unstable_mode(0.0_rp, grad, grad_rms, obj_func_funptr, &
+                                 hess_x_funptr, settings, state, stable, kappa, &
+                                 kappa_norm, error)
+        if (error /= error_hess_x + 1) then
+            write(stderr, *) "test_check_unstable_mode failed: Did not report the "// &
+                "error of the Hessian linear transformation with its origin."
+            test_check_unstable_mode = .false.
+        end if
+
+    end function test_check_unstable_mode
+
     logical(c_bool) function test_saddle_point_step() bind(C)
         !
         ! this function tests the saddle-point step subroutine
@@ -3814,11 +4058,13 @@ contains
             "positive overlap", "above the convergence threshold with negative overlap"]
         real(rp) :: grad_dir(n_param), kappa_dir(n_param), unstable_dir(n_param), &
                     grad(n_param), kappa(n_param), kappa_norm, grad_rms, &
-                    target_grad_rms, predicted_grad_rms, target_kappa(n_param)
-        integer(ip) :: i, error
+                    target_grad_rms, predicted_grad_rms, target_kappa(n_param), &
+                    min_eigval
+        integer(ip) :: i, error, n_two_sided
         type(solver_settings_type) :: settings
         type(solver_state_type) :: state
         type(bracket_context_type), target :: context
+        type(quadratic_context_type), target :: quadratic_context
         procedure(obj_func_type), pointer :: obj_func_funptr
 
         ! assume tests pass
@@ -3831,7 +4077,7 @@ contains
         ! the length of every step of the following cases
         call setup_settings(settings, context)
         settings%conv_tol = 1e-6_rp
-        state%stability_state%min_eigval = -0.5_rp
+        min_eigval = -0.5_rp
         call random_number(state%trust_radius)
         state%trust_radius = state%trust_radius + 0.1_rp
         obj_func_funptr => step_length_obj_func
@@ -3873,8 +4119,9 @@ contains
             kappa = unstable_dir
             state%n_obj_func = 0
             state%max_precision_reached = .true.
-            call saddle_point_step(10.0_rp, grad, grad_rms, obj_func_funptr, settings, &
-                                   state, kappa, kappa_norm, error)
+            call saddle_point_step(10.0_rp, grad, grad_rms, min_eigval, &
+                                   obj_func_funptr, settings, state, kappa, &
+                                   kappa_norm, error)
             if (error /= 0) then
                 write(stderr, *) "test_saddle_point_step failed: Produced error "// &
                     trim(case_names(i))//"."
@@ -3889,8 +4136,8 @@ contains
 
             ! the linearized gradient after taking the step should have exactly the
             ! targeted gradient RMS
-            predicted_grad_rms = norm2(grad + state%stability_state%min_eigval * &
-                                       kappa) / sqrt(real(n_param, kind=rp))
+            predicted_grad_rms = norm2(grad + min_eigval * kappa) / &
+                                 sqrt(real(n_param, kind=rp))
             if (.not. is_close(predicted_grad_rms, target_grad_rms)) then
                 write(stderr, *) "test_saddle_point_step failed: Step does not "// &
                     "reach targeted gradient RMS "//trim(case_names(i))//"."
@@ -3909,34 +4156,71 @@ contains
         end do
         target_kappa = kappa
 
-        ! with a current value of the objective function between its values at the
-        ! halved and at the full step of the last case, the step has to be halved once
+        ! the quadratic model predicts a decrease for the side the gradient points
+        ! towards only while the step is longer than twice the overlap of the gradient
+        ! with the direction over the absolute eigenvalue, so with a current value of
+        ! the objective function between its values, on either side, at the first
+        ! halved step of the last case shorter than this and at half of it, the step
+        ! has to be evaluated on both sides at every longer step, only on the side the
+        ! gradient points away from at the first shorter one and taken at half of it
+        n_two_sided = ceiling( &
+            log(norm2(target_kappa) * abs(min_eigval) / &
+                (2.0_rp * abs(dot_product(grad, unstable_dir)))) / log(2.0_rp), kind=ip)
         kappa = unstable_dir
         state%n_obj_func = 0
-        call saddle_point_step(0.75_rp * norm2(target_kappa), grad, grad_rms, &
-                               obj_func_funptr, settings, state, kappa, kappa_norm, &
-                               error)
-        if (.not. all(is_close(kappa, 0.5_rp * target_kappa)) .or. &
-            state%n_obj_func /= 2) then
-            write(stderr, *) "test_saddle_point_step failed: Step not halved once "// &
-                "where the objective function only decreases at half its length."
+        call saddle_point_step(0.75_rp * norm2(target_kappa) / 2.0_rp**n_two_sided, &
+                               grad, grad_rms, min_eigval, obj_func_funptr, settings, &
+                               state, kappa, kappa_norm, error)
+        if (.not. all(is_close(kappa, target_kappa / 2.0_rp**(n_two_sided + 1))) .or. &
+            state%n_obj_func /= 2 * n_two_sided + 2) then
+            write(stderr, *) "test_saddle_point_step failed: Step not evaluated on "// &
+                "the side the gradient points towards exactly where a decrease is "// &
+                "predicted for it, or not halved until the objective function "// &
+                "decreases."
             test_saddle_point_step = .false.
         end if
 
+        ! with an objective function which increases along the step of the last case,
+        ! as the terms beyond the quadratic model can let it do close to a stationary
+        ! point, and decreases along the opposite step, the opposite step has to be
+        ! evaluated next and taken
+        quadratic_context%grad = target_kappa
+        allocate(quadratic_context%hess(n_param, n_param), source=0.0_rp)
+        settings%context => quadratic_context
+        obj_func_funptr => quadratic_obj_func
+        kappa = unstable_dir
+        state%n_obj_func = 0
+        state%max_precision_reached = .true.
+        call saddle_point_step(0.0_rp, grad, grad_rms, min_eigval, obj_func_funptr, &
+                               settings, state, kappa, kappa_norm, error)
+        if (error /= 0 .or. .not. all(is_close(kappa, -target_kappa)) .or. &
+            .not. is_close(kappa_norm, norm2(target_kappa)) .or. &
+            state%n_obj_func /= 2 .or. state%max_precision_reached) then
+            write(stderr, *) "test_saddle_point_step failed: Opposite step not "// &
+                "evaluated and taken where the objective function only decreases "// &
+                "along it."
+            test_saddle_point_step = .false.
+        end if
+        settings%context => context
+        obj_func_funptr => step_length_obj_func
+
         ! with an objective function which keeps its current value at every step, which
-        ! is no decrease, the step has to be halved until the objective function can no
-        ! longer resolve the predicted decrease, which at least halves with the step
-        ! and which the resolution, measured against at least the decrease predicted
-        ! for the full step, therefore stops within fewer halvings than the floating
-        ! point precision has digits, and no step has to be taken, maximum precision
-        ! has to be reached and a warning printed
+        ! is no decrease on either side, the step has to be halved until the objective
+        ! function can no longer resolve the predicted decrease, which at least halves
+        ! with the step and which the resolution, measured against at least the
+        ! decrease predicted for the full step, therefore stops within fewer halvings
+        ! than the floating point precision has digits, while the opposite side may
+        ! only be evaluated at the first few lengths, before the gradient this case
+        ! overlaps with makes the quadratic model predict no decrease for it, and no
+        ! step has to be taken, maximum precision has to be reached and a warning
+        ! printed
         kappa = unstable_dir
         state%n_obj_func = 0
         state%max_precision_reached = .false.
         context%log_message = ""
         obj_func_funptr => constant_obj_func
-        call saddle_point_step(1.0_rp, grad, grad_rms, obj_func_funptr, settings, &
-                               state, kappa, kappa_norm, error)
+        call saddle_point_step(1.0_rp, grad, grad_rms, min_eigval, obj_func_funptr, &
+                               settings, state, kappa, kappa_norm, error)
         if (.not. all(is_at_most(abs(kappa), 0.0_rp)) .or. &
             .not. is_at_most(kappa_norm, 0.0_rp)) then
             write(stderr, *) "test_saddle_point_step failed: Step taken where the "// &
@@ -3967,8 +4251,8 @@ contains
         kappa = unstable_dir
         state%n_obj_func = 0
         state%max_precision_reached = .true.
-        call saddle_point_step(1e20_rp, grad, grad_rms, obj_func_funptr, settings, &
-                               state, kappa, kappa_norm, error)
+        call saddle_point_step(1e20_rp, grad, grad_rms, min_eigval, obj_func_funptr, &
+                               settings, state, kappa, kappa_norm, error)
         if (.not. all(is_close(kappa, target_kappa)) .or. state%n_obj_func /= 0 .or. &
             state%max_precision_reached) then
             write(stderr, *) "test_saddle_point_step failed: Step not taken "// &
@@ -3980,18 +4264,18 @@ contains
         ! with an eigenvalue so close to zero that the predicted decrease of the step
         ! overflows, although its length does not, no step has to be taken and maximum
         ! precision has to be reached without evaluating the objective function
-        state%stability_state%min_eigval = -1e-200_rp
+        min_eigval = -1e-200_rp
         kappa = unstable_dir
         state%max_precision_reached = .false.
-        call saddle_point_step(10.0_rp, grad, grad_rms, obj_func_funptr, settings, &
-                               state, kappa, kappa_norm, error)
+        call saddle_point_step(10.0_rp, grad, grad_rms, min_eigval, obj_func_funptr, &
+                               settings, state, kappa, kappa_norm, error)
         if (.not. all(is_at_most(abs(kappa), 0.0_rp)) .or. state%n_obj_func /= 0 .or. &
             .not. state%max_precision_reached) then
             write(stderr, *) "test_saddle_point_step failed: Step not rejected "// &
                 "without evaluation where its predicted decrease overflows."
             test_saddle_point_step = .false.
         end if
-        state%stability_state%min_eigval = -0.5_rp
+        min_eigval = -0.5_rp
 
         ! let the objective function fail with a value which does not decrease, so
         ! that the failure has to stop the halving, and check that its error is
@@ -4000,8 +4284,8 @@ contains
         context%fail_call = 1
         obj_func_funptr => bracket_obj_func
         kappa = unstable_dir
-        call saddle_point_step(0.0_rp, grad, grad_rms, obj_func_funptr, settings, &
-                               state, kappa, kappa_norm, error)
+        call saddle_point_step(0.0_rp, grad, grad_rms, min_eigval, obj_func_funptr, &
+                               settings, state, kappa, kappa_norm, error)
         if (error /= error_obj_func + 1) then
             write(stderr, *) "test_saddle_point_step failed: Did not report the "// &
                 "error of the objective function with its origin."
@@ -4015,8 +4299,8 @@ contains
         grad = 0.0_rp
         kappa = kappa_dir
         obj_func_funptr => step_length_obj_func
-        call saddle_point_step(10.0_rp, grad, 0.0_rp, obj_func_funptr, settings, &
-                               state, kappa, kappa_norm, error)
+        call saddle_point_step(10.0_rp, grad, 0.0_rp, min_eigval, obj_func_funptr, &
+                               settings, state, kappa, kappa_norm, error)
         if (.not. is_at_most(norm2(kappa - state%trust_radius * kappa_dir), tol) .or. &
             .not. is_close(kappa_norm, state%trust_radius)) then
             write(stderr, *) "test_saddle_point_step failed: Step does not reach "// &

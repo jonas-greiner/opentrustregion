@@ -85,6 +85,7 @@ fortran_tests = {
         "block_davidson",
         "bracket",
         "check_stationary_point",
+        "check_unstable_mode",
         "extend_matrix",
         "general_mat_diag",
         "generate_random_trial_vectors",
