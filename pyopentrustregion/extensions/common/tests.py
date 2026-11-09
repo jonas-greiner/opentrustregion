@@ -1125,10 +1125,18 @@ class CommonPyInterfaceTests(unittest.TestCase):
         first = ExtensionOwner(extensions[0], solver_settings, {"kept": kept})
         second = ExtensionOwner(extensions[1], solver_settings, {})
 
-        # the settings keep the latest owner alive, which keeps the earlier one alive,
-        # which keeps what it was given alive
+        # the settings and their nested settings keep the latest owner alive, which
+        # keeps the earlier one alive, which keeps what it was given alive and the C
+        # callback functions of the settings and their nested settings
+        settings_callbacks = first.saved_objects.get("settings_callbacks", ())
         if (
-            getattr(solver_settings, "_extension_owner", None) is not second
+            len(settings_callbacks) != 2
+            or settings_callbacks[0] is not solver_settings._callbacks
+            or settings_callbacks[1]
+            is not solver_settings.stability_settings._callbacks
+            or getattr(solver_settings, "_extension_owner", None) is not second
+            or getattr(solver_settings.stability_settings, "_extension_owner", None)
+            is not second
             or second.saved_objects.get("wired_before") is not first
             or first.saved_objects.get("wired_before") is not None
             or first.saved_objects.get("kept") is not kept

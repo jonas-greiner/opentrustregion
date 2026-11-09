@@ -2185,16 +2185,20 @@ class PyInterfaceUnitTests(unittest.TestCase):
             )
             test_passed = False
 
-        # the nested stability check settings keep the settings alive, which own the
-        # extension objects wired into both, once nothing else refers to them
+        # the nested stability check settings do not keep the settings alive, which
+        # are freed without the garbage collector once nothing else refers to them
         stability_settings = settings.stability_settings
         settings_ref = weakref.ref(settings)
-        del settings, func, cases
-        gc.collect()
-        if settings_ref() is None:
+        gc.disable()
+        try:
+            del settings, func, cases
+            settings_freed = settings_ref() is None
+        finally:
+            gc.enable()
+        if not settings_freed:
             print(
-                " test_solver_settings failed: Nested stability check settings do not "
-                "keep the settings alive."
+                " test_solver_settings failed: Settings kept alive once only their "
+                "nested stability check settings refer to them."
             )
             test_passed = False
 

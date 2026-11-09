@@ -200,12 +200,15 @@ def release_extension(extension: Optional[int]) -> None:
 class ExtensionOwner:
     """
     this class owns the extension object a factory created for a Python host and the
-    solver settings it wired, which keep their latest owner alive in place of the owner
-    of the object they were wired with before, which the new owner keeps alive, so that
-    the functions the factory returned only have to keep the solver settings alive; it
-    releases the object once nothing keeps it alive any longer and keeps alive what the
-    object calls: the callback interfaces of the factory call, the settings of the
-    extension and the record of the solver state
+    solver settings it wired, which, like their nested stability check settings, keep
+    their latest owner alive in place of the owner of the object they were wired with
+    before, which the new owner keeps alive, so that the functions the factory returned
+    only have to keep the solver settings alive; it releases the object once nothing
+    keeps it alive any longer and keeps alive what the object calls: the callback
+    interfaces of the factory call, the C callback functions of the solver settings and
+    their nested settings, which the object took from them and may call once only the
+    nested settings keep it alive, the settings of the extension and the record of the
+    solver state
     """
 
     def __init__(
@@ -217,10 +220,15 @@ class ExtensionOwner:
         self.extension = extension
         self.saved_objects = {
             **saved_objects,
+            "settings_callbacks": (
+                solver_settings._callbacks,
+                solver_settings.stability_settings._callbacks,
+            ),
             "wired_before": getattr(solver_settings, "_extension_owner", None),
         }
         self.release = weakref.finalize(self, release_extension, extension)
         solver_settings._extension_owner = self
+        solver_settings.stability_settings._extension_owner = self
 
 
 class OrbitalOwner(ExtensionOwner):

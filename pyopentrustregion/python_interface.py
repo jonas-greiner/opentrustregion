@@ -965,15 +965,9 @@ class SolverSettings(Settings):
 
     def __init__(self):
         super().__init__()
-
-        # the nested stability check settings keep these settings alive, which own the
-        # extension objects wired into both and the callback functions the nested
-        # settings inherit, so that the nested settings and the callables read from
-        # them stay valid once nothing else refers to these settings
         self._stability_settings = StabilitySettings(
             settings_c=self.settings_c.stability_settings
         )
-        self._stability_settings._parent = self
 
     @property
     def stability_settings(self) -> StabilitySettings:
@@ -995,8 +989,8 @@ class SolverSettings(Settings):
 
 class StabilitySettings(Settings):
 
-    # the solver settings the settings are nested in
-    own_attributes = Settings.own_attributes + ("_parent",)
+    # the owner of the extension object a factory wired into the settings
+    own_attributes = Settings.own_attributes + ("_extension_owner",)
 
     c_struct = StabilitySettingsC
     init_c_struct = lib.init_stability_settings
