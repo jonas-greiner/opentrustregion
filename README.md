@@ -1081,6 +1081,8 @@ The rotation QN factory function can be fine-tuned using the following settings:
 - **`qn_method`** (string): Specifies which quasi-Newton updating scheme to use, in any case. Options include:
   - `"sr1"`: symmetric rank-1 update,
   - `"bfgs"`: Broyden-Fletcher-Goldfarb-Shanno update.
+
+  Both apply the update of every pair of the history to the initial Hessian, from the oldest to the newest, and drop a pair whose update is not defined, for SR1 one whose denominator nearly vanishes and for BFGS one without positive curvature.
 - **`max_points`** (integer): Maximum number of points the history of steps and gradient differences keeps, at least 0, where 0 keeps none.
 - **`verbose`** (integer): Controls the verbosity of output of the rotation QN routines.
 - **`logger`** (subroutine): Accepts a log message of the rotation QN routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.

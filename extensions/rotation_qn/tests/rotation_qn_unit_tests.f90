@@ -17,6 +17,10 @@ module otr_rotation_qn_unit_tests
     procedure(transport_type), pointer :: mock_transport_ptr => mock_transport
     procedure(init_hess_type), pointer :: mock_init_hess_ptr => mock_init_hess
 
+    ! diagonal of the initial Hessian the mock applies, indefinite so that the BFGS
+    ! scheme meets a step along which the model so far has no positive curvature
+    real(rp), parameter :: init_hess_diag(n_param) = [2.0_rp, 3.0_rp, -1.0_rp]
+
     ! rotation QN object which records the point its orbital update adds and returns
     ! the error code it is set to, for the test of the orbital update
     type, extends(sr1_updating_type) :: recording_rotation_qn_type
@@ -26,13 +30,23 @@ module otr_rotation_qn_unit_tests
         procedure :: add => recording_add_rotation_qn
     end type
 
+    ! rotation QN object which records the builds of its model and the number of pairs
+    ! of the history when it was built and returns the error code it is set to, for the
+    ! test of the addition
+    type, extends(sr1_updating_type) :: recording_build_type
+        integer(ip) :: n_built = 0, n_points_built = -1, error = 0
+    contains
+        procedure :: build_model => recording_build_model
+    end type
+
 contains
 
     subroutine mock_transport(geodesic, tangent_vector, error, context)
         !
-        ! this subroutine is a mock of the host's transport function, which leaves the
-        ! tangent vector unchanged, records its call, checks the host context and
-        ! returns the error code set in it or a value that is not a number
+        ! this subroutine is a mock of the host's transport function, which adds the
+        ! geodesic to the tangent vector, so that the test sees which vectors were
+        ! transported along which geodesic, records its call, checks the host context
+        ! and returns the error code set in it or a value that is not a number
         !
         use otr_common_mock, only: record_host_call, inject_host_nan
 
@@ -42,6 +56,7 @@ contains
         class(*), intent(in), pointer :: context
 
         error = record_host_call("transport", context)
+        tangent_vector = tangent_vector + geodesic
         call inject_host_nan(context, 1_ip, tangent_vector(1))
 
     end subroutine mock_transport
@@ -49,8 +64,8 @@ contains
     subroutine mock_init_hess(vector, error, context)
         !
         ! this subroutine is a mock of the host's initial Hessian function, which
-        ! applies the identity, records its call, checks the host context and returns
-        ! the error code set in it or a value that is not a number
+        ! applies the diagonal init_hess_diag, records its call, checks the host
+        ! context and returns the error code set in it or a value that is not a number
         !
         use otr_common_mock, only: record_host_call, inject_host_nan
 
@@ -59,6 +74,7 @@ contains
         class(*), intent(in), pointer :: context
 
         error = record_host_call("init_hess", context)
+        vector = init_hess_diag * vector
         call inject_host_nan(context, 1_ip, vector(1))
 
     end subroutine mock_init_hess
@@ -79,14 +95,29 @@ contains
 
     end subroutine recording_add_rotation_qn
 
+    subroutine recording_build_model(self, error)
+        !
+        ! this subroutine records the build of the model of the recording rotation QN
+        ! object and the number of pairs of its history and returns the error code it
+        ! is set to
+        !
+        class(recording_build_type), intent(inout) :: self
+        integer(ip), intent(out) :: error
+
+        self%n_built = self%n_built + 1
+        self%n_points_built = self%n_points
+        error = self%error
+
+    end subroutine recording_build_model
+
     subroutine setup_updating_object(object)
         !
         ! this subroutine sets up a new updating object as after three orbital updates,
         ! without the routines under test, with the default settings carrying the armed
         ! host context, the mock transport and initial Hessian functions, two random
-        ! points in its history, whose gradient differences are twice their steps, so
-        ! that they have positive curvature along them, and a random last gradient, so
-        ! that every loop over the history calls the host's functions more than once
+        ! points in its history, whose gradient differences are twice their steps, a
+        ! random last gradient and a model without terms, whose arrays hold two terms
+        ! per point
         !
         use otr_rotation_qn, only: updating_type, default_rotation_qn_settings, &
                                    error_rotation_qn
@@ -102,15 +133,44 @@ contains
         object%init_hess => mock_init_hess
         allocate(object%kappa_list(n_param, object%settings%max_points), &
                  object%grad_diff_list(n_param, object%settings%max_points), &
-                 object%last_grad(n_param))
+                 object%last_grad(n_param), &
+                 object%vectors(n_param, 2 * object%settings%max_points), &
+                 object%coeffs(2 * object%settings%max_points))
         object%kappa_list = 0.0_rp
         object%grad_diff_list = 0.0_rp
         object%n_points = 2
         call random_number(object%kappa_list(:, :2))
         object%grad_diff_list(:, :2) = 2.0_rp * object%kappa_list(:, :2)
         call random_number(object%last_grad)
+        object%vectors = 0.0_rp
+        object%coeffs = 0.0_rp
+        object%n_terms = 0
 
     end subroutine setup_updating_object
+
+    function model_matrix(object) result(matrix)
+        !
+        ! this function returns the matrix of the model of an updating object, the
+        ! initial Hessian of the mock updated by the rank-1 terms of the object
+        !
+        use otr_rotation_qn, only: updating_type
+
+        class(updating_type), intent(in) :: object
+        real(rp) :: matrix(n_param, n_param)
+
+        integer(ip) :: i, k
+
+        matrix = 0.0_rp
+        do i = 1, n_param
+            matrix(i, i) = init_hess_diag(i)
+        end do
+        do k = 1, object%n_terms
+            matrix = matrix + &
+                     object%coeffs(k) * spread(object%vectors(:, k), 2, n_param) * &
+                     spread(object%vectors(:, k), 1, n_param)
+        end do
+
+    end function model_matrix
 
     logical(c_bool) function test_rotation_qn_factory() bind(C)
         !
@@ -463,15 +523,15 @@ contains
         ! assume tests pass
         test_invoke_transport = .true.
 
-        ! call a transport function, which leaves the tangent vector unchanged, with a
-        ! random geodesic and tangent vector and check that it receives the host
-        ! context and that the tangent vector is returned
+        ! call a transport function, which adds the geodesic to the tangent vector,
+        ! with a random geodesic and tangent vector and check that it receives the host
+        ! context and that the transported tangent vector is returned
         call setup_settings(settings, context)
         call arm_host_context(settings, context)
         transport_funptr => mock_transport
         call random_number(geodesic)
         call random_number(vector)
-        expected = vector
+        expected = vector + geodesic
         call invoke_transport(transport_funptr, geodesic, vector, settings, &
                               error_origin, error)
         if (error /= 0) then
@@ -479,8 +539,8 @@ contains
             test_invoke_transport = .false.
         end if
         if (.not. all(is_close(vector, expected))) then
-            write(stderr, *) "test_invoke_transport failed: Tangent vector not "// &
-                "returned."
+            write(stderr, *) "test_invoke_transport failed: Transported tangent "// &
+                "vector not returned."
             test_invoke_transport = .false.
         end if
         if (.not. host_context_reached("invoke_transport", context)) &
@@ -537,21 +597,22 @@ contains
         ! assume tests pass
         test_invoke_init_hess = .true.
 
-        ! call an initial Hessian function, which applies the identity, with a random
-        ! vector and check that it receives the host context and that the vector is
-        ! returned
+        ! call an initial Hessian function, which applies a diagonal, with a random
+        ! vector and check that it receives the host context and that the vector it
+        ! applied the diagonal to is returned
         call setup_settings(settings, context)
         call arm_host_context(settings, context)
         init_hess_funptr => mock_init_hess
         call random_number(vector)
-        expected = vector
+        expected = init_hess_diag * vector
         call invoke_init_hess(init_hess_funptr, vector, settings, error_origin, error)
         if (error /= 0) then
             write(stderr, *) "test_invoke_init_hess failed: Produced error."
             test_invoke_init_hess = .false.
         end if
         if (.not. all(is_close(vector, expected))) then
-            write(stderr, *) "test_invoke_init_hess failed: Vector not returned."
+            write(stderr, *) "test_invoke_init_hess failed: Vector the initial "// &
+                "Hessian was applied to not returned."
             test_invoke_init_hess = .false.
         end if
         if (.not. host_context_reached("invoke_init_hess", context)) &
@@ -694,6 +755,155 @@ contains
 
     end function test_update_orbs_rotation_qn
 
+    logical(c_bool) function test_add_rotation_qn() bind(C)
+        !
+        ! this function tests the subroutine which adds a new point to a rotation QN
+        ! object, which transports the history and the last gradient along the step,
+        ! appends the pair of the step and the gradient difference, dropping the oldest
+        ! pair of a full history, takes the gradient as the last one and builds the
+        ! model, and passes on the errors of the transport function and of the build
+        !
+        use otr_rotation_qn, only: error_rotation_qn
+        use test_reference, only: host_context, host_context_reached
+
+        type(recording_build_type) :: object
+        real(rp) :: kappa(n_param), grad(n_param)
+        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:), &
+                                 expected_kappa_list(:, :), &
+                                 expected_grad_diff_list(:, :)
+        integer(ip) :: error, n_points, n_kept, n_calls, i_case, i_call, i_kind
+        character(len=8) :: call_number
+        character(len=34), parameter :: case_names(4) = &
+            [character(len=34) :: "a history with room", "a full history", &
+             "the starting point", "a history without room for pairs"]
+
+        ! assume tests pass
+        test_add_rotation_qn = .true.
+
+        ! add a point to a history with room, to a full history, whose oldest pair has
+        ! to be dropped, at the starting point, which has no last gradient, and to a
+        ! history without room for pairs, where neither of the last two transports or
+        ! adds anything, and check that every vector of the history and the last
+        ! gradient are transported along the step, which the mock transport adds to
+        ! them, while the step itself is not, that the gradient becomes the last one
+        ! and that the model is built once for the new history
+        call random_number(kappa)
+        call random_number(grad)
+        do i_case = 1, size(case_names)
+            call setup_updating_object(object)
+            select case (i_case)
+            case (2)
+                object%n_points = object%settings%max_points
+                call random_number(object%kappa_list)
+                call random_number(object%grad_diff_list)
+            case (3)
+                object%n_points = 0
+                deallocate(object%last_grad)
+            case (4)
+                object%settings%max_points = 0
+                object%n_points = 0
+                deallocate(object%kappa_list, object%grad_diff_list)
+                allocate(object%kappa_list(n_param, 0), &
+                         object%grad_diff_list(n_param, 0))
+            end select
+            n_points = object%n_points
+            kappa_list = object%kappa_list(:, :n_points)
+            grad_diff_list = object%grad_diff_list(:, :n_points)
+            if (i_case /= 3) last_grad = object%last_grad
+            call object%add(kappa, grad, error)
+
+            ! history the addition has to leave
+            if (i_case <= 2) then
+                n_kept = min(n_points, object%settings%max_points - 1)
+                expected_kappa_list = reshape( &
+                    [kappa_list(:, n_points - n_kept + 1:) + spread(kappa, 2, n_kept), &
+                     kappa], [n_param, n_kept + 1])
+                expected_grad_diff_list = reshape( &
+                    [grad_diff_list(:, n_points - n_kept + 1:) + &
+                     spread(kappa, 2, n_kept), grad - (last_grad + kappa)], &
+                    [n_param, n_kept + 1])
+            else
+                expected_kappa_list = kappa_list
+                expected_grad_diff_list = grad_diff_list
+            end if
+
+            if (error /= 0) then
+                write(stderr, *) "test_add_rotation_qn failed: Produced error for "// &
+                    trim(case_names(i_case))//"."
+                test_add_rotation_qn = .false.
+            end if
+            if (object%n_points /= size(expected_kappa_list, 2)) then
+                write(stderr, *) "test_add_rotation_qn failed: Number of pairs "// &
+                    "wrong for "//trim(case_names(i_case))//"."
+                test_add_rotation_qn = .false.
+            else if (.not. all(is_close(object%kappa_list(:, :object%n_points), &
+                                        expected_kappa_list)) .or. &
+                     .not. all(is_close(object%grad_diff_list(:, :object%n_points), &
+                                        expected_grad_diff_list))) then
+                write(stderr, *) "test_add_rotation_qn failed: History wrong for "// &
+                    trim(case_names(i_case))//"."
+                test_add_rotation_qn = .false.
+            end if
+            if (.not. all(is_close(object%last_grad, grad, 0.0_rp))) then
+                write(stderr, *) "test_add_rotation_qn failed: Gradient not the "// &
+                    "last one for "//trim(case_names(i_case))//"."
+                test_add_rotation_qn = .false.
+            end if
+            if (object%n_built /= 1 .or. object%n_points_built /= object%n_points) then
+                write(stderr, *) "test_add_rotation_qn failed: Model not built "// &
+                    "once for the new history for "//trim(case_names(i_case))//"."
+                test_add_rotation_qn = .false.
+            end if
+            if (host_context%n_calls /= merge(2 * n_points + 1, 0, i_case <= 2)) then
+                write(stderr, *) "test_add_rotation_qn failed: Transport function "// &
+                    "not called with the host context for every vector of the "// &
+                    "history and the last gradient for "//trim(case_names(i_case))//"."
+                test_add_rotation_qn = .false.
+            end if
+            if (i_case <= 2) then
+                if (.not. host_context_reached("add_rotation_qn")) &
+                    test_add_rotation_qn = .false.
+            end if
+        end do
+
+        ! let every call of the transport function fail in turn, by returning an error,
+        ! which the routine has to pass on, and a value that is not a number, which it
+        ! has to report with the origin of the object
+        call setup_updating_object(object)
+        n_calls = 2 * object%n_points + 1
+        do i_call = 1, n_calls
+            write(call_number, '(I0)') i_call
+            do i_kind = 1, 2
+                call setup_updating_object(object)
+                host_context%failing_call = i_call
+                if (i_kind == 1) host_context%mock_error = 7
+                if (i_kind == 2) host_context%nan_output = 1
+                call object%add(kappa, grad, error)
+                if (i_kind == 1 .and. error /= 7) then
+                    write(stderr, *) "test_add_rotation_qn failed: Error of call "// &
+                        trim(call_number)//" of the transport function not passed on."
+                    test_add_rotation_qn = .false.
+                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                    write(stderr, *) "test_add_rotation_qn failed: Value that is "// &
+                        "not a number at call "//trim(call_number)//" of the "// &
+                        "transport function not reported with the origin of the object."
+                    test_add_rotation_qn = .false.
+                end if
+            end do
+        end do
+
+        ! let the build of the model fail, whose error has to be passed on
+        call setup_updating_object(object)
+        object%error = 5
+        call object%add(kappa, grad, error)
+        if (error /= 5) then
+            write(stderr, *) "test_add_rotation_qn failed: Error of the build of "// &
+                "the model not passed on."
+            test_add_rotation_qn = .false.
+        end if
+
+    end function test_add_rotation_qn
+
     logical(c_bool) function test_init_rotation_qn() bind(C)
         !
         ! this function tests the subroutine which initializes a rotation QN object
@@ -713,7 +923,7 @@ contains
 
         ! initialize a new object, which has to perform the orbital update and the
         ! Hessian linear transformation itself, take over the settings and the number
-        ! of parameters and allocate the arrays of the history
+        ! of parameters and allocate the arrays of the history and the model
         settings = ref_rotation_qn_settings
         settings%logger => logger
         settings%context => context
@@ -743,266 +953,281 @@ contains
                 "allocated wrong."
             test_init_rotation_qn = .false.
         end if
+        if (any(shape(object%vectors) /= [n_param, 2 * settings%max_points]) .or. &
+            any(shape(object%coeffs) /= [2 * settings%max_points])) then
+            write(stderr, *) "test_init_rotation_qn failed: Arrays of the model, "// &
+                "which hold two terms per pair, allocated wrong."
+            test_init_rotation_qn = .false.
+        end if
 
     end function test_init_rotation_qn
 
-    logical(c_bool) function test_add_rotation_qn() bind(C)
+    logical(c_bool) function test_model_x_rotation_qn() bind(C)
         !
-        ! this function tests the subroutine which adds a new point to the history of a
-        ! rotation QN object, so far only that it hands every call of the host's
-        ! transport function the host context of its settings and passes on the error
-        ! of every call, reports a value of every call that is not a number with the
-        ! origin of the object and that a pair the skipping criterion rejects leaves
-        ! the history unchanged while the gradient becomes the last one, while its
-        ! numerics are left to later tests
-        !
-        use otr_rotation_qn, only: bfgs_updating_type, error_rotation_qn
-        use test_reference, only: host_context, host_context_reached
-
-        type(bfgs_updating_type) :: object
-        real(rp) :: kappa(n_param), grad(n_param), orthogonal(n_param)
-        integer(ip) :: error, n_calls, i_call, i_kind
-        character(len=8) :: call_number
-
-        ! assume tests pass
-        test_add_rotation_qn = .true.
-
-        ! add a point to an object with two points in its history and a last gradient,
-        ! for which the routine transports both history arrays of each point and the
-        ! last gradient, of the scheme whose skipping criterion calls no host's
-        ! function
-        call setup_updating_object(object)
-        call random_number(kappa)
-        call random_number(grad)
-        call object%add(kappa, grad, error)
-        if (error /= 0) then
-            write(stderr, *) "test_add_rotation_qn failed: Produced error."
-            test_add_rotation_qn = .false.
-        end if
-        n_calls = host_context%n_calls
-        if (n_calls /= 5) then
-            write(stderr, *) "test_add_rotation_qn failed: Transport function not "// &
-                "called with the host context at every call site."
-            test_add_rotation_qn = .false.
-        end if
-        if (.not. host_context_reached("add_rotation_qn")) &
-            test_add_rotation_qn = .false.
-
-        ! let every call of the transport function fail in turn, by returning an error,
-        ! which the routine has to pass on, and a value that is not a number, which it
-        ! has to report with the origin of the object
-        do i_call = 1, n_calls
-            write(call_number, '(I0)') i_call
-            do i_kind = 1, 2
-                call setup_updating_object(object)
-                host_context%failing_call = i_call
-                if (i_kind == 1) host_context%mock_error = 7
-                if (i_kind == 2) host_context%nan_output = 1
-                call object%add(kappa, grad, error)
-                if (i_kind == 1 .and. error /= 7) then
-                    write(stderr, *) "test_add_rotation_qn failed: Error of call "// &
-                        trim(call_number)//" of the transport function not passed on."
-                    test_add_rotation_qn = .false.
-                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
-                    write(stderr, *) "test_add_rotation_qn failed: Value that is "// &
-                        "not a number at call "//trim(call_number)//" of the "// &
-                        "transport function not reported with the origin of the object."
-                    test_add_rotation_qn = .false.
-                end if
-            end do
-        end do
-
-        ! add a point whose gradient differs from the last one, which the mock transport
-        ! leaves unchanged, by a random vector orthogonal to the step, which the
-        ! skipping criterion of the scheme rejects, so that the history has to keep its
-        ! points and the gradient has to become the last one, from which the next pair
-        ! starts
-        call setup_updating_object(object)
-        call random_number(orthogonal)
-        orthogonal = orthogonal - &
-                     dot_product(orthogonal, kappa) / dot_product(kappa, kappa) * kappa
-        grad = object%last_grad + orthogonal
-        call object%add(kappa, grad, error)
-        if (error /= 0 .or. object%n_points /= 2) then
-            write(stderr, *) "test_add_rotation_qn failed: Error produced or "// &
-                "history changed for a pair the skipping criterion rejects."
-            test_add_rotation_qn = .false.
-        end if
-        if (.not. is_at_most(norm2(object%last_grad - grad), tol)) then
-            write(stderr, *) "test_add_rotation_qn failed: Gradient not the last "// &
-                "one after a pair the skipping criterion rejects."
-            test_add_rotation_qn = .false.
-        end if
-
-    end function test_add_rotation_qn
-
-    logical(c_bool) function test_sr1_skip_add() bind(C)
-        !
-        ! this function tests the function which decides whether the SR1 updating
-        ! scheme skips a new point, so far only that it hands the host's initial
-        ! Hessian function the host context of its settings and passes on the error of
-        ! every call, reports a value of every call that is not a number with the
-        ! origin of the object, while its numerics are left to later tests
+        ! this function tests the subroutine which applies the initial Hessian, updated
+        ! by the first terms of the model of a rotation QN object, to a vector
         !
         use otr_rotation_qn, only: sr1_updating_type, error_rotation_qn
         use test_reference, only: host_context, host_context_reached
 
         type(sr1_updating_type) :: object
-        real(rp) :: kappa(n_param), grad_diff(n_param)
-        logical :: skip
-        integer(ip) :: error, n_calls, i_call, i_kind
-        character(len=8) :: call_number
+        real(rp) :: x(n_param), model_x(n_param), expected(n_param)
+        integer(ip) :: error, n_terms, k, i_kind
+        character(len=8) :: terms
 
         ! assume tests pass
-        test_sr1_skip_add = .true.
+        test_model_x_rotation_qn = .true.
 
-        ! decide on a new point
+        ! apply the model of an object with three random terms of either sign, updated
+        ! by none, some or all of them, which has to call the initial Hessian function
+        ! once with the host context and add exactly the first terms
         call setup_updating_object(object)
-        call random_number(kappa)
-        grad_diff = 3.0_rp * kappa
-        skip = object%skip_add(kappa, grad_diff, error)
-        if (error /= 0) then
-            write(stderr, *) "test_sr1_skip_add failed: Produced error."
-            test_sr1_skip_add = .false.
-        end if
-        n_calls = host_context%n_calls
-        if (n_calls /= 1) then
-            write(stderr, *) "test_sr1_skip_add failed: Initial Hessian function "// &
-                "not called with the host context."
-            test_sr1_skip_add = .false.
-        end if
-        if (.not. host_context_reached("sr1_skip_add")) test_sr1_skip_add = .false.
-
-        ! let every call of the initial Hessian function fail in turn, by returning an
-        ! error, which the routine has to pass on, and a value that is not a number,
-        ! which it has to report with the origin of the object
-        do i_call = 1, n_calls
-            write(call_number, '(I0)') i_call
-            do i_kind = 1, 2
-                call setup_updating_object(object)
-                host_context%failing_call = i_call
-                if (i_kind == 1) host_context%mock_error = 7
-                if (i_kind == 2) host_context%nan_output = 1
-                skip = object%skip_add(kappa, grad_diff, error)
-                if (i_kind == 1 .and. error /= 7) then
-                    write(stderr, *) "test_sr1_skip_add failed: Error of call "// &
-                        trim(call_number)// &
-                        " of the initial Hessian function not passed on."
-                    test_sr1_skip_add = .false.
-                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
-                    write(stderr, *) "test_sr1_skip_add failed: Value that is not "// &
-                        "a number at call "//trim(call_number)//" of the initial "// &
-                        "Hessian function not reported with the origin of the object."
-                    test_sr1_skip_add = .false.
-                end if
+        object%n_terms = 3
+        call random_number(object%vectors(:, :3))
+        call random_number(object%coeffs(:3))
+        object%coeffs(:3) = object%coeffs(:3) - 0.5_rp
+        call random_number(x)
+        do n_terms = 0, object%n_terms
+            write(terms, '(I0)') n_terms
+            host_context%n_calls = 0
+            call object%model_x(x, model_x, n_terms, error)
+            expected = init_hess_diag * x
+            do k = 1, n_terms
+                expected = expected + object%coeffs(k) * &
+                           dot_product(object%vectors(:, k), x) * object%vectors(:, k)
             end do
+            if (error /= 0) then
+                write(stderr, *) "test_model_x_rotation_qn failed: Produced error "// &
+                    "for "//trim(terms)//" terms."
+                test_model_x_rotation_qn = .false.
+            end if
+            if (.not. all(is_close(model_x, expected))) then
+                write(stderr, *) "test_model_x_rotation_qn failed: Model applied "// &
+                    "wrong for "//trim(terms)//" terms."
+                test_model_x_rotation_qn = .false.
+            end if
+            if (host_context%n_calls /= 1) then
+                write(stderr, *) "test_model_x_rotation_qn failed: Initial Hessian "// &
+                    "function not called once with the host context for "// &
+                    trim(terms)//" terms."
+                test_model_x_rotation_qn = .false.
+            end if
+        end do
+        if (.not. host_context_reached("model_x_rotation_qn")) &
+            test_model_x_rotation_qn = .false.
+
+        ! let the initial Hessian function fail, by returning an error, which the
+        ! routine has to pass on, and a value that is not a number, which it has to
+        ! report with the origin of the object
+        do i_kind = 1, 2
+            call setup_updating_object(object)
+            if (i_kind == 1) host_context%mock_error = 7
+            if (i_kind == 2) host_context%nan_output = 1
+            call object%model_x(x, model_x, 0_ip, error)
+            if (i_kind == 1 .and. error /= 7) then
+                write(stderr, *) "test_model_x_rotation_qn failed: Error of the "// &
+                    "initial Hessian function not passed on."
+                test_model_x_rotation_qn = .false.
+            else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                write(stderr, *) "test_model_x_rotation_qn failed: Value that is "// &
+                    "not a number of the initial Hessian function not reported "// &
+                    "with the origin of the object."
+                test_model_x_rotation_qn = .false.
+            end if
         end do
 
-    end function test_sr1_skip_add
+    end function test_model_x_rotation_qn
 
-    logical(c_bool) function test_hess_x_sr1() bind(C)
+    logical(c_bool) function test_hess_x_rotation_qn() bind(C)
         !
-        ! this function tests the Hessian linear transformation of the SR1 updating
-        ! scheme, so far only that it hands every call of the host's initial Hessian
-        ! function the host context of its settings and passes on the error of every
-        ! call, reports a value of every call that is not a number with the origin of
-        ! the object, while its numerics are left to later tests
+        ! this function tests the Hessian linear transformation of a rotation QN
+        ! object, which applies the initial Hessian updated by every term of its model
         !
         use otr_common_unit_tests, only: level_context
         use otr_rotation_qn, only: sr1_updating_type, error_rotation_qn
         use test_reference, only: host_context, host_context_reached
 
         type(sr1_updating_type), target :: object
-        real(rp) :: x(n_param), hess_x(n_param)
-        integer(ip) :: error, n_calls, i_call, i_kind
-        character(len=8) :: call_number
+        real(rp) :: x(n_param), hess_x(n_param), expected(n_param)
+        integer(ip) :: error, k, i_kind
 
         ! assume tests pass
-        test_hess_x_sr1 = .true.
+        test_hess_x_rotation_qn = .true.
 
-        ! apply the transformation of an object with two points in its history, for
-        ! which the initial Hessian is applied to the trial vector and to the step of
-        ! each point
+        ! apply the transformation of an object with three random terms of either sign,
+        ! which has to call the initial Hessian function once with the host context
+        ! and add every term
         call setup_updating_object(object)
+        object%n_terms = 3
+        call random_number(object%vectors(:, :3))
+        call random_number(object%coeffs(:3))
+        object%coeffs(:3) = object%coeffs(:3) - 0.5_rp
         call random_number(x)
         call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+        expected = init_hess_diag * x
+        do k = 1, object%n_terms
+            expected = expected + object%coeffs(k) * &
+                       dot_product(object%vectors(:, k), x) * object%vectors(:, k)
+        end do
         if (error /= 0) then
-            write(stderr, *) "test_hess_x_sr1 failed: Produced error."
-            test_hess_x_sr1 = .false.
+            write(stderr, *) "test_hess_x_rotation_qn failed: Produced error."
+            test_hess_x_rotation_qn = .false.
         end if
-        n_calls = host_context%n_calls
-        if (n_calls /= 3) then
-            write(stderr, *) "test_hess_x_sr1 failed: Initial Hessian function not "// &
-                "called with the host context at every call site."
-            test_hess_x_sr1 = .false.
+        if (.not. all(is_close(hess_x, expected))) then
+            write(stderr, *) "test_hess_x_rotation_qn failed: Model not applied "// &
+                "with every term."
+            test_hess_x_rotation_qn = .false.
         end if
-        if (.not. host_context_reached("hess_x_sr1")) test_hess_x_sr1 = .false.
+        if (host_context%n_calls /= 1) then
+            write(stderr, *) "test_hess_x_rotation_qn failed: Initial Hessian "// &
+                "function not called once with the host context."
+            test_hess_x_rotation_qn = .false.
+        end if
+        if (.not. host_context_reached("hess_x_rotation_qn")) &
+            test_hess_x_rotation_qn = .false.
 
-        ! let every call of the initial Hessian function fail in turn, by returning an
-        ! error, which the routine has to pass on, and a value that is not a number,
-        ! which it has to report with the origin of the object
-        do i_call = 1, n_calls
-            write(call_number, '(I0)') i_call
-            do i_kind = 1, 2
-                call setup_updating_object(object)
-                host_context%failing_call = i_call
-                if (i_kind == 1) host_context%mock_error = 7
-                if (i_kind == 2) host_context%nan_output = 1
-                call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
-                if (i_kind == 1 .and. error /= 7) then
-                    write(stderr, *) "test_hess_x_sr1 failed: Error of call "// &
-                        trim(call_number)// &
-                        " of the initial Hessian function not passed on."
-                    test_hess_x_sr1 = .false.
-                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
-                    write(stderr, *) "test_hess_x_sr1 failed: Value that is not a "// &
-                        "number at call "//trim(call_number)//" of the initial "// &
-                        "Hessian function not reported with the origin of the object."
-                    test_hess_x_sr1 = .false.
-                end if
-            end do
+        ! let the initial Hessian function fail, by returning an error, which the
+        ! routine has to pass on, and a value that is not a number, which it has to
+        ! report with the origin of the object
+        do i_kind = 1, 2
+            call setup_updating_object(object)
+            if (i_kind == 1) host_context%mock_error = 7
+            if (i_kind == 2) host_context%nan_output = 1
+            call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+            if (i_kind == 1 .and. error /= 7) then
+                write(stderr, *) "test_hess_x_rotation_qn failed: Error of the "// &
+                    "initial Hessian function not passed on."
+                test_hess_x_rotation_qn = .false.
+            else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                write(stderr, *) "test_hess_x_rotation_qn failed: Value that is "// &
+                    "not a number of the initial Hessian function not reported "// &
+                    "with the origin of the object."
+                test_hess_x_rotation_qn = .false.
+            end if
         end do
 
-    end function test_hess_x_sr1
+    end function test_hess_x_rotation_qn
 
-    logical(c_bool) function test_hess_x_bfgs() bind(C)
+    logical(c_bool) function test_keep_pair() bind(C)
         !
-        ! this function tests the Hessian linear transformation of the BFGS updating
-        ! scheme, so far only that it hands every call of the host's initial Hessian
-        ! function the host context of its settings and passes on the error of every
-        ! call, reports a value of every call that is not a number with the origin of
-        ! the object, while its numerics are left to later tests
+        ! this function tests the subroutine which keeps a pair of the history of a
+        ! rotation QN object as the next kept one
         !
-        use otr_common_unit_tests, only: level_context
-        use otr_rotation_qn, only: bfgs_updating_type, error_rotation_qn
+        use otr_rotation_qn, only: sr1_updating_type, keep_pair
+
+        type(sr1_updating_type) :: object
+        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :)
+        integer(ip) :: n_kept
+
+        ! assume tests pass
+        test_keep_pair = .true.
+
+        ! keep the third of three random pairs as the second, which has to be copied
+        ! there and counted, while the other pairs stay unchanged
+        call setup_updating_object(object)
+        object%n_points = 3
+        call random_number(object%kappa_list(:, :3))
+        call random_number(object%grad_diff_list(:, :3))
+        kappa_list = object%kappa_list(:, :3)
+        grad_diff_list = object%grad_diff_list(:, :3)
+        n_kept = 1
+        call keep_pair(object, 3_ip, n_kept)
+        if (n_kept /= 2) then
+            write(stderr, *) "test_keep_pair failed: Kept pair not counted."
+            test_keep_pair = .false.
+        end if
+        if (.not. all(is_close(object%kappa_list(:, 2), kappa_list(:, 3), &
+                               0.0_rp)) .or. &
+            .not. all(is_close(object%grad_diff_list(:, 2), grad_diff_list(:, 3), &
+                               0.0_rp))) then
+            write(stderr, *) "test_keep_pair failed: Pair not kept as the next one."
+            test_keep_pair = .false.
+        end if
+        if (.not. all(is_close(object%kappa_list(:, [1, 3]), kappa_list(:, [1, 3]), &
+                               0.0_rp)) .or. &
+            .not. all(is_close(object%grad_diff_list(:, [1, 3]), &
+                               grad_diff_list(:, [1, 3]), 0.0_rp))) then
+            write(stderr, *) "test_keep_pair failed: Other pairs changed."
+            test_keep_pair = .false.
+        end if
+
+    end function test_keep_pair
+
+    logical(c_bool) function test_build_model_sr1() bind(C)
+        !
+        ! this function tests the subroutine which builds the model of the SR1
+        ! updating scheme from the history, by comparing with the recursive SR1 update
+        ! of a dense matrix
+        !
+        use otr_rotation_qn, only: sr1_updating_type, error_rotation_qn, sr1_skip_thresh
         use test_reference, only: host_context, host_context_reached
 
-        type(bfgs_updating_type), target :: object
-        real(rp) :: x(n_param), hess_x(n_param)
+        type(sr1_updating_type) :: object
+        real(rp) :: kappa_list(n_param, 4), grad_diff_list(n_param, 4), &
+                    orthogonal(n_param), model(n_param, n_param), &
+                    expected(n_param, n_param)
         integer(ip) :: error, n_calls, i_call, i_kind
+        integer(ip), parameter :: kept(3) = [1, 2, 4]
         character(len=8) :: call_number
 
         ! assume tests pass
-        test_hess_x_bfgs = .true.
+        test_build_model_sr1 = .true.
 
-        ! apply the transformation of an object with two points in its history, for
-        ! which the initial Hessian is applied to the trial vector, to the step of each
-        ! point when the compact scaling matrix is built and to each again when the
-        ! transformation is assembled
+        ! build the model of a history of four random pairs, whose gradient
+        ! differences, five times the steps plus noise, which keeps the denominators
+        ! well away from zero, are not those of a quadratic function, so that only the
+        ! recursive update reproduces the newest one, while the third has a residual
+        ! orthogonal to its step, so that it has to be skipped and dropped from the
+        ! history, whose other pairs keep their order
+        call random_number(kappa_list)
+        call random_number(grad_diff_list)
+        grad_diff_list = 5.0_rp * kappa_list + grad_diff_list - 0.5_rp
+        call random_number(orthogonal)
+        orthogonal = orthogonal - dot_product(orthogonal, kappa_list(:, 3)) / &
+                     dot_product(kappa_list(:, 3), kappa_list(:, 3)) * kappa_list(:, 3)
+        model = ref_sr1_model(kappa_list(:, :2), grad_diff_list(:, :2))
+        grad_diff_list(:, 3) = matmul(model, kappa_list(:, 3)) + orthogonal
         call setup_updating_object(object)
-        call random_number(x)
-        call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
-        if (error /= 0) then
-            write(stderr, *) "test_hess_x_bfgs failed: Produced error."
-            test_hess_x_bfgs = .false.
-        end if
+        object%n_points = 4
+        object%kappa_list(:, :4) = kappa_list
+        object%grad_diff_list(:, :4) = grad_diff_list
+        call object%build_model(error)
         n_calls = host_context%n_calls
-        if (n_calls /= 5) then
-            write(stderr, *) "test_hess_x_bfgs failed: Initial Hessian function "// &
-                "not called with the host context at every call site."
-            test_hess_x_bfgs = .false.
+        if (error /= 0) then
+            write(stderr, *) "test_build_model_sr1 failed: Produced error."
+            test_build_model_sr1 = .false.
         end if
-        if (.not. host_context_reached("hess_x_bfgs")) test_hess_x_bfgs = .false.
+        if (object%n_points /= 3 .or. object%n_terms /= 3) then
+            write(stderr, *) "test_build_model_sr1 failed: Pair with a residual "// &
+                "orthogonal to its step not dropped."
+            test_build_model_sr1 = .false.
+        else if (.not. all(is_close(object%kappa_list(:, :3), kappa_list(:, kept), &
+                                    0.0_rp)) .or. &
+                 .not. all(is_close(object%grad_diff_list(:, :3), &
+                                    grad_diff_list(:, kept), 0.0_rp))) then
+            write(stderr, *) "test_build_model_sr1 failed: Kept pairs wrong."
+            test_build_model_sr1 = .false.
+        end if
+        model = model_matrix(object)
+        expected = ref_sr1_model(kappa_list, grad_diff_list)
+        if (.not. all(is_close(model, expected))) then
+            write(stderr, *) "test_build_model_sr1 failed: Model differs from the "// &
+                "recursive SR1 update."
+            test_build_model_sr1 = .false.
+        end if
+        if (.not. all(is_close(matmul(model, kappa_list(:, 4)), &
+                               grad_diff_list(:, 4)))) then
+            write(stderr, *) "test_build_model_sr1 failed: Model does not satisfy "// &
+                "the secant condition of the newest pair."
+            test_build_model_sr1 = .false.
+        end if
+        if (n_calls /= 4) then
+            write(stderr, *) "test_build_model_sr1 failed: Initial Hessian "// &
+                "function not called with the host context for every pair."
+            test_build_model_sr1 = .false.
+        end if
+        if (.not. host_context_reached("build_model_sr1")) &
+            test_build_model_sr1 = .false.
 
         ! let every call of the initial Hessian function fail in turn, by returning an
         ! error, which the routine has to pass on, and a value that is not a number,
@@ -1011,24 +1236,202 @@ contains
             write(call_number, '(I0)') i_call
             do i_kind = 1, 2
                 call setup_updating_object(object)
+                object%n_points = 4
+                object%kappa_list(:, :4) = kappa_list
+                object%grad_diff_list(:, :4) = grad_diff_list
                 host_context%failing_call = i_call
                 if (i_kind == 1) host_context%mock_error = 7
                 if (i_kind == 2) host_context%nan_output = 1
-                call object%hess_x(x, hess_x, error, level_context(object, 1_ip))
+                call object%build_model(error)
                 if (i_kind == 1 .and. error /= 7) then
-                    write(stderr, *) "test_hess_x_bfgs failed: Error of call "// &
+                    write(stderr, *) "test_build_model_sr1 failed: Error of call "// &
                         trim(call_number)// &
                         " of the initial Hessian function not passed on."
-                    test_hess_x_bfgs = .false.
+                    test_build_model_sr1 = .false.
                 else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
-                    write(stderr, *) "test_hess_x_bfgs failed: Value that is not a "// &
-                        "number at call "//trim(call_number)//" of the initial "// &
-                        "Hessian function not reported with the origin of the object."
-                    test_hess_x_bfgs = .false.
+                    write(stderr, *) "test_build_model_sr1 failed: Value that is "// &
+                        "not a number at call "//trim(call_number)//" of the "// &
+                        "initial Hessian function not reported with the origin of "// &
+                        "the object."
+                    test_build_model_sr1 = .false.
                 end if
             end do
         end do
 
-    end function test_hess_x_bfgs
+    contains
+
+        function ref_sr1_model(steps, grad_diffs) result(matrix)
+            !
+            ! this function applies the SR1 update of every pair, skipping those whose
+            ! denominator is too small, to the dense initial Hessian of the mock
+            !
+            real(rp), intent(in) :: steps(:, :), grad_diffs(:, :)
+            real(rp) :: matrix(n_param, n_param)
+
+            real(rp) :: residual(n_param), denominator
+            integer(ip) :: i_param, j
+
+            matrix = 0.0_rp
+            do i_param = 1, n_param
+                matrix(i_param, i_param) = init_hess_diag(i_param)
+            end do
+            do j = 1, size(steps, 2)
+                residual = grad_diffs(:, j) - matmul(matrix, steps(:, j))
+                denominator = dot_product(steps(:, j), residual)
+                if (abs(denominator) <= &
+                    sr1_skip_thresh * norm2(steps(:, j)) * norm2(residual)) cycle
+                matrix = matrix + spread(residual, 2, n_param) * &
+                         spread(residual, 1, n_param) / denominator
+            end do
+
+        end function ref_sr1_model
+
+    end function test_build_model_sr1
+
+    logical(c_bool) function test_build_model_bfgs() bind(C)
+        !
+        ! this function tests the subroutine which builds the model of the BFGS
+        ! updating scheme from the history, by comparing with the recursive BFGS update
+        ! of a dense matrix
+        !
+        use otr_rotation_qn, only: bfgs_updating_type, error_rotation_qn, &
+                                   bfgs_skip_thresh
+        use test_reference, only: host_context, host_context_reached
+
+        type(bfgs_updating_type) :: object
+        real(rp) :: kappa_list(n_param, 4), grad_diff_list(n_param, 4), &
+                    model(n_param, n_param), expected(n_param, n_param)
+        integer(ip) :: error, n_calls, i_call, i_kind
+        integer(ip), parameter :: kept(2) = [1, 4]
+        character(len=8) :: call_number
+
+        ! assume tests pass
+        test_build_model_bfgs = .true.
+
+        ! build the model of a history of four pairs: the first with positive curvature
+        ! and a step orthogonal to the last axis, along which the initial Hessian of the
+        ! mock is negative, the second with negative curvature, the third with positive
+        ! curvature along the last axis, along which the model so far is still
+        ! negative, and the fourth with positive curvature and a step mostly within the
+        ! first two axes, so that the second and the third have to be skipped and
+        ! dropped from the history, whose other pairs keep their order
+        call random_number(kappa_list)
+        kappa_list = kappa_list + 0.5_rp
+        kappa_list(n_param, 1) = 0.0_rp
+        grad_diff_list(:, 1) = [4.0_rp, 5.0_rp, 6.0_rp] * kappa_list(:, 1)
+        grad_diff_list(:, 2) = -kappa_list(:, 2)
+        kappa_list(:, 3) = [0.0_rp, 0.0_rp, 1.0_rp]
+        grad_diff_list(:, 3) = 2.0_rp * kappa_list(:, 3)
+        kappa_list(n_param, 4) = 0.1_rp * kappa_list(n_param, 4)
+        call random_number(grad_diff_list(:, 4))
+        grad_diff_list(:, 4) = [4.0_rp, 5.0_rp, 6.0_rp] * kappa_list(:, 4) + &
+                               0.1_rp * grad_diff_list(:, 4)
+        call setup_updating_object(object)
+        object%n_points = 4
+        object%kappa_list(:, :4) = kappa_list
+        object%grad_diff_list(:, :4) = grad_diff_list
+        call object%build_model(error)
+        n_calls = host_context%n_calls
+        if (error /= 0) then
+            write(stderr, *) "test_build_model_bfgs failed: Produced error."
+            test_build_model_bfgs = .false.
+        end if
+        if (object%n_points /= 2 .or. object%n_terms /= 4) then
+            write(stderr, *) "test_build_model_bfgs failed: Pairs without positive "// &
+                "curvature in the history or the model not dropped."
+            test_build_model_bfgs = .false.
+        else if (.not. all(is_close(object%kappa_list(:, :2), kappa_list(:, kept), &
+                                    0.0_rp)) .or. &
+                 .not. all(is_close(object%grad_diff_list(:, :2), &
+                                    grad_diff_list(:, kept), 0.0_rp))) then
+            write(stderr, *) "test_build_model_bfgs failed: Kept pairs wrong."
+            test_build_model_bfgs = .false.
+        end if
+        model = model_matrix(object)
+        expected = ref_bfgs_model(kappa_list, grad_diff_list)
+        if (.not. all(is_close(model, expected))) then
+            write(stderr, *) "test_build_model_bfgs failed: Model differs from the "// &
+                "recursive BFGS update."
+            test_build_model_bfgs = .false.
+        end if
+        if (.not. all(is_close(matmul(model, kappa_list(:, 4)), &
+                               grad_diff_list(:, 4)))) then
+            write(stderr, *) "test_build_model_bfgs failed: Model does not satisfy "// &
+                "the secant condition of the newest pair."
+            test_build_model_bfgs = .false.
+        end if
+        if (n_calls /= 3) then
+            write(stderr, *) "test_build_model_bfgs failed: Initial Hessian "// &
+                "function not called with the host context for every pair with "// &
+                "positive curvature."
+            test_build_model_bfgs = .false.
+        end if
+        if (.not. host_context_reached("build_model_bfgs")) &
+            test_build_model_bfgs = .false.
+
+        ! let every call of the initial Hessian function fail in turn, by returning an
+        ! error, which the routine has to pass on, and a value that is not a number,
+        ! which it has to report with the origin of the object
+        do i_call = 1, n_calls
+            write(call_number, '(I0)') i_call
+            do i_kind = 1, 2
+                call setup_updating_object(object)
+                object%n_points = 4
+                object%kappa_list(:, :4) = kappa_list
+                object%grad_diff_list(:, :4) = grad_diff_list
+                host_context%failing_call = i_call
+                if (i_kind == 1) host_context%mock_error = 7
+                if (i_kind == 2) host_context%nan_output = 1
+                call object%build_model(error)
+                if (i_kind == 1 .and. error /= 7) then
+                    write(stderr, *) "test_build_model_bfgs failed: Error of call "// &
+                        trim(call_number)// &
+                        " of the initial Hessian function not passed on."
+                    test_build_model_bfgs = .false.
+                else if (i_kind == 2 .and. error /= error_rotation_qn + 1) then
+                    write(stderr, *) "test_build_model_bfgs failed: Value that is "// &
+                        "not a number at call "//trim(call_number)//" of the "// &
+                        "initial Hessian function not reported with the origin of "// &
+                        "the object."
+                    test_build_model_bfgs = .false.
+                end if
+            end do
+        end do
+
+    contains
+
+        function ref_bfgs_model(steps, grad_diffs) result(matrix)
+            !
+            ! this function applies the BFGS update of every pair, skipping those
+            ! without sufficiently positive curvature in the pair or in the model so
+            ! far, to the dense initial Hessian of the mock
+            !
+            real(rp), intent(in) :: steps(:, :), grad_diffs(:, :)
+            real(rp) :: matrix(n_param, n_param)
+
+            real(rp) :: model_step(n_param), curvature, model_curvature
+            integer(ip) :: i_param, j
+
+            matrix = 0.0_rp
+            do i_param = 1, n_param
+                matrix(i_param, i_param) = init_hess_diag(i_param)
+            end do
+            do j = 1, size(steps, 2)
+                curvature = dot_product(steps(:, j), grad_diffs(:, j))
+                if (curvature <= bfgs_skip_thresh * norm2(steps(:, j)) * &
+                    norm2(grad_diffs(:, j))) cycle
+                model_step = matmul(matrix, steps(:, j))
+                model_curvature = dot_product(steps(:, j), model_step)
+                if (model_curvature <= &
+                    bfgs_skip_thresh * norm2(steps(:, j)) * norm2(model_step)) cycle
+                matrix = matrix - spread(model_step, 2, n_param) * &
+                         spread(model_step, 1, n_param) / model_curvature + &
+                         spread(grad_diffs(:, j), 2, n_param) * &
+                         spread(grad_diffs(:, j), 1, n_param) / curvature
+            end do
+
+        end function ref_bfgs_model
+
+    end function test_build_model_bfgs
 
 end module otr_rotation_qn_unit_tests

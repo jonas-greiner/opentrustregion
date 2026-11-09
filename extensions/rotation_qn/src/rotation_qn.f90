@@ -58,43 +58,50 @@ module otr_rotation_qn
     ! the errors they detect themselves
     integer(ip), parameter :: error_rotation_qn = 5400
 
+    ! relative thresholds below which the updating schemes skip a pair of the history:
+    ! the SR1 denominator s^T (y - B s) relative to |s| |y - B s| (Nocedal & Wright,
+    ! Numerical Optimization, Eq. 6.26) and the BFGS curvatures s^T y relative to
+    ! |s| |y| and s^T B s relative to |s| |B s|
+    real(rp), parameter :: sr1_skip_thresh = 1e-8_rp, bfgs_skip_thresh = 1e-8_rp
+
     ! rotation QN object, holding the history of steps and gradient differences, the
-    ! settings and the host's transport and initial Hessian functions, whose updating
-    ! schemes extend it with their Hessian linear transformation
+    ! settings, the host's transport and initial Hessian functions and the model the
+    ! updating scheme builds from the history, the rank-1 terms which the Hessian
+    ! linear transformation adds to the initial Hessian, B x = B_0 x + sum_k
+    ! coeffs(k) vectors(:, k) vectors(:, k)^T x
     type, abstract, extends(extension_type) :: updating_type
-        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:)
-        integer(ip) :: n_points = 0
+        real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:), &
+                                 vectors(:, :), coeffs(:)
+        integer(ip) :: n_points = 0, n_terms = 0
         type(rotation_qn_settings_type) :: settings
         procedure(transport_type), pointer, nopass :: transport => null()
         procedure(init_hess_type), pointer, nopass :: init_hess => null()
     contains
         procedure :: update_orbs => update_orbs_rotation_qn
+        procedure :: hess_x => hess_x_rotation_qn
         procedure :: init => init_rotation_qn
         procedure :: add => add_rotation_qn
-        procedure(skip_add_interface), deferred :: skip_add
+        procedure :: model_x => model_x_rotation_qn
+        procedure(build_model_interface), deferred :: build_model
     end type
 
     type, extends(updating_type) :: sr1_updating_type
     contains
-        procedure :: hess_x => hess_x_sr1
-        procedure :: skip_add => sr1_skip_add
+        procedure :: build_model => build_model_sr1
     end type
 
     type, extends(updating_type) :: bfgs_updating_type
     contains
-        procedure :: hess_x => hess_x_bfgs
-        procedure :: skip_add => bfgs_skip_add
+        procedure :: build_model => build_model_bfgs
     end type
 
     abstract interface
-        function skip_add_interface(self, kappa, grad_diff, error) result(skip)
-            import updating_type, rp, ip
+        subroutine build_model_interface(self, error)
+            import updating_type, ip
 
-            class(updating_type), intent(in) :: self
-            real(rp), intent(in) :: kappa(:), grad_diff(:)
-            logical :: skip
+            class(updating_type), intent(inout) :: self
             integer(ip), intent(out) :: error
-        end function skip_add_interface
+        end subroutine build_model_interface
     end interface
 
 contains
@@ -324,66 +331,57 @@ contains
 
     subroutine add_rotation_qn(self, kappa, grad, error)
         !
-        ! this subroutine adds a new rotation and gradient to the corresponding lists
-        ! and transports the history accordingly; the gradient becomes the last one
-        ! also if the skipping criterion rejects the pair, so that the next pair starts
-        ! at the current point
+        ! this subroutine transports the history to the new point, adds the pair of the
+        ! step and the gradient difference to the point before, dropping the oldest
+        ! pair once the history is full, and builds the model of the new point; the
+        ! step needs no transport, since a geodesic transports its own direction to
+        ! itself
         !
         class(updating_type), intent(inout) :: self
         real(rp), intent(in) :: kappa(:), grad(:)
         integer(ip), intent(out) :: error
 
-        real(rp), allocatable :: grad_diff(:)
         integer(ip) :: i
-        logical :: skip
 
         ! initialize error flag
         error = 0
 
-        ! transport history
-        do i = 1, self%n_points
-            call invoke_transport(self%transport, kappa, self%kappa_list(:, i), &
-                                  self%settings, self%error_origin, error)
-            if (error /= 0) return
-            call invoke_transport(self%transport, kappa, self%grad_diff_list(:, i), &
-                                  self%settings, self%error_origin, error)
-            if (error /= 0) return
-        end do
-
-        ! check if last gradient is available to calculate gradient difference
-        skip = .false.
-        if (allocated(self%last_grad)) then
-            ! calculate gradient difference
+        ! a pair needs the gradient of the point before and room in the history
+        if (allocated(self%last_grad) .and. self%settings%max_points > 0) then
+            ! transport history and last gradient
+            do i = 1, self%n_points
+                call invoke_transport(self%transport, kappa, self%kappa_list(:, i), &
+                                      self%settings, self%error_origin, error)
+                if (error /= 0) return
+                call invoke_transport(self%transport, kappa, &
+                                      self%grad_diff_list(:, i), self%settings, &
+                                      self%error_origin, error)
+                if (error /= 0) return
+            end do
             call invoke_transport(self%transport, kappa, self%last_grad, &
                                   self%settings, self%error_origin, error)
             if (error /= 0) return
-            grad_diff = grad - self%last_grad
 
-            ! check if step addition should be skipped
-            skip = self%skip_add(kappa, grad_diff, error)
-            if (error /= 0) return
-        end if
-
-        ! the next pair starts at the current point, also if this one is skipped
-        self%last_grad = grad
-        if (skip) return
-
-        ! check if point is added
-        if (allocated(grad_diff) .and. self%settings%max_points > 0) then
-            ! add new point
-            if (self%n_points < self%settings%max_points) then
-                self%n_points = self%n_points + 1
-            ! replace old point
-            else
-                self%kappa_list(:, 1:self%n_points - 1) = &
+            ! drop the oldest pair of a full history
+            if (self%n_points == self%settings%max_points) then
+                self%kappa_list(:, :self%n_points - 1) = &
                     self%kappa_list(:, 2:self%n_points)
-                self%grad_diff_list(:, 1:self%n_points - 1) = &
+                self%grad_diff_list(:, :self%n_points - 1) = &
                     self%grad_diff_list(:, 2:self%n_points)
+                self%n_points = self%n_points - 1
             end if
+
+            ! add the new pair
+            self%n_points = self%n_points + 1
             self%kappa_list(:, self%n_points) = kappa
-            self%grad_diff_list(:, self%n_points) = grad_diff
-            deallocate(grad_diff)
+            self%grad_diff_list(:, self%n_points) = grad - self%last_grad
         end if
+
+        ! the next pair starts at the new point
+        self%last_grad = grad
+
+        ! build the model of the new point, whose initial Hessian has changed
+        call self%build_model(error)
 
     end subroutine add_rotation_qn
 
@@ -402,310 +400,171 @@ contains
         self%settings = settings
         self%n_param = n_param
 
-        ! allocate arrays
+        ! allocate the history and the model, whose BFGS scheme adds two terms per
+        ! pair
         allocate(self%kappa_list(n_param, self%settings%max_points), &
-                 self%grad_diff_list(n_param, self%settings%max_points))
+                 self%grad_diff_list(n_param, self%settings%max_points), &
+                 self%vectors(n_param, 2 * self%settings%max_points), &
+                 self%coeffs(2 * self%settings%max_points))
 
     end subroutine init_rotation_qn
 
-    function sr1_skip_add(self, kappa, grad_diff, error) result(skip)
+    subroutine model_x_rotation_qn(self, x, model_x, n_terms, error)
         !
-        ! this function implements the skipping criterion for the SR1 update
+        ! this subroutine applies the initial Hessian, updated by the first n_terms
+        ! rank-1 terms of the model, to a vector
         !
-        class(sr1_updating_type), intent(in) :: self
-        real(rp), intent(in) :: kappa(:), grad_diff(:)
-        logical :: skip
+        class(updating_type), intent(in) :: self
+        real(rp), intent(in) :: x(:)
+        real(rp), intent(out) :: model_x(:)
+        integer(ip), intent(in) :: n_terms
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_param
-        real(rp) :: kappa_norm, residual_norm, curvature
-        real(rp), allocatable :: residual(:)
-        real(rp), parameter :: curvature_threshold = 1e-8_rp
-        real(rp), external :: ddot
+        real(rp) :: projections(n_terms)
+        external :: dgemv
 
-        ! initialize error flag
-        error = 0
-
-        skip = .false.
-        n_param = size(kappa)
-        kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
-        residual = -kappa
-        call invoke_init_hess(self%init_hess, residual, self%settings, &
+        ! apply the initial Hessian
+        model_x = x
+        call invoke_init_hess(self%init_hess, model_x, self%settings, &
                               self%error_origin, error)
-        if (error /= 0) return
-        residual = residual + grad_diff
-        residual_norm = sqrt(ddot(n_param, residual, 1_ip, residual, 1_ip))
-        curvature = abs(ddot(n_param, kappa, 1_ip, residual, 1_ip))
-        if (curvature < curvature_threshold * kappa_norm * residual_norm) skip = .true.
-        deallocate(residual)
+        if (error /= 0 .or. n_terms == 0) return
 
-    end function sr1_skip_add
+        ! add coeffs(k) vectors(:, k) vectors(:, k)^T x for every term
+        call dgemv("T", self%n_param, n_terms, 1.0_rp, self%vectors, self%n_param, x, &
+                   1_ip, 0.0_rp, projections, 1_ip)
+        projections = self%coeffs(:n_terms) * projections
+        call dgemv("N", self%n_param, n_terms, 1.0_rp, self%vectors, self%n_param, &
+                   projections, 1_ip, 1.0_rp, model_x, 1_ip)
 
-    subroutine hess_x_sr1(self, x, hess_x, error, context)
+    end subroutine model_x_rotation_qn
+
+    subroutine hess_x_rotation_qn(self, x, hess_x, error, context)
         !
-        ! this subroutine is the Hessian linear transformation of the SR1 updating
-        ! scheme, which implements the L-SR1 version according to Byrd, R.H., Nocedal,
-        ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
-        ! https://doi.org/10.1007/BF01582063
+        ! this subroutine is the Hessian linear transformation of the rotation QN
+        ! object, which applies its model
         !
-        use opentrustregion_core, only: numerical_zero, verbosity_error
+        class(updating_type), intent(inout) :: self
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
 
+        call self%model_x(x, hess_x, self%n_terms, error)
+
+    end subroutine hess_x_rotation_qn
+
+    subroutine keep_pair(self, i, n_kept)
+        !
+        ! this subroutine keeps the i-th pair of the history as the n_kept-th, so that
+        ! the pairs the updating scheme skips are dropped from the history
+        !
+        class(updating_type), intent(inout) :: self
+        integer(ip), intent(in) :: i
+        integer(ip), intent(inout) :: n_kept
+
+        n_kept = n_kept + 1
+        self%kappa_list(:, n_kept) = self%kappa_list(:, i)
+        self%grad_diff_list(:, n_kept) = self%grad_diff_list(:, i)
+
+    end subroutine keep_pair
+
+    subroutine build_model_sr1(self, error)
+        !
+        ! this subroutine builds the model of the SR1 updating scheme by applying the
+        ! symmetric rank-1 update of every pair of the history, from the oldest to the
+        ! newest, to the initial Hessian, B_j = B_{j-1} + r r^T / (s^T r) with
+        ! r = y - B_{j-1} s, the recursive form of the limited-memory SR1 matrix of
+        ! Byrd, R.H., Nocedal, J. & Schnabel, R.B. Mathematical Programming 63,
+        ! 129–156 (1994), https://doi.org/10.1007/BF01582063, and drops every pair
+        ! whose denominator is too small
+        !
         class(sr1_updating_type), intent(inout) :: self
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
 
-        integer(ip) :: n_param, i, info
-        real(rp), allocatable :: psi(:, :), U(:, :), q(:), z(:)
-        integer(ip), allocatable :: ipiv(:)
-        character(len=300) :: msg
-        external :: dgemv, dgemm, dgetrf, dgetrs
-        real(rp), external :: ddot
+        integer(ip) :: i, n_kept
+        real(rp) :: residual(self%n_param), denominator
+        real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
         error = 0
 
-        ! get number of parameters
-        n_param = size(x)
-
-        ! check if trial vector vanishes
-        if (abs(ddot(n_param, x, 1_ip, x, 1_ip)) < numerical_zero) then
-            hess_x = 0.0_rp
-            return
-        end if
-
-        ! initialize with Hessian diagonal
-        hess_x = x
-        call invoke_init_hess(self%init_hess, hess_x, self%settings, &
-                              self%error_origin, error)
-        if (error /= 0) return
-
-        ! only current point is available
-        if (self%n_points == 0) return
-
-        ! build psi = grad_diff - h_start * kappa
-        allocate(psi(n_param, self%n_points))
+        self%n_terms = 0
+        n_kept = 0
         do i = 1, self%n_points
-            psi(:, i) = -self%kappa_list(:, i)
-            call invoke_init_hess(self%init_hess, psi(:, i), self%settings, &
-                                  self%error_origin, error)
+            ! residual of the secant condition of the model so far
+            call self%model_x(self%kappa_list(:, i), residual, self%n_terms, error)
             if (error /= 0) return
-            psi(:, i) = psi(:, i) + self%grad_diff_list(:, i)
+            residual = self%grad_diff_list(:, i) - residual
+
+            ! skip the pair if the denominator is too small
+            denominator = ddot(self%n_param, self%kappa_list(:, i), 1_ip, residual, &
+                               1_ip)
+            if (abs(denominator) <= &
+                sr1_skip_thresh * dnrm2(self%n_param, self%kappa_list(:, i), 1_ip) * &
+                dnrm2(self%n_param, residual, 1_ip)) cycle
+
+            ! add the term of the pair
+            call keep_pair(self, i, n_kept)
+            self%n_terms = self%n_terms + 1
+            self%vectors(:, self%n_terms) = residual
+            self%coeffs(self%n_terms) = 1.0_rp / denominator
         end do
+        self%n_points = n_kept
 
-        ! build U = psi^T * kappa
-        allocate(U(self%n_points, self%n_points))
-        call dgemm("T", "N", self%n_points, self%n_points, n_param, 1.0_rp, psi, &
-                   n_param, self%kappa_list, n_param, 0.0_rp, U, self%n_points)
+    end subroutine build_model_sr1
 
-        ! symmetrize U
-        U = 0.5_rp * (U + transpose(U))
-
-        ! q = psi^T * x
-        allocate(q(self%n_points))
-        call dgemv("T", n_param, self%n_points, 1.0_rp, psi, n_param, x, 1_ip, 0.0_rp, &
-                   q, 1_ip)
-
-        ! LU factorize U
-        allocate(ipiv(self%n_points))
-        call dgetrf(self%n_points, self%n_points, U, self%n_points, ipiv, info)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write(msg, '(A, I0)') "Matrix inversion failed: Error in DGETRF, info = ", &
-                info
-            call self%settings%log(msg, verbosity_error, .true.)
-            error = 1
-            call add_error_origin(error, self%error_origin, self%settings)
-            return
-        end if
-
-        ! solve U * z = q
-        z = q
-        deallocate(q)
-        call dgetrs("N", self%n_points, 1_ip, U, self%n_points, ipiv, z, &
-                    self%n_points, info)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write(msg, '(A, I0)') "Matrix solve failed: Error in DGETRS, info = ", info
-            call self%settings%log(msg, verbosity_error, .true.)
-            error = 1
-            call add_error_origin(error, self%error_origin, self%settings)
-            return
-        end if
-        deallocate(U, ipiv)
-
-        ! w += psi * z
-        call dgemv("N", n_param, self%n_points, 1.0_rp, psi, n_param, z, 1_ip, 1.0_rp, &
-                   hess_x, 1_ip)
-
-        ! deallocate arrays
-        deallocate(psi, z)
-
-    end subroutine hess_x_sr1
-
-    function bfgs_skip_add(self, kappa, grad_diff, error) result(skip)
+    subroutine build_model_bfgs(self, error)
         !
-        ! this function implements the skipping criterion for the BFGS update
+        ! this subroutine builds the model of the BFGS updating scheme by applying the
+        ! BFGS update of every pair of the history, from the oldest to the newest, to
+        ! the initial Hessian, B_j = B_{j-1} - B_{j-1} s s^T B_{j-1} / (s^T B_{j-1} s)
+        ! + y y^T / (s^T y), the recursive form of the limited-memory BFGS matrix of
+        ! Byrd, R.H., Nocedal, J. & Schnabel, R.B. Mathematical Programming 63,
+        ! 129–156 (1994), https://doi.org/10.1007/BF01582063, and drops every pair
+        ! whose curvature along its step, in the history or in the model so far, is
+        ! not sufficiently positive, which keeps the model positive definite if the
+        ! initial Hessian is
         !
-        class(bfgs_updating_type), intent(in) :: self
-        real(rp), intent(in) :: kappa(:), grad_diff(:)
-        integer(ip), intent(out) :: error
-        logical :: skip
-
-        integer(ip) :: n_param
-        real(rp) :: kappa_norm, grad_diff_norm, kappa_grad_dot
-        real(rp), parameter :: curvature_threshold = 1e-14_rp
-        real(rp), external :: ddot
-
-        ! initialize error flag
-        error = 0
-
-        skip = .false.
-        n_param = size(kappa)
-        kappa_norm = sqrt(ddot(n_param, kappa, 1_ip, kappa, 1_ip))
-        grad_diff_norm = sqrt(ddot(n_param, grad_diff, 1_ip, grad_diff, 1_ip))
-        kappa_grad_dot = ddot(n_param, kappa, 1_ip, grad_diff, 1_ip)
-
-        ! avoid zero near-zero curvature to avoid singular compact scaling matrix,
-        ! negative curvature is not a problem since this is handled by the trust region
-        ! solver
-        if (abs(kappa_grad_dot) < curvature_threshold * kappa_norm * grad_diff_norm) &
-            skip = .true.
-
-    end function bfgs_skip_add
-
-    subroutine hess_x_bfgs(self, x, hess_x, error, context)
-        !
-        ! this subroutine is the Hessian linear transformation of the BFGS updating
-        ! scheme, which implements the L-BFGS version according to Byrd, R.H., Nocedal,
-        ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994).
-        ! https://doi.org/10.1007/BF01582063
-        !
-        use opentrustregion_core, only: numerical_zero, verbosity_error
-
         class(bfgs_updating_type), intent(inout) :: self
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: hess_x(:)
         integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
 
-        integer(ip) :: n_param, i, j, info
-        real(rp) :: kappa_grad_dot
-        real(rp), allocatable :: compact_scal_mat(:, :), solution(:), init_hess_x(:)
-        integer(ip), allocatable :: ipiv(:)
-        character(len=300) :: msg
-        external :: dgetrf, dgetrs
-        real(rp), external :: ddot
+        integer(ip) :: i, n_kept
+        real(rp) :: model_kappa(self%n_param), kappa_grad_diff, kappa_model_kappa
+        real(rp), external :: ddot, dnrm2
 
         ! initialize error flag
         error = 0
 
-        ! number of parameters
-        n_param = size(x)
-
-        ! check if trial vector vanishes
-        if (abs(ddot(n_param, x, 1_ip, x, 1_ip)) < numerical_zero) then
-            hess_x = 0.0_rp
-            return
-        end if
-
-        ! initialize with Hessian diagonal
-        hess_x = x
-        call invoke_init_hess(self%init_hess, hess_x, self%settings, &
-                              self%error_origin, error)
-        if (error /= 0) return
-
-        ! only current point is available
-        if (self%n_points == 0) return
-
-        ! build compact scaling matrix
-        ! [ kappa^T * h_start * kappa    L ]
-        ! [             L^T            -D ]
-        allocate(compact_scal_mat(2 * self%n_points, 2 * self%n_points))
-        compact_scal_mat = 0.0_rp
-        do j = 1, self%n_points
-            init_hess_x = self%kappa_list(:, j)
-            call invoke_init_hess(self%init_hess, init_hess_x, self%settings, &
-                                  self%error_origin, error)
-            if (error /= 0) return
-            do i = 1, self%n_points
-                ! Weighted Top-Left: kappa_i^T * h_start * kappa_j
-                compact_scal_mat(i, j) = ddot(n_param, self%kappa_list(:, i), 1_ip, &
-                                              init_hess_x, 1_ip)
-
-                ! L and D parts (do not depend on initial Hessian)
-                kappa_grad_dot = ddot(n_param, self%kappa_list(:, i), 1_ip, &
-                                      self%grad_diff_list(:, j), 1_ip)
-                if (i > j) then
-                    compact_scal_mat(i, j + self%n_points) = kappa_grad_dot
-                    compact_scal_mat(j + self%n_points, i) = kappa_grad_dot
-                else if (i == j) then
-                    compact_scal_mat(i + self%n_points, j + self%n_points) = &
-                        -kappa_grad_dot
-                end if
-            end do
-        end do
-
-        ! build right-hand side
-        ! [ kappa^T * h_start * x ]
-        ! [   grad_diff^T * x    ]
-        allocate(solution(2 * self%n_points))
+        self%n_terms = 0
+        n_kept = 0
         do i = 1, self%n_points
-            ! weighted dot product for the top half of RHS
-            solution(i) = ddot(n_param, self%kappa_list(:, i), 1_ip, hess_x, 1_ip)
-            solution(i + self%n_points) = ddot(n_param, self%grad_diff_list(:, i), &
-                                               1_ip, x, 1_ip)
-        end do
+            ! skip the pair if its curvature is not sufficiently positive
+            kappa_grad_diff = ddot(self%n_param, self%kappa_list(:, i), 1_ip, &
+                                   self%grad_diff_list(:, i), 1_ip)
+            if (kappa_grad_diff <= &
+                bfgs_skip_thresh * dnrm2(self%n_param, self%kappa_list(:, i), 1_ip) * &
+                dnrm2(self%n_param, self%grad_diff_list(:, i), 1_ip)) cycle
 
-        ! LU factorize compact scaling matrix
-        allocate(ipiv(2 * self%n_points))
-        call dgetrf(2 * self%n_points, 2 * self%n_points, compact_scal_mat, &
-                    2 * self%n_points, ipiv, info)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write(msg, '(A, I0)') "Matrix inversion failed: Error in DGETRF, info = ", &
-                info
-            call self%settings%log(msg, verbosity_error, .true.)
-            error = 1
-            call add_error_origin(error, self%error_origin, self%settings)
-            return
-        end if
-
-        ! solve compact_scal_mat * solution = rhs
-        call dgetrs("N", 2 * self%n_points, 1_ip, compact_scal_mat, 2 * self%n_points, &
-                    ipiv, solution, 2 * self%n_points, info)
-        deallocate(compact_scal_mat, ipiv)
-
-        ! check for successful execution
-        if (info /= 0) then
-            write(msg, '(A, I0)') "Matrix inversion failed: Error in DGETRS, info = ", &
-                info
-            call self%settings%log(msg, verbosity_error, .true.)
-            error = 1
-            call add_error_origin(error, self%error_origin, self%settings)
-            return
-        end if
-
-        ! construct Hessian linear transformation
-        ! hess_x = hess_diag * x - ([hess_diag * kappa, grad_diff] * solution)
-        do i = 1, self%n_points
-            ! subtract rotation difference contributions
-            init_hess_x = self%kappa_list(:, i)
-            call invoke_init_hess(self%init_hess, init_hess_x, self%settings, &
-                                  self%error_origin, error)
+            ! skip the pair if the curvature of the model so far is not sufficiently
+            ! positive
+            call self%model_x(self%kappa_list(:, i), model_kappa, self%n_terms, error)
             if (error /= 0) return
-            hess_x = hess_x - (solution(i) * init_hess_x)
-            ! subtract gradient difference contributions
-            hess_x = hess_x - solution(i + self%n_points) * self%grad_diff_list(:, i)
+            kappa_model_kappa = ddot(self%n_param, self%kappa_list(:, i), 1_ip, &
+                                     model_kappa, 1_ip)
+            if (kappa_model_kappa <= &
+                bfgs_skip_thresh * dnrm2(self%n_param, self%kappa_list(:, i), 1_ip) * &
+                dnrm2(self%n_param, model_kappa, 1_ip)) cycle
+
+            ! add the two terms of the pair
+            call keep_pair(self, i, n_kept)
+            self%vectors(:, self%n_terms + 1) = model_kappa
+            self%coeffs(self%n_terms + 1) = -1.0_rp / kappa_model_kappa
+            self%vectors(:, self%n_terms + 2) = self%grad_diff_list(:, i)
+            self%coeffs(self%n_terms + 2) = 1.0_rp / kappa_grad_diff
+            self%n_terms = self%n_terms + 2
         end do
+        self%n_points = n_kept
 
-        ! deallocate arrays
-        deallocate(solution)
-
-    end subroutine hess_x_bfgs
+    end subroutine build_model_bfgs
 
 end module otr_rotation_qn
