@@ -35,6 +35,7 @@ typedef struct {
   hess_x_fp init_hess;
   precond_fp init_precond;
   obj_func_grad_fp obj_func_grad;
+  transport_fp transport;
   logger_fp logger;
   c_bool initialized;
   c_int verbose;
@@ -56,7 +57,6 @@ void init_rotation_qn_settings(rotation_qn_settings_type *settings);
  * @param n_param_c                               Number of parameters
  * @param update_orbs_c_funptr                    C pointer to update_orbs callback
  * @param obj_func_c_funptr                       C pointer to obj_func callback
- * @param transport_c_funptr                      C pointer to transport callback
  * @param update_orbs_rotation_qn_c_funptr        Output: wrapped update_orbs function
  *                                                pointer
  * @param obj_func_rotation_qn_c_funptr           Output: wrapped objective function
@@ -76,7 +76,6 @@ void init_rotation_qn_settings(rotation_qn_settings_type *settings);
  */
 c_int rotation_qn_factory(c_int n_param_c, update_orbs_fp update_orbs_c_funptr,
                           obj_func_fp obj_func_c_funptr,
-                          transport_fp transport_c_funptr,
                           update_orbs_fp *update_orbs_rotation_qn_c_funptr,
                           obj_func_fp *obj_func_rotation_qn_c_funptr,
                           void **extension_c, solver_settings_type *solver_settings_c,

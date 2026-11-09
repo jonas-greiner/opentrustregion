@@ -21,7 +21,8 @@ module otr_rotation_qn_test_reference
     type(rotation_qn_settings_type), parameter :: ref_rotation_qn_settings = &
         rotation_qn_settings_type(logger=null(), init_hess=null(), &
                                   init_precond=null(), obj_func_grad=null(), &
-                                  verbose=3, max_points=100, qn_method="bfgs")
+                                  transport=null(), verbose=3, max_points=100, &
+                                  qn_method="bfgs")
 
     interface operator(==)
         module procedure equal_rotation_qn
@@ -284,6 +285,7 @@ contains
         values_out%init_hess = transfer(3_c_intptr_t, c_null_funptr)
         values_out%init_precond = transfer(4_c_intptr_t, c_null_funptr)
         values_out%obj_func_grad = transfer(5_c_intptr_t, c_null_funptr)
+        values_out%transport = transfer(6_c_intptr_t, c_null_funptr)
 
         ! set logical, integers and keyword
         values_out%initialized = .true.
@@ -321,6 +323,8 @@ contains
             field_value = real(transfer(values%init_precond, 0_c_intptr_t), kind=c_rp)
         case ("obj_func_grad")
             field_value = real(transfer(values%obj_func_grad, 0_c_intptr_t), kind=c_rp)
+        case ("transport")
+            field_value = real(transfer(values%transport, 0_c_intptr_t), kind=c_rp)
         case ("logger")
             field_value = real(transfer(values%logger, 0_c_intptr_t), kind=c_rp)
         case ("context")
@@ -353,6 +357,7 @@ contains
             .not. c_associated(settings_c%init_hess) .and. &
             .not. c_associated(settings_c%init_precond) .and. &
             .not. c_associated(settings_c%obj_func_grad) .and. &
+            .not. c_associated(settings_c%transport) .and. &
             .not. c_associated(settings_c%logger) .and. &
             .not. c_associated(settings_c%context)
 

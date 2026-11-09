@@ -45,8 +45,8 @@ bool is_default_rotation_qn_settings(const rotation_qn_settings_type *settings);
  * Host of the Hartmann 6D problem the factory test solves: the context of the solver
  * settings, which the orbital update, the objective function and the exact Hessian
  * the orbital update returns receive, holds the current point, its Hessian and the
- * Hessian diagonal there, and that of the rotation QN settings, which the transport
- * function and the objective function and initial Hessian of the settings receive,
+ * Hessian diagonal there, and that of the rotation QN settings, which the initial
+ * Hessian, the objective function and the transport function of the settings receive,
  * refers to it; both count the calls of the callback functions
  * ------------------------------------------------------------------ */
 
@@ -160,13 +160,13 @@ bool test_rotation_qn_factory_c(void) {
   const char *qn_methods[2] = {"sr1", "bfgs"};
 
   /* solve the Hartmann 6D problem from near its minimum with either updating scheme,
-   * SR1 with the Hessian diagonal as the initial Hessian of the settings and BFGS
-   * with the default, which is the same, and the objective function of the settings,
-   * which has to replace the host's, and check that the solve converges to the
-   * minimum, that every callback function is called with its context, while neither
-   * the host's objective function nor the exact Hessian the orbital update returns
-   * is, that the factory lets the solver refresh the model after a rejected step and
-   * that the object is released */
+   * SR1 with the Hessian diagonal as the initial Hessian of the settings and an
+   * identity as their transport function and BFGS with the defaults, which are the
+   * same, and the objective function of the settings, which has to replace the
+   * host's, and check that the solve converges to the minimum, that every callback
+   * function is called with its context, while neither the host's objective function
+   * nor the exact Hessian the orbital update returns is, that the factory lets the
+   * solver refresh the model after a rejected step and that the object is released */
   for (int i_method = 0; i_method < 2; i_method++) {
     solver_host_type host = {SOLVER_HOST};
     memcpy(host.curr_vars, hartmann6d_near_minimum, sizeof(host.curr_vars));
@@ -176,8 +176,10 @@ bool test_rotation_qn_factory_c(void) {
     settings.context = &host;
     rotation_qn_settings_type rotation_qn_settings = rotation_qn_settings_init();
     strcpy(rotation_qn_settings.qn_method, qn_methods[i_method]);
-    if (i_method == 0)
+    if (i_method == 0) {
       rotation_qn_settings.init_hess = init_hess;
+      rotation_qn_settings.transport = transport;
+    }
     rotation_qn_settings.obj_func_grad = obj_func_grad;
     rotation_qn_settings.context = &settings_ctx;
     solver_state_type state;
@@ -186,8 +188,8 @@ bool test_rotation_qn_factory_c(void) {
     obj_func_fp obj_func_rotation_qn;
     void *extension = NULL;
     c_int error = rotation_qn_factory(
-        N_PARAM, update_orbs, obj_func, transport, &update_orbs_rotation_qn,
-        &obj_func_rotation_qn, &extension, &settings, &state, &rotation_qn_settings);
+        N_PARAM, update_orbs, obj_func, &update_orbs_rotation_qn, &obj_func_rotation_qn,
+        &extension, &settings, &state, &rotation_qn_settings);
     if (error != 0) {
       fprintf(stderr,
               "test_rotation_qn_factory_c failed: Factory produced error for "
@@ -216,8 +218,8 @@ bool test_rotation_qn_factory_c(void) {
               qn_methods[i_method]);
       ok = false;
     }
-    if (host.n_update_orbs == 0 || settings_ctx.n_transport == 0 ||
-        (settings_ctx.n_init_hess == 0) != (i_method != 0) ||
+    if (host.n_update_orbs == 0 || (settings_ctx.n_init_hess == 0) != (i_method != 0) ||
+        (settings_ctx.n_transport == 0) != (i_method != 0) ||
         settings_ctx.n_obj_func_grad == 0 || host.n_obj_func != 0 ||
         host.n_exact_hess_x != 0) {
       fprintf(stderr,
@@ -257,6 +259,7 @@ bool test_rotation_qn_settings_layout(void) {
                              test_name);
   ok &= check_settings_field(lookup, (uintptr_t)s.obj_func_grad, "obj_func_grad",
                              test_name);
+  ok &= check_settings_field(lookup, (uintptr_t)s.transport, "transport", test_name);
   ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
   ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
   ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);

@@ -45,18 +45,17 @@ module otr_rotation_qn_c_interface
     ! bundle of the C callback functions of rotation QN, which holds the initial
     ! Hessian and its preconditioner of the settings in the slots of the core's Hessian
     ! linear transformation and preconditioner, whose Fortran wrappers the converted
-    ! settings use, and extends that of the core by the transport function and the
-    ! objective function of the settings, held by the holder of the object, since the
-    ! settings outlive the factory call, and reached through the context of the
-    ! settings
+    ! settings use, and extends that of the core by the objective and transport
+    ! functions of the settings, held by the holder of the object, since the settings
+    ! outlive the factory call, and reached through the context of the settings
     type, extends(c_callbacks_type) :: rotation_qn_c_callbacks_type
-        procedure(transport_c_type), pointer, nopass :: transport => null()
         procedure(obj_func_grad_c_type), pointer, nopass :: obj_func_grad => null()
+        procedure(transport_c_type), pointer, nopass :: transport => null()
     end type
 
     ! derived type for rotation QN settings
     type, bind(C) :: rotation_qn_settings_type_c
-        type(c_funptr) :: init_hess, init_precond, obj_func_grad, logger
+        type(c_funptr) :: init_hess, init_precond, obj_func_grad, transport, logger
         logical(c_bool) :: initialized
         integer(c_ip) :: verbose, max_points
         character(kind=c_char) :: qn_method(kw_len + 1)
@@ -80,7 +79,7 @@ module otr_rotation_qn_c_interface
 contains
 
     function rotation_qn_factory_c_wrapper( &
-        n_param_c, update_orbs_c_funptr, obj_func_c_funptr, transport_c_funptr, &
+        n_param_c, update_orbs_c_funptr, obj_func_c_funptr, &
         update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, extension_c, &
         solver_settings_c, solver_state_c, settings_c) result(error_c) &
         bind(C, name="rotation_qn_factory")
@@ -103,8 +102,7 @@ contains
                                           finish_extension_holder
 
         integer(c_ip), intent(in), value :: n_param_c
-        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
-                                             transport_c_funptr
+        type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         type(c_funptr), intent(out) :: update_orbs_rotation_qn_c_funptr, &
                                        obj_func_rotation_qn_c_funptr
         type(c_ptr), intent(out) :: extension_c
@@ -117,7 +115,6 @@ contains
                                                 update_orbs_rotation_qn_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr, &
                                              obj_func_rotation_qn_funptr
-        procedure(transport_type), pointer :: transport_funptr
         type(rotation_qn_settings_type) :: settings
         type(rotation_qn_settings_type_c) :: local_settings_c
         type(extension_holder_type), pointer :: holder
@@ -142,14 +139,13 @@ contains
         if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
             settings, rotation_qn_settings_uninitialized_warning_msg)
 
-        ! create the holder, whose bundle hands the transport function and the initial
-        ! Hessian, preconditioning, objective and logging functions with the host
-        ! context of initialized settings to their wrappers, which the settings point to
+        ! create the holder, whose bundle hands the initial Hessian, preconditioning,
+        ! objective, transport and logging functions with the host context of
+        ! initialized settings to their wrappers, which the settings point to
         allocate(holder)
         allocate(rotation_qn_c_callbacks_type :: holder%extension_callbacks)
         select type (callbacks => holder%extension_callbacks)
         type is (rotation_qn_c_callbacks_type)
-            call c_f_procpointer(cptr=transport_c_funptr, fptr=callbacks%transport)
             if (local_settings_c%initialized) then
                 if (c_associated(local_settings_c%init_hess)) call c_f_procpointer( &
                     cptr=local_settings_c%init_hess, fptr=callbacks%hess_x)
@@ -158,6 +154,8 @@ contains
                 if (c_associated(local_settings_c%obj_func_grad)) &
                     call c_f_procpointer(cptr=local_settings_c%obj_func_grad, &
                                          fptr=callbacks%obj_func_grad)
+                if (c_associated(local_settings_c%transport)) call c_f_procpointer( &
+                    cptr=local_settings_c%transport, fptr=callbacks%transport)
             end if
             call bundle_settings_c(callbacks, local_settings_c%initialized, &
                                    local_settings_c%logger, local_settings_c%context)
@@ -170,13 +168,12 @@ contains
                                     settings, error, update_orbs_c_funptr, &
                                     obj_func_c_funptr)
 
-        ! the object can not run without the host's orbital update, objective function
-        ! and transport function
+        ! the object can not run without the host's orbital update and objective
+        ! function
         if (error == 0 .and. .not. (c_associated(update_orbs_c_funptr) .and. &
-                                    c_associated(obj_func_c_funptr) .and. &
-                                    c_associated(transport_c_funptr))) then
-            call settings%log("Orbital update, objective function and transport "// &
-                              "function have to be given.", verbosity_error, .true.)
+                                    c_associated(obj_func_c_funptr))) then
+            call settings%log("Orbital update and objective function have to be "// &
+                              "given.", verbosity_error, .true.)
             error = 1
         end if
         call add_error_origin(error, error_rotation_qn, settings)
@@ -188,12 +185,10 @@ contains
         if (error == 0) then
             update_orbs_funptr => update_orbs_f_wrapper
             obj_func_funptr => obj_func_f_wrapper
-            transport_funptr => transport_f_wrapper
             call rotation_qn_factory( &
                 int(n_param_c, kind=ip), update_orbs_funptr, obj_func_funptr, &
-                transport_funptr, update_orbs_rotation_qn_funptr, &
-                obj_func_rotation_qn_funptr, holder%solver_settings, holder%state, &
-                error, settings)
+                update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, &
+                holder%solver_settings, holder%state, error, settings)
         end if
 
         ! write the wired solver settings back and return the C wrappers of the orbital
@@ -321,6 +316,11 @@ contains
             else
                 settings%obj_func_grad => null()
             end if
+            if (c_associated(settings_c%transport)) then
+                settings%transport => transport_f_wrapper
+            else
+                settings%transport => null()
+            end if
             if (c_associated(settings_c%logger)) then
                 settings%logger => logger_f_wrapper
             else
@@ -355,6 +355,7 @@ contains
         settings_c%init_hess = c_null_funptr
         settings_c%init_precond = c_null_funptr
         settings_c%obj_func_grad = c_null_funptr
+        settings_c%transport = c_null_funptr
         settings_c%logger = c_null_funptr
 
         ! convert integers

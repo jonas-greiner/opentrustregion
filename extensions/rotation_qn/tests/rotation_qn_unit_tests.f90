@@ -54,10 +54,10 @@ contains
 
     subroutine mock_transport(geodesic, tangent_vector, error, context)
         !
-        ! this subroutine is a mock of the host's transport function, which adds the
-        ! geodesic to the tangent vector, so that the test sees which vectors were
-        ! transported along which geodesic, records its call, checks the host context
-        ! and returns the error code set in it or a value that is not a number
+        ! this subroutine is a mock of the transport function of the settings, which
+        ! adds the geodesic to the tangent vector, so that the test sees which vectors
+        ! were transported along which geodesic, records its call, checks the host
+        ! context and returns the error code set in it or a value that is not a number
         !
         use otr_common_mock, only: record_host_call, inject_host_nan
 
@@ -204,7 +204,7 @@ contains
         !
         ! this subroutine sets up a new updating object as after three orbital updates,
         ! without the routines under test, with the default settings carrying the armed
-        ! host context and the mock initial Hessian, the mock transport function, a
+        ! host context, the mock initial Hessian and the mock transport function, a
         ! host context of its own for the host record of its solver level, a random
         ! positive Hessian diagonal, two random points in its history, whose gradient
         ! differences are twice their steps, a random last gradient and a model without
@@ -221,7 +221,7 @@ contains
         object%settings = default_rotation_qn_settings
         call arm_host_context(object%settings)
         object%settings%init_hess => mock_init_hess
-        object%transport => mock_transport
+        object%settings%transport => mock_transport
         level_host_context = host_context_type()
         object%solver_level%host%context => level_host_context
         allocate(object%kappa_list(n_param, object%settings%max_points), &
@@ -271,9 +271,9 @@ contains
         !
         ! this function tests the factory, which creates a rotation QN object of the
         ! updating scheme the settings select after their sanity check, initializes it
-        ! with the settings and the host's transport function, wires the solver settings
-        ! with it and the record of the state and lets the solver refresh the model
-        ! after a rejected step if the settings have an objective function
+        ! with the settings, wires the solver settings with it and the record of the
+        ! state and lets the solver refresh the model after a rejected step if the
+        ! settings have an objective function
         !
         use opentrustregion_core, only: update_orbs_type, obj_func_type, &
                                         solver_state_type
@@ -293,7 +293,6 @@ contains
                                                 update_orbs_rotation_qn_funptr
         procedure(obj_func_type), pointer :: obj_func_funptr, &
                                              obj_func_rotation_qn_funptr
-        procedure(transport_type), pointer :: transport_funptr
         type(extension_solver_settings_type), allocatable, target :: solver_settings, &
                                                                      other_settings
         type(solver_state_type), target :: state, other_state
@@ -313,12 +312,11 @@ contains
         ! set the host's callback functions
         update_orbs_funptr => mock_update_orbs
         obj_func_funptr => mock_obj_func
-        transport_funptr => mock_transport
 
         ! create objects for settings selecting either updating scheme, the first with
         ! an objective function, and for no settings, each of which has to be the
         ! object of the selected scheme, initialized with the settings after their
-        ! sanity check and the host's transport function, and to wire the solver
+        ! sanity check, and to wire the solver
         ! settings, which own it, with the host's orbital update and objective function
         ! and the record of the state and let them refresh the model after a rejected
         ! step only with the objective function of the settings
@@ -333,6 +331,7 @@ contains
                 settings%init_hess => mock_init_hess
                 settings%init_precond => mock_init_precond
                 settings%obj_func_grad => mock_obj_func_grad
+                settings%transport => mock_transport
                 expected_settings = settings
                 expected_settings%qn_method = "sr1"
             case (2)
@@ -344,15 +343,15 @@ contains
             end select
             sr1_expected = expected_settings%qn_method == "sr1"
             if (i_case == 3) then
-                call rotation_qn_factory( &
-                    n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-                    update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, &
-                    solver_settings, state, error)
+                call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                                         update_orbs_rotation_qn_funptr, &
+                                         obj_func_rotation_qn_funptr, solver_settings, &
+                                         state, error)
             else
-                call rotation_qn_factory( &
-                    n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-                    update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, &
-                    solver_settings, state, error, settings)
+                call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
+                                         update_orbs_rotation_qn_funptr, &
+                                         obj_func_rotation_qn_funptr, solver_settings, &
+                                         state, error, settings)
             end if
             if (error /= 0) then
                 write(stderr, *) "test_rotation_qn_factory failed: Produced error "// &
@@ -409,16 +408,12 @@ contains
                         "initialized with the settings "//trim(case_names(i_case))//"."
                     test_rotation_qn_factory = .false.
                 end if
-                if (.not. associated(object%transport, mock_transport)) then
-                    write(stderr, *) "test_rotation_qn_factory failed: Host's "// &
-                        "transport function not handed to the object "// &
-                        trim(case_names(i_case))//"."
-                    test_rotation_qn_factory = .false.
-                end if
                 if ((associated(object%settings%init_hess, mock_init_hess) .and. &
                      associated(object%settings%init_precond, mock_init_precond) .and. &
                      associated(object%settings%obj_func_grad, &
-                                mock_obj_func_grad)) .neqv. i_case == 1) then
+                                mock_obj_func_grad) .and. &
+                     associated(object%settings%transport, mock_transport)) .neqv. &
+                    i_case == 1) then
                     write(stderr, *) "test_rotation_qn_factory failed: Callback "// &
                         "functions of the settings not handed to the object "// &
                         trim(case_names(i_case))//"."
@@ -448,10 +443,9 @@ contains
         call setup_settings(settings, context)
         update_orbs_rotation_qn_funptr => update_orbs_callback
         obj_func_rotation_qn_funptr => obj_func_callback
-        call rotation_qn_factory(0_ip, update_orbs_funptr, obj_func_funptr, &
-                                 transport_funptr, update_orbs_rotation_qn_funptr, &
-                                 obj_func_rotation_qn_funptr, solver_settings, state, &
-                                 error, settings)
+        call rotation_qn_factory( &
+            0_ip, update_orbs_funptr, obj_func_funptr, update_orbs_rotation_qn_funptr, &
+            obj_func_rotation_qn_funptr, solver_settings, state, error, settings)
         if (error /= error_rotation_qn + 1) then
             write(stderr, *) "test_rotation_qn_factory failed: Error not returned "// &
                 "for parameters the sanity check rejects."
@@ -478,12 +472,12 @@ contains
         allocate(solver_settings)
         call setup_settings(settings, context)
         call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                 transport_funptr, update_orbs_rotation_qn_funptr, &
+                                 update_orbs_rotation_qn_funptr, &
                                  obj_func_rotation_qn_funptr, solver_settings, state, &
                                  error, settings)
         level => wired_level(solver_settings)
         call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                 transport_funptr, update_orbs_rotation_qn_funptr, &
+                                 update_orbs_rotation_qn_funptr, &
                                  obj_func_rotation_qn_funptr, solver_settings, state, &
                                  error, settings)
         if (error /= error_rotation_qn + 1) then
@@ -516,7 +510,7 @@ contains
         allocate(solver_settings, other_settings)
         settings = ref_rotation_qn_settings
         call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                 transport_funptr, update_orbs_rotation_qn_funptr, &
+                                 update_orbs_rotation_qn_funptr, &
                                  obj_func_rotation_qn_funptr, solver_settings, state, &
                                  error, settings)
         if (error /= 0) then
@@ -525,7 +519,7 @@ contains
             test_rotation_qn_factory = .false.
         end if
         call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                 transport_funptr, update_orbs_rotation_qn_funptr, &
+                                 update_orbs_rotation_qn_funptr, &
                                  obj_func_rotation_qn_funptr, other_settings, &
                                  other_state, error, settings)
         if (error /= 0) then
@@ -618,7 +612,8 @@ contains
 
     logical(c_bool) function test_invoke_transport() bind(C)
         !
-        ! this function tests the subroutine which calls the host's transport function
+        ! this function tests the subroutine which transports a tangent vector with the
+        ! transport function of the settings or, without one, leaves it unchanged
         !
         use otr_rotation_qn, only: rotation_qn_settings_type, invoke_transport
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
@@ -684,6 +679,20 @@ contains
         if (len_trim(context%log_message) == 0) then
             write(stderr, *) "test_invoke_transport failed: No error message "// &
                 "printed for a tangent vector that is not finite."
+            test_invoke_transport = .false.
+        end if
+
+        ! transport without a transport function, which has to leave the tangent
+        ! vector unchanged
+        transport_funptr => null()
+        call random_number(vector)
+        expected = vector
+        context%n_calls = 0
+        call invoke_transport(transport_funptr, geodesic, vector, settings, &
+                              error_origin, error)
+        if (error /= 0 .or. .not. all(is_close(vector, expected, 0.0_rp))) then
+            write(stderr, *) "test_invoke_transport failed: Tangent vector changed "// &
+                "or error produced without a transport function."
             test_invoke_transport = .false.
         end if
 
@@ -1241,8 +1250,8 @@ contains
                     "once for the new history for "//trim(case_names(i_case))//"."
                 test_add_rotation_qn = .false.
             end if
-            if (host_context%n_calls /= &
-                merge(2 * n_points, 0, transported) + merge(1, 0, appended)) then
+            if (host_context%n_calls /= merge(2 * n_points, 0_ip, transported) + &
+                merge(1_ip, 0_ip, appended)) then
                 write(stderr, *) "test_add_rotation_qn failed: Transport function "// &
                     "not called with the host context for every vector of the "// &
                     "history and the last gradient of an appended pair for "// &

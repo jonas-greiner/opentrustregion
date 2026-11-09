@@ -150,10 +150,10 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
 
     def test_callback_interfaces(self):
         """
-        this function tests that the interfaces to the transport function and the
-        objective function of the settings report an exception or an interruption
+        this function tests that the interfaces to the objective function and the
+        transport function of the settings report an exception or an interruption
         raised by the function as an error and keep it with the call whose library
-        called them, and that they receive the geodesic and the step read-only
+        called them, and that they receive the step and the geodesic read-only
         """
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
@@ -161,17 +161,20 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
         output_ptr = output.ctypes.data_as(POINTER(c_real))
         func_ptr = pointer(c_real())
         interfaces = {
-            "transport function": lambda func: TransportInterface(func)(
-                vector_ptr, output_ptr, None
-            ),
             "objective function of the settings": lambda func: ObjFuncGradInterface(
                 {"obj_func_grad": func}, "obj_func_grad"
             )(vector_ptr, output_ptr, func_ptr, None),
+            "transport function of the settings": lambda func: TransportInterface(
+                {"transport": func}, "transport"
+            )(vector_ptr, output_ptr, None),
         }
         test_passed = check_callback_interfaces(
             "test_callback_interfaces",
             interfaces,
-            ["transport function", "objective function of the settings"],
+            [
+                "objective function of the settings",
+                "transport function of the settings",
+            ],
             vector,
             n_param,
         )
@@ -209,6 +212,7 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
         settings.init_hess = self.mock_hess_x
         settings.init_precond = self.mock_init_precond
         settings.obj_func_grad = self.mock_obj_func_grad
+        settings.transport = self.mock_transport
         solver_settings, python_functions = setup_wired_solver_settings()
 
         # call rotation QN factory python interface
@@ -217,7 +221,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
             n_param,
             self.mock_update_orbs,
             self.mock_obj_func,
-            self.mock_transport,
             solver_settings,
             SolverState(),
             settings,
@@ -340,7 +343,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 n_param,
                 self.mock_update_orbs,
                 self.mock_obj_func,
-                self.mock_transport,
                 solver_settings,
                 SolverState(),
                 settings,
@@ -364,7 +366,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 n_param,
                 self.mock_update_orbs,
                 self.mock_obj_func,
-                self.mock_transport,
                 setup_wired_solver_settings()[0],
                 SolverState(),
             )
@@ -400,7 +401,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 n_param,
                 self.mock_update_orbs,
                 self.mock_obj_func,
-                self.mock_transport,
                 solver_settings,
                 solver_state,
                 settings,
@@ -417,32 +417,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 "input for the check of the owner."
             )
             test_passed = False
-
-        # call rotation_qn_factory python interface for host callbacks which cannot be
-        # called with the arguments the C interface passes, which have to raise an
-        # error before the Fortran factory is called
-        invalid_cases = (
-            ("transport with a wrong number of arguments", (lambda geodesic: None,)),
-        )
-        for case, callbacks in invalid_cases:
-            try:
-                rotation_qn_factory(
-                    n_param,
-                    self.mock_update_orbs,
-                    self.mock_obj_func,
-                    *callbacks,
-                    SolverSettings(),
-                    SolverState(),
-                    settings,
-                )
-                print(
-                    f" test_rotation_qn_factory_py_interface failed: {case} did not "
-                    f"raise an "
-                    "error."
-                )
-                test_passed = False
-            except TypeError:
-                pass
 
         self.assertTrue(test_passed, "test_rotation_qn_factory_py_interface failed")
         print(" test_rotation_qn_factory_py_interface PASSED")
@@ -541,8 +515,9 @@ class RotationQNPyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
         """
         this function solves the Hartmann 6D problem with the real factory and solver
         through the Python interface, with either updating scheme, SR1 with the Hessian
-        diagonal as the initial Hessian of the settings and BFGS with the default,
-        which is the same, and the objective function of the settings, which has to
+        diagonal as the initial Hessian of the settings and an identity as their
+        transport function and BFGS with the defaults, which are the same, and the
+        objective function of the settings, which has to
         replace the host's, and checks that the solve converges to the minimum, that
         every callback function is called, while neither the host's objective function
         nor the exact Hessian the orbital update returns is, and that the factory lets
@@ -598,12 +573,12 @@ class RotationQNPyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
             rotation_qn_settings.qn_method = qn_method
             if qn_method == "sr1":
                 rotation_qn_settings.init_hess = init_hess
+                rotation_qn_settings.transport = transport
             rotation_qn_settings.obj_func_grad = obj_func_grad
             update_orbs_rotation_qn, obj_func_rotation_qn = rotation_qn_factory(
                 self.n_param,
                 update_orbs,
                 obj_func,
-                transport,
                 settings,
                 state,
                 rotation_qn_settings,
@@ -632,10 +607,8 @@ class RotationQNPyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
                 counts["obj_func"] != 0
                 or counts["exact_hess_x"] != 0
                 or (counts["init_hess"] == 0) == (qn_method == "sr1")
-                or not all(
-                    counts[name]
-                    for name in ("update_orbs", "transport", "obj_func_grad")
-                )
+                or (counts["transport"] == 0) == (qn_method == "sr1")
+                or not all(counts[name] for name in ("update_orbs", "obj_func_grad"))
             ):
                 print(
                     " test_rotation_qn_factory_py failed: Callback functions not "

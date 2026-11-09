@@ -29,9 +29,8 @@ module otr_rotation_qn_mock
 contains
 
     subroutine mock_rotation_qn_factory( &
-        n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-        update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, solver_settings, &
-        solver_state, error, settings)
+        n_param, update_orbs_funptr, obj_func_funptr, update_orbs_rotation_qn_funptr, &
+        obj_func_rotation_qn_funptr, solver_settings, solver_state, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function and objective function and wires the solver
@@ -43,8 +42,8 @@ contains
         use opentrustregion_core, only: update_orbs_type, obj_func_type, &
                                         solver_state_type
         use otr_common, only: extension_type, extension_solver_settings_type
-        use otr_rotation_qn, only: transport_type, rotation_qn_settings_type, &
-                                   sr1_updating_type, default_rotation_qn_settings
+        use otr_rotation_qn, only: rotation_qn_settings_type, sr1_updating_type, &
+                                   default_rotation_qn_settings
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   check_hess_x_funptr, check_precond_funptr, &
                                   n_param_ref => n_param
@@ -57,7 +56,6 @@ contains
         integer(ip), intent(in) :: n_param
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
-        procedure(transport_type), intent(in), pointer :: transport_funptr
         procedure(update_orbs_type), intent(out), pointer :: &
             update_orbs_rotation_qn_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_rotation_qn_funptr
@@ -101,17 +99,13 @@ contains
             return
         end if
 
-        ! test passed transport function
-        if (.not. check_transport_funptr( &
-            transport_funptr, "rotation_qn_factory_c_wrapper", &
-            " by given transport function", settings%context)) test_passed = .false.
-
-        ! test the initial Hessian, its preconditioner and the objective function of
-        ! the settings, which only initialized settings carry
+        ! test the initial Hessian, its preconditioner, the objective function and the
+        ! transport function of the settings, which only initialized settings carry
         if (mock_rotation_qn_factory_defaults) then
             if (associated(settings%init_hess) .or. &
                 associated(settings%init_precond) .or. &
-                associated(settings%obj_func_grad)) then
+                associated(settings%obj_func_grad) .or. &
+                associated(settings%transport)) then
                 test_passed = .false.
                 write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: "// &
                     "Callback functions of settings that were not initialized kept."
@@ -128,6 +122,10 @@ contains
             if (.not. check_obj_func_grad_funptr( &
                 settings%obj_func_grad, "rotation_qn_factory_c_wrapper", &
                 " by the objective function of the settings", settings%context)) &
+                test_passed = .false.
+            if (.not. check_transport_funptr( &
+                settings%transport, "rotation_qn_factory_c_wrapper", &
+                " by the transport function of the settings", settings%context)) &
                 test_passed = .false.
         end if
 

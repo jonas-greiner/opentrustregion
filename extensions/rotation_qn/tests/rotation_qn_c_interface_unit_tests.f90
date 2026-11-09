@@ -99,9 +99,9 @@ contains
         integer(ip) :: i_case
         character(len=34), parameter :: default_cases(2) = &
             [character(len=34) :: "settings that were not initialized", "no settings"]
-        character(len=*), parameter :: missing_input_names(4) = &
+        character(len=*), parameter :: missing_input_names(3) = &
             [character(len=21) :: "a record of the state", "an orbital update", &
-             "an objective function", "a transport function"]
+             "an objective function"]
 
         ! assume tests pass
         test_rotation_qn_factory_c_wrapper = .true.
@@ -115,6 +115,7 @@ contains
         settings%init_hess = c_funloc(mock_hess_x)
         settings%init_precond = c_funloc(mock_precond)
         settings%obj_func_grad = c_funloc(mock_obj_func_grad)
+        settings%transport = c_funloc(mock_transport)
 
         ! arm the host context of the settings, which the logging, objective, initial
         ! Hessian, preconditioning and transport functions of the settings receive, and
@@ -129,9 +130,8 @@ contains
         mock_rotation_qn_factory_error = 0
         error_c = rotation_qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
-            c_funloc(mock_transport), update_orbs_rotation_qn_c_funptr, &
-            obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, &
-            c_loc(state_c), settings)
+            update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
+            extension_c, solver_settings_c, c_loc(state_c), settings)
 
         ! check if the mock factory received the correct input and called the logging
         ! function
@@ -166,8 +166,8 @@ contains
         else
             call c_f_pointer(extension_c, holder)
 
-            ! check that the holder holds the bundle of the transport function and the
-            ! initial Hessian, its preconditioner and the objective function of the
+            ! check that the holder holds the bundle of the initial Hessian, its
+            ! preconditioner, the objective function and the transport function of the
             ! settings, the first two in the slots of the Hessian linear transformation
             ! and the preconditioner
             select type (callbacks => holder%extension_callbacks)
@@ -206,9 +206,8 @@ contains
         first_obj_func_c_funptr = obj_func_rotation_qn_c_funptr
         error_c = rotation_qn_factory_c_wrapper( &
             n_param_c, first_update_orbs_c_funptr, first_obj_func_c_funptr, &
-            c_funloc(mock_transport), update_orbs_rotation_qn_c_funptr, &
-            obj_func_rotation_qn_c_funptr, stacked_extension_c, solver_settings_c, &
-            c_loc(state_c), settings)
+            update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
+            stacked_extension_c, solver_settings_c, c_loc(state_c), settings)
         if (.not. test_passed_mock_rotation_qn_factory) then
             write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: Mock "// &
                 "factory received wrong input for solver settings already wired."
@@ -231,9 +230,8 @@ contains
         end if
 
         ! call the factory with settings that were not initialized and without any, for
-        ! which the factory is handed the default settings with the context through
-        ! which the transport function is found, which the mock checks, and the bundle
-        ! keeps no callback function of the settings and no host context
+        ! which the factory is handed the default settings and the bundle keeps no
+        ! callback function of the settings and no host context
         do i_case = 1, size(default_cases)
             solver_settings_c = default_solver_settings
             mock_rotation_qn_factory_defaults = .true.
@@ -242,16 +240,14 @@ contains
                 settings%initialized = .false.
                 error_c = rotation_qn_factory_c_wrapper( &
                     n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
-                    c_funloc(mock_transport), update_orbs_rotation_qn_c_funptr, &
-                    obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, &
-                    c_loc(state_c), settings)
+                    update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
+                    extension_c, solver_settings_c, c_loc(state_c), settings)
                 settings%initialized = .true.
             else
                 error_c = rotation_qn_factory_c_wrapper( &
                     n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
-                    c_funloc(mock_transport), update_orbs_rotation_qn_c_funptr, &
-                    obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, &
-                    c_loc(state_c))
+                    update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
+                    extension_c, solver_settings_c, c_loc(state_c))
             end if
             mock_rotation_qn_factory_defaults = .false.
             if (error_c /= 0 .or. .not. test_passed_mock_rotation_qn_factory) then
@@ -266,6 +262,7 @@ contains
                     if (associated(callbacks%hess_x) .or. &
                         associated(callbacks%precond) .or. &
                         associated(callbacks%obj_func_grad) .or. &
+                        associated(callbacks%transport) .or. &
                         associated(callbacks%logger) .or. &
                         c_associated(callbacks%host_context)) then
                         write(stderr, *) "test_rotation_qn_factory_c_wrapper "// &
@@ -299,7 +296,6 @@ contains
                 n_param_c, &
                 merge(c_null_funptr, c_funloc(mock_update_orbs), i_case == 2), &
                 merge(c_null_funptr, c_funloc(mock_obj_func), i_case == 3), &
-                merge(c_null_funptr, c_funloc(mock_transport), i_case == 4), &
                 update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
                 extension_c, solver_settings_c, &
                 merge(c_null_ptr, c_loc(state_c), i_case == 1), settings)
@@ -334,9 +330,8 @@ contains
         mock_rotation_qn_factory_error = 1
         error_c = rotation_qn_factory_c_wrapper( &
             n_param_c, c_funloc(mock_update_orbs), c_funloc(mock_obj_func), &
-            c_funloc(mock_transport), update_orbs_rotation_qn_c_funptr, &
-            obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, &
-            c_loc(state_c), settings)
+            update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, &
+            extension_c, solver_settings_c, c_loc(state_c), settings)
         mock_rotation_qn_factory_error = 0
         if (.not. test_passed_mock_rotation_qn_factory) then
             write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: Mock "// &
@@ -503,7 +498,8 @@ contains
         if (c_associated(settings%init_hess) .or. &
             c_associated(settings%init_precond) .or. &
             c_associated(settings%obj_func_grad) .or. &
-            c_associated(settings%logger) .or. c_associated(settings%context)) then
+            c_associated(settings%transport) .or. c_associated(settings%logger) .or. &
+            c_associated(settings%context)) then
             write(stderr, *) "test_init_rotation_qn_settings_c failed: Callback "// &
                 "function or host context kept."
             test_init_rotation_qn_settings_c = .false.
@@ -523,9 +519,9 @@ contains
         ! this function tests that the function that converts rotation QN settings from
         ! C to Fortran correctly perform this conversion
         !
-        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c, &
-                                               rotation_qn_c_callbacks_type, &
-                                               obj_func_grad_f_wrapper, assignment(=)
+        use otr_rotation_qn_c_interface, only: &
+            rotation_qn_settings_type_c, rotation_qn_c_callbacks_type, &
+            obj_func_grad_f_wrapper, transport_f_wrapper, assignment(=)
         use c_interface, only: hess_x_f_wrapper, precond_f_wrapper
         use otr_rotation_qn, only: rotation_qn_settings_type, &
                                    default_rotation_qn_settings
@@ -547,6 +543,7 @@ contains
         settings_c%init_hess = c_funloc(mock_hess_x)
         settings_c%init_precond = c_funloc(mock_precond)
         settings_c%obj_func_grad = c_funloc(mock_obj_func_grad)
+        settings_c%transport = c_funloc(mock_transport)
 
         ! convert to Fortran settings and hand them the C logging function in a bundle
         ! through context, as the factory does
@@ -554,11 +551,12 @@ contains
         callbacks%logger => mock_logger
         settings%context => callbacks
 
-        ! check that the initial Hessian, its preconditioner and the objective function
-        ! are converted to their Fortran wrappers
+        ! check that the initial Hessian, its preconditioner, the objective function
+        ! and the transport function are converted to their Fortran wrappers
         if (.not. associated(settings%init_hess, hess_x_f_wrapper) .or. &
             .not. associated(settings%init_precond, precond_f_wrapper) .or. &
-            .not. associated(settings%obj_func_grad, obj_func_grad_f_wrapper)) then
+            .not. associated(settings%obj_func_grad, obj_func_grad_f_wrapper) .or. &
+            .not. associated(settings%transport, transport_f_wrapper)) then
             test_assign_rotation_qn_f_c = .false.
             write(stderr, *) "test_assign_rotation_qn_f_c failed: Callback "// &
                 "functions not converted to their Fortran wrappers."
@@ -594,7 +592,8 @@ contains
         settings_c%initialized = .false.
         settings = settings_c
         if (associated(settings%init_hess) .or. associated(settings%init_precond) .or. &
-            associated(settings%obj_func_grad) .or. associated(settings%logger) .or. &
+            associated(settings%obj_func_grad) .or. &
+            associated(settings%transport) .or. associated(settings%logger) .or. &
             settings /= default_rotation_qn_settings) then
             write(stderr, *) "test_assign_rotation_qn_f_c failed: Settings that "// &
                 "were not initialized not converted to default values."
@@ -631,7 +630,8 @@ contains
         if (c_associated(settings_c%init_hess) .or. &
             c_associated(settings_c%init_precond) .or. &
             c_associated(settings_c%obj_func_grad) .or. &
-            c_associated(settings_c%logger)) then
+            c_associated(settings_c%transport) .or. c_associated(settings_c%logger)) &
+            then
             test_assign_rotation_qn_c_f = .false.
             write(stderr, *) "test_assign_rotation_qn_c_f failed: Callback "// &
                 "function associated."

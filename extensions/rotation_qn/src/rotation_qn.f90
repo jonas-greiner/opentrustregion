@@ -39,12 +39,14 @@ module otr_rotation_qn
     end interface
 
     ! derived type for settings, whose optional callback functions are the initial
-    ! Hessian, the inverse of the level-shifted initial Hessian and the objective
-    ! function that also returns the gradient at the trial point
+    ! Hessian, the inverse of the level-shifted initial Hessian, the objective
+    ! function that also returns the gradient at the trial point and the transport of
+    ! tangent vectors along a geodesic
     type, extends(settings_type) :: rotation_qn_settings_type
         procedure(hess_x_type), pointer, nopass :: init_hess => null()
         procedure(precond_type), pointer, nopass :: init_precond => null()
         procedure(obj_func_grad_type), pointer, nopass :: obj_func_grad => null()
+        procedure(transport_type), pointer, nopass :: transport => null()
         character(len=kw_len) :: qn_method = "sr1"
         integer(ip) :: max_points = 30
     end type
@@ -72,17 +74,16 @@ module otr_rotation_qn
     real(rp), parameter :: sr1_skip_thresh = 1e-8_rp, bfgs_skip_thresh = 1e-8_rp
 
     ! rotation QN object, holding the history of steps and gradient differences, the
-    ! settings, the host's transport function, the Hessian diagonal of the current
-    ! point and the model the updating scheme builds from the history, the rank-1 terms
-    ! by which it updates the initial Hessian, the initial Hessian of the settings or,
-    ! without one, the Hessian diagonal:
+    ! settings, the Hessian diagonal of the current point and the model the updating
+    ! scheme builds from the history, the rank-1 terms by which it updates the initial
+    ! Hessian, the initial Hessian of the settings or, without one, the Hessian
+    ! diagonal:
     ! B x = B_0 x + sum_k coeffs(k) vectors(:, k) vectors(:, k)^T x
     type, abstract, extends(extension_type) :: updating_type
         real(rp), allocatable :: kappa_list(:, :), grad_diff_list(:, :), last_grad(:), &
                                  h_diag(:), vectors(:, :), coeffs(:)
         integer(ip) :: n_points = 0, n_terms = 0
         type(rotation_qn_settings_type) :: settings
-        procedure(transport_type), pointer, nopass :: transport => null()
     contains
         procedure :: update_orbs => update_orbs_rotation_qn
         procedure :: obj_func => obj_func_rotation_qn
@@ -117,10 +118,9 @@ module otr_rotation_qn
 
 contains
 
-    subroutine rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                   transport_funptr, update_orbs_rotation_qn_funptr, &
-                                   obj_func_rotation_qn_funptr, solver_settings, &
-                                   solver_state, error, settings)
+    subroutine rotation_qn_factory( &
+        n_param, update_orbs_funptr, obj_func_funptr, update_orbs_rotation_qn_funptr, &
+        obj_func_rotation_qn_funptr, solver_settings, solver_state, error, settings)
         !
         ! this subroutine returns the rotation QN orbital updating function, which wraps
         ! the host's, and the objective function, and wires the solver settings with a
@@ -137,7 +137,6 @@ contains
         integer(ip), intent(in) :: n_param
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
-        procedure(transport_type), intent(in), pointer :: transport_funptr
         procedure(update_orbs_type), intent(out), pointer :: &
             update_orbs_rotation_qn_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_rotation_qn_funptr
@@ -173,11 +172,10 @@ contains
             allocate(bfgs_updating_type :: object)
         end if
 
-        ! initialize the object with the host's transport function
+        ! initialize the object
         select type (object)
         class is (updating_type)
             call object%init(n_param, local_settings)
-            object%transport => transport_funptr
         end select
 
         ! wire the solver settings with the object, which reads the record of the state
@@ -248,9 +246,13 @@ contains
     subroutine invoke_transport(transport, geodesic, tangent_vector, settings, &
                                 error_origin, error)
         !
-        ! this subroutine calls the host's transport function with the host context of
-        ! the settings and passes on its error, and returns an error of its own with
-        ! the origin of the object if the function returns values that are not finite
+        ! this subroutine transports a tangent vector along a geodesic with the
+        ! transport function of the settings and their host context and passes on its
+        ! error, and returns an error of its own with the origin of the object if the
+        ! function returns values that are not finite, while without a transport
+        ! function it leaves the tangent vector unchanged, which transports it exactly
+        ! in a flat space and in the frame that moves with the geodesic on the
+        ! Grassmann manifold
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -261,6 +263,10 @@ contains
         class(settings_type), intent(in) :: settings
         integer(ip), intent(in) :: error_origin
         integer(ip), intent(out) :: error
+
+        ! leave the tangent vector unchanged without a transport function
+        error = 0
+        if (.not. associated(transport)) return
 
         ! call the transport function
         call transport(geodesic, tangent_vector, error, settings%context)
@@ -433,7 +439,7 @@ contains
 
         ! transport the gradient back to the current point along the reversed step
         back = -kappa
-        call invoke_transport(self%transport, back, grad, self%settings, &
+        call invoke_transport(self%settings%transport, back, grad, self%settings, &
                               self%error_origin, error)
         if (error /= 0) return
 
@@ -465,10 +471,11 @@ contains
         if (allocated(self%last_grad) .and. self%settings%max_points > 0) then
             ! transport history
             do i = 1, self%n_points
-                call invoke_transport(self%transport, kappa, self%kappa_list(:, i), &
-                                      self%settings, self%error_origin, error)
+                call invoke_transport(self%settings%transport, kappa, &
+                                      self%kappa_list(:, i), self%settings, &
+                                      self%error_origin, error)
                 if (error /= 0) return
-                call invoke_transport(self%transport, kappa, &
+                call invoke_transport(self%settings%transport, kappa, &
                                       self%grad_diff_list(:, i), self%settings, &
                                       self%error_origin, error)
                 if (error /= 0) return
@@ -477,7 +484,7 @@ contains
             ! add the pair of the step with the last gradient transported to the new
             ! point, unless the objective function of the settings added it
             if (.not. associated(self%settings%obj_func_grad)) then
-                call invoke_transport(self%transport, kappa, self%last_grad, &
+                call invoke_transport(self%settings%transport, kappa, self%last_grad, &
                                       self%settings, self%error_origin, error)
                 if (error /= 0) return
                 call self%add_pair(kappa, grad - self%last_grad)

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import numpy as np
 from ctypes import POINTER, byref, c_bool, c_void_p, c_char, Structure
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from pyopentrustregion.python_interface import (
     check_struct_sizes,
@@ -17,7 +16,6 @@ from pyopentrustregion.python_interface import (
     c_real,
     kw_len,
     callback_type,
-    CallbackInterface,
     SettingsCallbackInterface,
     CFunctionInterface,
     c_buffer,
@@ -46,7 +44,6 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.common.python_interface import (
     ExtensionOwner,
-    check_callback_arguments,
     extension_functions,
     check_wrapped_functions,
 )
@@ -85,6 +82,42 @@ class ObjFuncGradInterface(SettingsCallbackInterface):
         return 0
 
 
+class TransportInterface(SettingsCallbackInterface):
+    """
+    this class provides the interface to the transport function of the rotation QN
+    settings, which transports a tangent vector along a geodesic in place
+    """
+
+    def call(self, geodesic_ptr, tangent_vector_ptr) -> int:
+        # convert pointers to numpy arrays and make the geodesic read-only
+        geodesic = np.ctypeslib.as_array(geodesic_ptr, shape=(self.n_param,))
+        geodesic.flags.writeable = False
+        tangent_vector = np.ctypeslib.as_array(
+            tangent_vector_ptr, shape=(self.n_param,)
+        )
+
+        self.func(geodesic, tangent_vector)
+
+        return 0
+
+
+class TransportPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a transport C function
+    """
+
+    def __call__(self, geodesic: np.ndarray, tangent_vector: np.ndarray):
+        geodesic_buffer = c_buffer(geodesic)
+        tangent_vector_buffer = c_buffer(tangent_vector)
+        LibraryCall("transport function", geodesic_buffer.size).run(
+            self.funptr,
+            geodesic_buffer.ctypes.data_as(POINTER(c_real)),
+            tangent_vector_buffer.ctypes.data_as(POINTER(c_real)),
+            self.context,
+        )
+        write_back(tangent_vector, tangent_vector_buffer)
+
+
 class ObjFuncGradPyInterface(CFunctionInterface):
     """
     this class provides the Python interface to an objective function C function that
@@ -111,6 +144,7 @@ class RotationQNSettingsC(Structure):
         ("init_hess", c_void_p),
         ("init_precond", c_void_p),
         ("obj_func_grad", c_void_p),
+        ("transport", c_void_p),
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("verbose", c_int),
@@ -139,12 +173,18 @@ class RotationQNSettings(Settings):
             obj_func_grad_interface_type,
             ObjFuncGradPyInterface,
         ),
+        "transport": (
+            TransportInterface,
+            transport_interface_type,
+            TransportPyInterface,
+        ),
         "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface),
     }
 
     init_hess: Optional[Callable[[np.ndarray, np.ndarray], None]]
     init_precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
     obj_func_grad: Optional[ObjFuncGradType]
+    transport: Optional[TransportType]
     logger: Optional[Callable[[str], None]]
 
 
@@ -156,30 +196,6 @@ bind_callback_fields(RotationQNSettings)
 check_struct_sizes(lib, [("rotation_qn_settings", RotationQNSettingsC)])
 
 
-# define interface factories
-@dataclass
-class TransportInterface(CallbackInterface):
-    """
-    this class provides the interface to transport a tangent vector along a
-    geodesic and to write it to the memory provided through pointers
-    """
-
-    transport: TransportType
-
-    def call(self, geodesic_ptr, tangent_vector_ptr) -> int:
-        # convert matrix pointers to numpy arrays and make the geodesic read-only
-        geodesic = np.ctypeslib.as_array(geodesic_ptr, shape=(self.n_param,))
-        geodesic.flags.writeable = False
-        tangent_vector = np.ctypeslib.as_array(
-            tangent_vector_ptr, shape=(self.n_param,)
-        )
-
-        # transport and retrieve tangent vector
-        self.transport(geodesic, tangent_vector)
-
-        return 0
-
-
 def rotation_qn_factory(
     n_param: int,
     update_orbs: Callable[
@@ -187,7 +203,6 @@ def rotation_qn_factory(
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ],
     obj_func: Callable[[np.ndarray], float],
-    transport: TransportType,
     solver_settings: SolverSettings,
     solver_state: SolverState,
     settings: Optional[RotationQNSettings] = None,
@@ -204,10 +219,8 @@ def rotation_qn_factory(
 
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
-    check_callback_arguments(transport, "transport", ("geodesic", "tangent_vector"))
     update_orbs_interface = update_orbs_interface_type(UpdateOrbsInterface(update_orbs))
     obj_func_interface = obj_func_interface_type(ObjFuncInterface(obj_func))
-    transport_interface = transport_interface_type(TransportInterface(transport))
 
     # define result and argument types
     lib.rotation_qn_factory.restype = c_int
@@ -215,7 +228,6 @@ def rotation_qn_factory(
         c_int,
         update_orbs_interface_type,
         obj_func_interface_type,
-        transport_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         POINTER(c_void_p),
@@ -233,7 +245,6 @@ def rotation_qn_factory(
         n_param,
         update_orbs_interface,
         obj_func_interface,
-        transport_interface,
         byref(update_orbs_rotation_qn_funptr),
         byref(obj_func_rotation_qn_funptr),
         byref(extension),
@@ -254,7 +265,6 @@ def rotation_qn_factory(
             "solver_state": solver_state,
             "update_orbs_interface": update_orbs_interface,
             "obj_func_interface": obj_func_interface,
-            "transport_interface": transport_interface,
         },
     )
     return extension_functions(
