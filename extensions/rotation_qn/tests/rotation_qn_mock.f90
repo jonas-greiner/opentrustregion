@@ -30,8 +30,8 @@ contains
 
     subroutine mock_rotation_qn_factory( &
         n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-        init_hess_funptr, update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, &
-        solver_settings, solver_state, error, settings)
+        update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, solver_settings, &
+        solver_state, error, settings)
         !
         ! this function is a test function for the function which returns a modified
         ! orbital updating function and objective function and wires the solver
@@ -43,13 +43,13 @@ contains
         use opentrustregion_core, only: update_orbs_type, obj_func_type, &
                                         solver_state_type
         use otr_common, only: extension_type, extension_solver_settings_type
-        use otr_rotation_qn, only: transport_type, init_hess_type, &
-                                   rotation_qn_settings_type, sr1_updating_type, &
-                                   default_rotation_qn_settings
+        use otr_rotation_qn, only: transport_type, rotation_qn_settings_type, &
+                                   sr1_updating_type, default_rotation_qn_settings
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
+                                  check_hess_x_funptr, check_precond_funptr, &
                                   n_param_ref => n_param
         use otr_rotation_qn_test_reference, only: check_transport_funptr, &
-                                                  check_init_hess_funptr
+                                                  check_obj_func_grad_funptr
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_common_unit_tests, only: check_mock_factory_logger, &
                                          setup_owning_solver_settings
@@ -58,7 +58,6 @@ contains
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         procedure(transport_type), intent(in), pointer :: transport_funptr
-        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
         procedure(update_orbs_type), intent(out), pointer :: &
             update_orbs_rotation_qn_funptr
         procedure(obj_func_type), intent(out), pointer :: obj_func_rotation_qn_funptr
@@ -107,10 +106,30 @@ contains
             transport_funptr, "rotation_qn_factory_c_wrapper", &
             " by given transport function", settings%context)) test_passed = .false.
 
-        ! test passed initial Hessian function
-        if (.not. check_init_hess_funptr( &
-            init_hess_funptr, "rotation_qn_factory_c_wrapper", " by given initial "// &
-            "Hessian function", settings%context)) test_passed = .false.
+        ! test the initial Hessian, its preconditioner and the objective function of
+        ! the settings, which only initialized settings carry
+        if (mock_rotation_qn_factory_defaults) then
+            if (associated(settings%init_hess) .or. &
+                associated(settings%init_precond) .or. &
+                associated(settings%obj_func_grad)) then
+                test_passed = .false.
+                write(stderr, *) "test_rotation_qn_factory_c_wrapper failed: "// &
+                    "Callback functions of settings that were not initialized kept."
+            end if
+        else
+            if (.not. check_hess_x_funptr( &
+                settings%init_hess, "rotation_qn_factory_c_wrapper", &
+                " by the initial Hessian of the settings", settings%context)) &
+                test_passed = .false.
+            if (.not. check_precond_funptr( &
+                settings%init_precond, "rotation_qn_factory_c_wrapper", &
+                " by the preconditioner of the settings", settings%context)) &
+                test_passed = .false.
+            if (.not. check_obj_func_grad_funptr( &
+                settings%obj_func_grad, "rotation_qn_factory_c_wrapper", &
+                " by the objective function of the settings", settings%context)) &
+                test_passed = .false.
+        end if
 
         ! check if optional logging function is correctly passed
         if (.not. check_mock_factory_logger( &

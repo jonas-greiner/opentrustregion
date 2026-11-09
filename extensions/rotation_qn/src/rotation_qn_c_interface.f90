@@ -8,7 +8,7 @@ module otr_rotation_qn_c_interface
 
     use opentrustregion_core, only: ip, rp, kw_len, update_orbs_type, obj_func_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
-    use otr_rotation_qn, only: transport_type, init_hess_type, &
+    use otr_rotation_qn, only: transport_type, obj_func_grad_type, &
                                standard_rotation_qn_factory => rotation_qn_factory
     use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_ptr, c_char, &
                                            c_funptr, c_f_procpointer, c_associated, &
@@ -30,27 +30,33 @@ module otr_rotation_qn_c_interface
     end interface
 
     abstract interface
-        function init_hess_c_type(vector_c, context_c) result(error_c) bind(C)
+        function obj_func_grad_c_type(kappa_c, grad_c, func_c, context_c) &
+            result(error_c) bind(C)
             import :: c_rp, c_ip, c_ptr
 
-            real(c_rp), intent(inout), target :: vector_c(*)
+            real(c_rp), intent(in), target :: kappa_c(*)
+            real(c_rp), intent(out), target :: grad_c(*)
+            real(c_rp), intent(out) :: func_c
             type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
-        end function init_hess_c_type
+        end function obj_func_grad_c_type
     end interface
 
-    ! bundle of the C callback functions of rotation QN, which extends that of the core
-    ! by the transport and initial Hessian functions, held by the holder of the object,
-    ! since the settings outlive the factory call, and reached through the context of
-    ! the settings
+    ! bundle of the C callback functions of rotation QN, which holds the initial
+    ! Hessian and its preconditioner of the settings in the slots of the core's Hessian
+    ! linear transformation and preconditioner, whose Fortran wrappers the converted
+    ! settings use, and extends that of the core by the transport function and the
+    ! objective function of the settings, held by the holder of the object, since the
+    ! settings outlive the factory call, and reached through the context of the
+    ! settings
     type, extends(c_callbacks_type) :: rotation_qn_c_callbacks_type
         procedure(transport_c_type), pointer, nopass :: transport => null()
-        procedure(init_hess_c_type), pointer, nopass :: init_hess => null()
+        procedure(obj_func_grad_c_type), pointer, nopass :: obj_func_grad => null()
     end type
 
     ! derived type for rotation QN settings
     type, bind(C) :: rotation_qn_settings_type_c
-        type(c_funptr) :: logger
+        type(c_funptr) :: init_hess, init_precond, obj_func_grad, logger
         logical(c_bool) :: initialized
         integer(c_ip) :: verbose, max_points
         character(kind=c_char) :: qn_method(kw_len + 1)
@@ -62,7 +68,8 @@ module otr_rotation_qn_c_interface
 
     ! create function pointers to ensure that routines comply with interface
     procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
-    procedure(init_hess_type), pointer :: init_hess_f_wrapper_ptr => init_hess_f_wrapper
+    procedure(obj_func_grad_type), pointer :: obj_func_grad_f_wrapper_ptr => &
+        obj_func_grad_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -74,9 +81,9 @@ contains
 
     function rotation_qn_factory_c_wrapper( &
         n_param_c, update_orbs_c_funptr, obj_func_c_funptr, transport_c_funptr, &
-        init_hess_c_funptr, update_orbs_rotation_qn_c_funptr, &
-        obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, solver_state_c, &
-        settings_c) result(error_c) bind(C, name="rotation_qn_factory")
+        update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, extension_c, &
+        solver_settings_c, solver_state_c, settings_c) result(error_c) &
+        bind(C, name="rotation_qn_factory")
         !
         ! this function wraps the rotation QN factory for C hosts, which creates a
         ! holder of the new rotation QN object, returned as the extension the host
@@ -97,7 +104,7 @@ contains
 
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
-                                             transport_c_funptr, init_hess_c_funptr
+                                             transport_c_funptr
         type(c_funptr), intent(out) :: update_orbs_rotation_qn_c_funptr, &
                                        obj_func_rotation_qn_c_funptr
         type(c_ptr), intent(out) :: extension_c
@@ -111,7 +118,6 @@ contains
         procedure(obj_func_type), pointer :: obj_func_funptr, &
                                              obj_func_rotation_qn_funptr
         procedure(transport_type), pointer :: transport_funptr
-        procedure(init_hess_type), pointer :: init_hess_funptr
         type(rotation_qn_settings_type) :: settings
         type(rotation_qn_settings_type_c) :: local_settings_c
         type(extension_holder_type), pointer :: holder
@@ -136,15 +142,23 @@ contains
         if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
             settings, rotation_qn_settings_uninitialized_warning_msg)
 
-        ! create the holder, whose bundle hands the transport and initial Hessian
-        ! functions and the logging function with the host context of initialized
-        ! settings to their wrappers, which the settings point to
+        ! create the holder, whose bundle hands the transport function and the initial
+        ! Hessian, preconditioning, objective and logging functions with the host
+        ! context of initialized settings to their wrappers, which the settings point to
         allocate(holder)
         allocate(rotation_qn_c_callbacks_type :: holder%extension_callbacks)
         select type (callbacks => holder%extension_callbacks)
         type is (rotation_qn_c_callbacks_type)
             call c_f_procpointer(cptr=transport_c_funptr, fptr=callbacks%transport)
-            call c_f_procpointer(cptr=init_hess_c_funptr, fptr=callbacks%init_hess)
+            if (local_settings_c%initialized) then
+                if (c_associated(local_settings_c%init_hess)) call c_f_procpointer( &
+                    cptr=local_settings_c%init_hess, fptr=callbacks%hess_x)
+                if (c_associated(local_settings_c%init_precond)) call c_f_procpointer( &
+                    cptr=local_settings_c%init_precond, fptr=callbacks%precond)
+                if (c_associated(local_settings_c%obj_func_grad)) &
+                    call c_f_procpointer(cptr=local_settings_c%obj_func_grad, &
+                                         fptr=callbacks%obj_func_grad)
+            end if
             call bundle_settings_c(callbacks, local_settings_c%initialized, &
                                    local_settings_c%logger, local_settings_c%context)
         end select
@@ -156,15 +170,13 @@ contains
                                     settings, error, update_orbs_c_funptr, &
                                     obj_func_c_funptr)
 
-        ! the object can not run without the host's orbital update, objective
-        ! function, transport and initial Hessian functions
+        ! the object can not run without the host's orbital update, objective function
+        ! and transport function
         if (error == 0 .and. .not. (c_associated(update_orbs_c_funptr) .and. &
                                     c_associated(obj_func_c_funptr) .and. &
-                                    c_associated(transport_c_funptr) .and. &
-                                    c_associated(init_hess_c_funptr))) then
-            call settings%log("Orbital update, objective function, transport and "// &
-                              "initial Hessian functions have to be given.", &
-                              verbosity_error, .true.)
+                                    c_associated(transport_c_funptr))) then
+            call settings%log("Orbital update, objective function and transport "// &
+                              "function have to be given.", verbosity_error, .true.)
             error = 1
         end if
         call add_error_origin(error, error_rotation_qn, settings)
@@ -177,10 +189,9 @@ contains
             update_orbs_funptr => update_orbs_f_wrapper
             obj_func_funptr => obj_func_f_wrapper
             transport_funptr => transport_f_wrapper
-            init_hess_funptr => init_hess_f_wrapper
             call rotation_qn_factory( &
                 int(n_param_c, kind=ip), update_orbs_funptr, obj_func_funptr, &
-                transport_funptr, init_hess_funptr, update_orbs_rotation_qn_funptr, &
+                transport_funptr, update_orbs_rotation_qn_funptr, &
                 obj_func_rotation_qn_funptr, holder%solver_settings, holder%state, &
                 error, settings)
         end if
@@ -224,30 +235,37 @@ contains
 
     end subroutine transport_f_wrapper
 
-    subroutine init_hess_f_wrapper(vector, error, context)
+    function obj_func_grad_f_wrapper(kappa, grad, error, context) result(func)
         !
-        ! this subroutine exposes the initial Hessian C function to Fortran, finding
-        ! the C function and the host context in the bundle it receives as context
+        ! this function exposes the C objective function of the settings, which also
+        ! returns the gradient at the trial point, to Fortran, finding the C function
+        ! and the host context in the bundle it receives as context
         !
-        real(rp), intent(inout), target :: vector(:)
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out), target :: grad(:)
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
+        real(rp) :: func
 
         integer(c_ip) :: error_c
+        real(c_rp) :: func_c
 
         ! the bundle holds the C function
+        func = 0.0_rp
         error = 1
         if (.not. associated(context)) return
         select type (callbacks => context)
         type is (rotation_qn_c_callbacks_type)
-            ! call initial Hessian C function
-            error_c = callbacks%init_hess(vector, callbacks%host_context)
+            ! call objective C function
+            error_c = &
+                callbacks%obj_func_grad(kappa, grad, func_c, callbacks%host_context)
 
-            ! convert error code to Fortran kind
+            ! convert function value and error code to Fortran kinds
+            func = real(func_c, kind=rp)
             error = int(error_c, kind=ip)
         end select
 
-    end subroutine init_hess_f_wrapper
+    end function obj_func_grad_f_wrapper
 
     subroutine init_rotation_qn_settings_c(settings_c) &
         bind(C, name="init_rotation_qn_settings")
@@ -280,13 +298,29 @@ contains
         !
         use otr_rotation_qn, only: rotation_qn_settings_type, &
                                    default_rotation_qn_settings
-        use c_interface, only: character_from_c, logger_f_wrapper
+        use c_interface, only: character_from_c, logger_f_wrapper, hess_x_f_wrapper, &
+                               precond_f_wrapper
 
         type(rotation_qn_settings_type), intent(out) :: settings
         type(rotation_qn_settings_type_c), intent(in) :: settings_c
 
         if (settings_c%initialized) then
             ! convert callback functions
+            if (c_associated(settings_c%init_hess)) then
+                settings%init_hess => hess_x_f_wrapper
+            else
+                settings%init_hess => null()
+            end if
+            if (c_associated(settings_c%init_precond)) then
+                settings%init_precond => precond_f_wrapper
+            else
+                settings%init_precond => null()
+            end if
+            if (c_associated(settings_c%obj_func_grad)) then
+                settings%obj_func_grad => obj_func_grad_f_wrapper
+            else
+                settings%obj_func_grad => null()
+            end if
             if (c_associated(settings_c%logger)) then
                 settings%logger => logger_f_wrapper
             else
@@ -318,6 +352,9 @@ contains
         type(rotation_qn_settings_type), intent(in) :: settings
 
         ! callback functions cannot be converted
+        settings_c%init_hess = c_null_funptr
+        settings_c%init_precond = c_null_funptr
+        settings_c%obj_func_grad = c_null_funptr
         settings_c%logger = c_null_funptr
 
         ! convert integers

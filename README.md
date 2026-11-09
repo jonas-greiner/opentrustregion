@@ -932,7 +932,7 @@ cmake -DENABLE_ROTATION_QN=ON ..
 
 #### Usage
 
-This allows the solver to automatically update the Hessian using a quasi-Newton scheme, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `rotation_qn_factory` constructs and returns rotation QN versions of the orbital updating subroutine and the objective function and wires the solver settings with a new rotation QN object. This routine takes the following arguments:
+This lets the solver use a quasi-Newton Hessian, which updates an initial Hessian with the steps and gradient differences of the history, so the Hessian linear transformation the host's `update_orbs` returns is never called. The initial Hessian is `init_hess` of the rotation QN settings, a cheap approximation such as the Hessian without the response of the potential to the orbitals, or, without one, the Hessian diagonal `update_orbs` returns. The rotation QN object provides the preconditioner, the inverse of its level-shifted model, built on `init_precond` of the rotation QN settings or, without one, on the level-shifted Hessian diagonal. The routine `rotation_qn_factory` constructs and returns rotation QN versions of the orbital updating subroutine and the objective function and wires the solver settings with a new rotation QN object. This routine takes the following arguments:
 
 #### Required Arguments
 
@@ -940,7 +940,6 @@ This allows the solver to automatically update the Hessian using a quasi-Newton 
 - **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine it returns is not used. The returned orbital updating subroutine calls it with the host context of the solver settings.
 - **`obj_func`** (function): Original objective function as defined for the `solver` subroutine, which the returned objective function calls with the host context of the solver settings.
 - **`transport`** (subroutine): Transports a tangent vector in place along the geodesic of an orbital rotation, so that the stored steps and gradient differences refer to the current orbitals, and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the rotation QN settings as its last argument.
-- **`init_hess`** (subroutine): Applies the initial Hessian approximation in place to a vector and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the rotation QN settings as its last argument.
 - **`update_orbs_rotation_qn`** (subroutine): Returned rotation QN orbital updating subroutine as defined for the `solver` subroutine.
 - **`obj_func_rotation_qn`** (function): Returned objective function as defined for the `solver` subroutine.
 - **`extension`** (C only, `void **`): Returns the handle of the new rotation QN object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
@@ -957,7 +956,8 @@ The following Fortran snippet demonstrates how to use the rotation QN interface:
 use opentrustregion, only: ip, solver_state_type, update_orbs_type, obj_func_type, &
                            solver
 use otr_common, only: extension_solver_settings_type
-use otr_rotation_qn, only: rotation_qn_factory, rotation_qn_settings_type, transport_type, init_hess_type
+use otr_rotation_qn, only: rotation_qn_factory, rotation_qn_settings_type, &
+                           transport_type
 
 type(extension_solver_settings_type), target :: settings
 type(solver_state_type), target :: state
@@ -965,14 +965,12 @@ type(rotation_qn_settings_type) :: rotation_qn_settings
 procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_rotation_qn_funptr
 procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_rotation_qn_funptr
 procedure(transport_type), pointer :: transport_funptr
-procedure(init_hess_type), pointer :: init_hess_funptr
 integer(ip) :: n_param, error
 
 ! set callback function pointers to existing implementations
 update_orbs_funptr => update_orbs
 obj_func_funptr => obj_func
 transport_funptr => transport
-init_hess_funptr => init_hess
 
 ! override default settings
 rotation_qn_settings%verbose = 1
@@ -980,7 +978,7 @@ rotation_qn_settings%qn_method = "bfgs"
 
 ! get rotation QN routines and wire the settings with a new rotation QN object
 call rotation_qn_factory(n_param, update_orbs_funptr, obj_func_funptr, transport_funptr, &
-                init_hess_funptr, update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, settings, &
+                update_orbs_rotation_qn_funptr, obj_func_rotation_qn_funptr, settings, &
                 state, error, rotation_qn_settings)
 
 ! call solver
@@ -1002,7 +1000,6 @@ c_int n_param;
 update_orbs_fp update_orbs_funptr = update_orbs;
 obj_func_fp obj_func_funptr = obj_func;
 transport_fp transport_funptr = transport;
-init_hess_fp init_hess_funptr = init_hess;
 
 // initialize rotation QN settings
 rotation_qn_settings_type rotation_qn_settings = rotation_qn_settings_init();
@@ -1023,7 +1020,6 @@ c_int error = rotation_qn_factory(n_param,
                          update_orbs_funptr,
                          obj_func_funptr,
                          transport_funptr,
-                         init_hess_funptr,
                          &update_orbs_rotation_qn_funptr,
                          &obj_func_rotation_qn_funptr,
                          &extension,
@@ -1059,7 +1055,7 @@ state = SolverState()
 
 # get rotation QN functions and wire the settings with a new rotation QN object
 update_orbs_rotation_qn, obj_func_rotation_qn = rotation_qn_factory(
-    n_param, update_orbs, obj_func, transport, init_hess, settings, state, rotation_qn_settings
+    n_param, update_orbs, obj_func, transport, settings, state, rotation_qn_settings
 )
 
 # call solver
@@ -1068,7 +1064,7 @@ solver(update_orbs_rotation_qn, obj_func_rotation_qn, n_param, settings, state)
 
 ---
 
-- Callback functions (`update_orbs`, `obj_func`, `transport`, `init_hess`) point to existing implementations elsewhere in the program.
+- Callback functions (`update_orbs`, `obj_func`, `transport`) point to existing implementations elsewhere in the program.
 - `n_param` is assumed to be defined elsewhere.
 - Rotation QN settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `qn_method`) can then be overridden.
 - Rotation QN versions of the orbital updating function and the objective function are obtained by calling `rotation_qn_factory`, which also wires the solver settings with a new rotation QN object.
@@ -1084,9 +1080,12 @@ The rotation QN factory function can be fine-tuned using the following settings:
 
   Both apply the update of every pair of the history to the initial Hessian, from the oldest to the newest, and drop a pair whose update is not defined, for SR1 one whose denominator nearly vanishes and for BFGS one without positive curvature.
 - **`max_points`** (integer): Maximum number of points the history of steps and gradient differences keeps, at least 0, where 0 keeps none.
+- **`init_hess`** (subroutine): Initial Hessian, a Hessian linear transformation as `hess_x` of the `solver`. Without it, the Hessian diagonal `update_orbs` returns. Receives the host context of the rotation QN settings as its last argument.
+- **`init_precond`** (subroutine): Inverse of the initial Hessian shifted by a level shift, a preconditioner as `precond` of the solver settings. Without it, the level-shifted Hessian diagonal. Receives the host context of the rotation QN settings as its last argument.
+- **`obj_func_grad`** (function): Objective function that also returns the gradient at the trial point, with the arguments of `obj_func` and the gradient written in-place into a provided array, `func = obj_func_grad(kappa, grad)` in Python, while the C function writes the value through a pointer after the gradient and returns an integer error code. With it, the object adds the step and gradient difference of every trial point, also of a rejected one, to its history, and the factory sets `refresh_hess` of the solver settings, which has to stay set. Receives the host context of the rotation QN settings as its last argument.
 - **`verbose`** (integer): Controls the verbosity of output of the rotation QN routines.
 - **`logger`** (subroutine): Accepts a log message of the rotation QN routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport` and `init_hess` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `transport`, `init_hess`, `init_precond`, `obj_func_grad` and the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
 ### Density Quasi-Newton (Density QN)
 

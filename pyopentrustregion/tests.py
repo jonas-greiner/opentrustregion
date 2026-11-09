@@ -2301,19 +2301,15 @@ class CIntegrationTests(unittest.TestCase):
         return super().setUpClass()
 
 
-class PyIntegrationTests(unittest.TestCase):
+class Hartmann6DProblem:
     """
-    this class contains integration tests that drive the real library (not the mock
-    library) through the Python interface, with the Hartmann 6D problem as a small
-    workload that exercises every callback, settings field and return value crossing
-    the interface
+    this class provides the Hartmann 6D problem, which it reads from the library, and
+    its function, gradient and Hessian to the integration tests of the Python interface
+    of the core and of the extensions
     """
 
     @classmethod
-    def setUpClass(cls):
-        print_separator("Running integration tests for Python interface...")
-
-        # read the Hartmann 6D problem from the library
+    def load_hartmann6d(cls):
         def read_array(name, *shape):
             size = int(np.prod(shape))
             array = (c_real * size).in_dll(lib, name)
@@ -2329,8 +2325,6 @@ class PyIntegrationTests(unittest.TestCase):
         cls.minimum1 = read_array("hartmann6d_minimum1", cls.n_param)
         cls.near_minimum = read_array("hartmann6d_near_minimum", cls.n_param)
         cls.saddle_point = read_array("hartmann6d_saddle_point", cls.n_param)
-
-        return super().setUpClass()
 
     # Hartmann 6D primitives shared by the callbacks
 
@@ -2374,6 +2368,21 @@ class PyIntegrationTests(unittest.TestCase):
                 )
                 H[j, i] = H[i, j]
         return H
+
+
+class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
+    """
+    this class contains integration tests that drive the real library (not the mock
+    library) through the Python interface, with the Hartmann 6D problem as a small
+    workload that exercises every callback, settings field and return value crossing
+    the interface
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        print_separator("Running integration tests for Python interface...")
+        cls.load_hartmann6d()
+        return super().setUpClass()
 
     # Tests
 

@@ -34,9 +34,9 @@ contains
 
     function mock_rotation_qn_factory_c_wrapper( &
         n_param_c, update_orbs_c_funptr, obj_func_c_funptr, transport_c_funptr, &
-        init_hess_c_funptr, update_orbs_rotation_qn_c_funptr, &
-        obj_func_rotation_qn_c_funptr, extension_c, solver_settings_c, solver_state_c, &
-        settings_c) result(error_c) bind(C, name="mock_rotation_qn_factory")
+        update_orbs_rotation_qn_c_funptr, obj_func_rotation_qn_c_funptr, extension_c, &
+        solver_settings_c, solver_state_c, settings_c) result(error_c) &
+        bind(C, name="mock_rotation_qn_factory")
         !
         ! this subroutine is a mock routine for the rotation QN factory C wrapper
         ! subroutine
@@ -44,16 +44,16 @@ contains
         use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
-                                  n_param
-        use otr_rotation_qn_test_reference, only: check_transport_c_funptr, &
-                                                  check_init_hess_c_funptr, operator(/=)
+                                  check_hess_x_c_funptr, check_precond_c_funptr, n_param
+        use otr_rotation_qn_test_reference, only: &
+            check_transport_c_funptr, check_obj_func_grad_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
             record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension
 
         integer(c_ip), intent(in), value :: n_param_c
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr, &
-                                             transport_c_funptr, init_hess_c_funptr
+                                             transport_c_funptr
         type(c_funptr), intent(out) :: update_orbs_rotation_qn_c_funptr, &
                                        obj_func_rotation_qn_c_funptr
         type(c_ptr), intent(out) :: extension_c
@@ -93,16 +93,24 @@ contains
             " by given transport function", c_null_ptr)) &
             test_rotation_qn_factory_interface = .false.
 
-        ! test passed initial Hessian function
-        if (.not. check_init_hess_c_funptr( &
-            init_hess_c_funptr, "rotation_qn_factory_py_interface", &
-            " by given initial Hessian function", c_null_ptr)) &
-            test_rotation_qn_factory_interface = .false.
-
-        ! record whether settings were passed and, if so, call their logging function
-        ! and check them against the reference values
+        ! record whether settings were passed and, if so, call their logging function,
+        ! test their initial Hessian, preconditioner and objective function and check
+        ! them against the reference values
         rotation_qn_settings_passed = present(settings_c)
         if (present(settings_c)) then
+            if (.not. check_hess_x_c_funptr( &
+                settings_c%init_hess, "rotation_qn_factory_py_interface", &
+                " by the initial Hessian of the settings", c_null_ptr)) &
+                test_rotation_qn_factory_interface = .false.
+            if (.not. check_precond_c_funptr( &
+                settings_c%init_precond, "rotation_qn_factory_py_interface", &
+                " by the preconditioner of the settings", c_null_ptr)) &
+                test_rotation_qn_factory_interface = .false.
+            if (.not. check_obj_func_grad_c_funptr( &
+                settings_c%obj_func_grad, "rotation_qn_factory_py_interface", &
+                " by the objective function of the settings", c_null_ptr)) &
+                test_rotation_qn_factory_interface = .false.
+
             ! get Fortran pointer to passed logging function and call it
             message = "test"//c_null_char
             call c_f_procpointer(cptr=settings_c%logger, fptr=logger_funptr)
@@ -125,8 +133,8 @@ contains
         ! return an extension, recording the record of the state
         update_orbs_rotation_qn_c_funptr = c_funloc(mock_level_update_orbs)
         obj_func_rotation_qn_c_funptr = c_funloc(mock_level_obj_func)
-        call record_received_callbacks([update_orbs_c_funptr, obj_func_c_funptr, &
-                                        transport_c_funptr, init_hess_c_funptr])
+        call record_received_callbacks( &
+            [update_orbs_c_funptr, obj_func_c_funptr, transport_c_funptr])
         extension_c = mock_extension(solver_state_c)
 
         ! set return arguments
@@ -145,8 +153,11 @@ contains
 
         type(rotation_qn_settings_type_c), intent(out) :: settings
 
-        ! set reference values without logging function and host context
+        ! set reference values without callback functions and host context
         call get_reference_rotation_qn_values(settings)
+        settings%init_hess = c_null_funptr
+        settings%init_precond = c_null_funptr
+        settings%obj_func_grad = c_null_funptr
         settings%logger = c_null_funptr
         settings%context = c_null_ptr
 

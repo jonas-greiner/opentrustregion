@@ -23,14 +23,18 @@ typedef c_int transport_fn(const c_real *geodesic_c, c_real *tangent_vector_c,
                            void *context);
 typedef transport_fn *transport_fp;
 
-/* Hessian initialization callback */
-typedef c_int init_hess_fn(c_real *vector_c, void *context);
-typedef init_hess_fn *init_hess_fp;
+/* Objective function callback that also returns the gradient at the trial point */
+typedef c_int obj_func_grad_fn(const c_real *kappa_c, c_real *grad_c, c_real *func_c,
+                               void *context);
+typedef obj_func_grad_fn *obj_func_grad_fp;
 
 /* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(rotation_qn_settings_type_c)
  * ------------------------------------------------------------------ */
 typedef struct {
+  hess_x_fp init_hess;
+  precond_fp init_precond;
+  obj_func_grad_fp obj_func_grad;
   logger_fp logger;
   c_bool initialized;
   c_int verbose;
@@ -53,7 +57,6 @@ void init_rotation_qn_settings(rotation_qn_settings_type *settings);
  * @param update_orbs_c_funptr                    C pointer to update_orbs callback
  * @param obj_func_c_funptr                       C pointer to obj_func callback
  * @param transport_c_funptr                      C pointer to transport callback
- * @param init_hess_c_funptr                      C pointer to init_hess callback
  * @param update_orbs_rotation_qn_c_funptr        Output: wrapped update_orbs function
  *                                                pointer
  * @param obj_func_rotation_qn_c_funptr           Output: wrapped objective function
@@ -74,7 +77,6 @@ void init_rotation_qn_settings(rotation_qn_settings_type *settings);
 c_int rotation_qn_factory(c_int n_param_c, update_orbs_fp update_orbs_c_funptr,
                           obj_func_fp obj_func_c_funptr,
                           transport_fp transport_c_funptr,
-                          init_hess_fp init_hess_c_funptr,
                           update_orbs_fp *update_orbs_rotation_qn_c_funptr,
                           obj_func_fp *obj_func_rotation_qn_c_funptr,
                           void **extension_c, solver_settings_type *solver_settings_c,

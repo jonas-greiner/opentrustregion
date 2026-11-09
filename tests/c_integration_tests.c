@@ -39,7 +39,7 @@
  * Hartmann 6D function
  * ------------------------------------------------------------------ */
 
-#define N_PARAM 6
+#define N_PARAM HARTMANN6D_N_PARAM
 #define N_TERM 4
 
 extern const c_int hartmann6d_n_param;
@@ -99,7 +99,7 @@ static void exp_terms(const c_real x[N_PARAM], c_real out[N_TERM]) {
   }
 }
 
-static c_real hartmann_func(const c_real x[N_PARAM]) {
+c_real hartmann_func(const c_real x[N_PARAM]) {
   c_real e[N_TERM];
   exp_terms(x, e);
   c_real f = 0.0;
@@ -108,7 +108,7 @@ static c_real hartmann_func(const c_real x[N_PARAM]) {
   return f;
 }
 
-static void hartmann_grad(const c_real x[N_PARAM], c_real grad[N_PARAM]) {
+void hartmann_grad(const c_real x[N_PARAM], c_real grad[N_PARAM]) {
   c_real e[N_TERM];
   exp_terms(x, e);
   for (int j = 0; j < N_PARAM; j++) {
@@ -119,7 +119,7 @@ static void hartmann_grad(const c_real x[N_PARAM], c_real grad[N_PARAM]) {
   }
 }
 
-static void hartmann_hess(const c_real x[N_PARAM], c_real hess[N_PARAM][N_PARAM]) {
+void hartmann_hess(const c_real x[N_PARAM], c_real hess[N_PARAM][N_PARAM]) {
   c_real e[N_TERM];
   exp_terms(x, e);
   for (int i = 0; i < N_PARAM; i++) {

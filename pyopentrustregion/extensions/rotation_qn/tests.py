@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import POINTER, c_bool
+from ctypes import POINTER, c_bool, c_void_p, pointer
 from unittest.mock import patch
 
 import numpy as np
@@ -16,15 +16,18 @@ from pyopentrustregion.tests import (
     add_tests,
     print_separator,
     check_callback_interfaces,
+    Hartmann6DProblem,
 )
 from pyopentrustregion.python_interface import (
     c_real,
     SolverSettings,
     SolverState,
+    solver,
 )
 from pyopentrustregion.extensions.rotation_qn.python_interface import (
     TransportInterface,
-    InitHessInterface,
+    ObjFuncGradInterface,
+    obj_func_grad_interface_type,
 )
 from pyopentrustregion.extensions.rotation_qn import (
     RotationQNSettings,
@@ -44,27 +47,33 @@ from pyopentrustregion.extensions.common.tests import (
 # define all tests in alphabetical order
 fortran_tests = {
     "rotation_qn_c_integration_tests": [
+        "rotation_qn_factory_c",
         "rotation_qn_settings_init",
         "rotation_qn_settings_layout",
     ],
     "rotation_qn_c_interface_tests": [
         "assign_rotation_qn_c_f",
         "assign_rotation_qn_f_c",
-        "init_hess_f_wrapper",
         "init_rotation_qn_settings_c",
+        "obj_func_grad_f_wrapper",
         "rotation_qn_factory_c_wrapper",
         "transport_f_wrapper",
     ],
     "rotation_qn_tests": [
+        "add_pair_rotation_qn",
         "add_rotation_qn",
         "build_model_bfgs",
         "build_model_sr1",
         "hess_x_rotation_qn",
+        "init_precond_rotation_qn",
         "init_rotation_qn",
         "invoke_init_hess",
+        "invoke_obj_func_grad",
         "invoke_transport",
         "keep_pair",
         "model_x_rotation_qn",
+        "obj_func_rotation_qn",
+        "precond_rotation_qn",
         "rotation_qn_factory",
         "rotation_qn_sanity_check",
         "update_orbs_rotation_qn",
@@ -123,37 +132,46 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
 
         return
 
-    def mock_init_hess(self, vector):
+    def mock_init_precond(self, residual, mu, precond_residual):
         """
-        this function is a mock function for the initial Hessian function
+        this function is a mock function for the preconditioner of the settings
         """
-        vector[:] = 2 * vector
+        precond_residual[:] = mu * residual
 
-        return
+    def mock_obj_func_grad(self, kappa, grad):
+        """
+        this function is a mock function for the objective function of the settings,
+        which returns the sum of the step as the energy and twice the step as the
+        gradient
+        """
+        grad[:] = 2 * kappa
+
+        return np.sum(kappa)
 
     def test_callback_interfaces(self):
         """
-        this function tests that the interfaces to the transport and initial Hessian
-        functions report an exception or an interruption raised by the function as an
-        error and keep it with the call whose library called them, and that the
-        transport function receives the geodesic read-only
+        this function tests that the interfaces to the transport function and the
+        objective function of the settings report an exception or an interruption
+        raised by the function as an error and keep it with the call whose library
+        called them, and that they receive the geodesic and the step read-only
         """
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
         output = np.zeros(n_param)
         output_ptr = output.ctypes.data_as(POINTER(c_real))
+        func_ptr = pointer(c_real())
         interfaces = {
             "transport function": lambda func: TransportInterface(func)(
                 vector_ptr, output_ptr, None
             ),
-            "initial Hessian function": lambda func: InitHessInterface(func)(
-                output_ptr, None
-            ),
+            "objective function of the settings": lambda func: ObjFuncGradInterface(
+                {"obj_func_grad": func}, "obj_func_grad"
+            )(vector_ptr, output_ptr, func_ptr, None),
         }
         test_passed = check_callback_interfaces(
             "test_callback_interfaces",
             interfaces,
-            ["transport function"],
+            ["transport function", "objective function of the settings"],
             vector,
             n_param,
         )
@@ -188,6 +206,9 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
         settings = RotationQNSettings()
         assign_reference_settings(settings, lib.reference_rotation_qn_field)
         settings.logger = messages.append
+        settings.init_hess = self.mock_hess_x
+        settings.init_precond = self.mock_init_precond
+        settings.obj_func_grad = self.mock_obj_func_grad
         solver_settings, python_functions = setup_wired_solver_settings()
 
         # call rotation QN factory python interface
@@ -197,7 +218,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
             self.mock_update_orbs,
             self.mock_obj_func,
             self.mock_transport,
-            self.mock_init_hess,
             solver_settings,
             SolverState(),
             settings,
@@ -321,7 +341,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 self.mock_update_orbs,
                 self.mock_obj_func,
                 self.mock_transport,
-                self.mock_init_hess,
                 solver_settings,
                 SolverState(),
                 settings,
@@ -346,7 +365,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 self.mock_update_orbs,
                 self.mock_obj_func,
                 self.mock_transport,
-                self.mock_init_hess,
                 setup_wired_solver_settings()[0],
                 SolverState(),
             )
@@ -383,7 +401,6 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
                 self.mock_update_orbs,
                 self.mock_obj_func,
                 self.mock_transport,
-                self.mock_init_hess,
                 solver_settings,
                 solver_state,
                 settings,
@@ -405,14 +422,7 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
         # called with the arguments the C interface passes, which have to raise an
         # error before the Fortran factory is called
         invalid_cases = (
-            (
-                "transport with a wrong number of arguments",
-                (lambda geodesic: None, self.mock_init_hess),
-            ),
-            (
-                "init_hess with a wrong number of arguments",
-                (self.mock_transport, lambda: None),
-            ),
+            ("transport with a wrong number of arguments", (lambda geodesic: None,)),
         )
         for case, callbacks in invalid_cases:
             try:
@@ -443,16 +453,60 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
     def test_rotation_qn_settings(self):
         """
         this function ensures the RotationQNSettings object is properly initialized and
-        synchronized with the underlying C struct
+        synchronized with the underlying C struct, and that a C objective function in
+        the C settings is read as a callable around it
         """
-        self.assertTrue(
-            settings_hold_reference(
-                "test_rotation_qn_settings",
-                RotationQNSettings(),
-                lib.reference_rotation_qn_field,
-            ),
-            "test_rotation_qn_settings failed",
+        test_passed = settings_hold_reference(
+            "test_rotation_qn_settings",
+            RotationQNSettings(),
+            lib.reference_rotation_qn_field,
         )
+
+        # a C objective function in the C settings is read as a callable around it,
+        # which hands it the step, returns its energy and gradient, calls it with the
+        # context of the settings and raises its error
+        settings = RotationQNSettings()
+        settings.settings_c.context = 6789
+        received_contexts = []
+        error_code = 0
+
+        def c_obj_func_grad(kappa_ptr, grad_ptr, func_ptr, context):
+            kappa = np.ctypeslib.as_array(kappa_ptr, shape=(n_param,))
+            np.ctypeslib.as_array(grad_ptr, shape=(n_param,))[:] = 2.0 * kappa
+            func_ptr[0] = np.sum(kappa)
+            received_contexts.append(context)
+            return error_code
+
+        c_function = obj_func_grad_interface_type(c_obj_func_grad)
+        settings.settings_c.obj_func_grad = c_void_p.from_buffer(c_function).value
+        kappa = np.random.random(n_param)
+        # a strided gradient, which the library cannot write in place, has to receive
+        # the values written into its copy
+        grad = np.zeros(2 * n_param)[::2]
+        func = settings.obj_func_grad(kappa, grad)
+        if (
+            not np.isclose(func, np.sum(kappa))
+            or not np.allclose(grad, 2.0 * kappa)
+            or received_contexts != [6789]
+        ):
+            print(
+                " test_rotation_qn_settings failed: C objective function not called "
+                "with the step and the context of the settings or its energy and "
+                "gradient not returned."
+            )
+            test_passed = False
+        error_code = 3
+        try:
+            settings.obj_func_grad(kappa, grad)
+            print(
+                " test_rotation_qn_settings failed: Error of the C objective function "
+                "not raised."
+            )
+            test_passed = False
+        except RuntimeError:
+            pass
+
+        self.assertTrue(test_passed, "test_rotation_qn_settings failed")
         print(" test_rotation_qn_settings PASSED")
 
 
@@ -471,7 +525,7 @@ class RotationQNCIntegrationTests(unittest.TestCase):
         return super().setUpClass()
 
 
-class RotationQNPyIntegrationTests(unittest.TestCase):
+class RotationQNPyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
     """
     this class contains integration tests that drive the real library (not the mock
     library) through the rotation QN Python interface
@@ -480,7 +534,118 @@ class RotationQNPyIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         print_separator("Running integration tests for rotation QN Python interface...")
+        cls.load_hartmann6d()
         return super().setUpClass()
+
+    def test_rotation_qn_factory_py(self):
+        """
+        this function solves the Hartmann 6D problem with the real factory and solver
+        through the Python interface, with either updating scheme, SR1 with the Hessian
+        diagonal as the initial Hessian of the settings and BFGS with the default,
+        which is the same, and the objective function of the settings, which has to
+        replace the host's, and checks that the solve converges to the minimum, that
+        every callback function is called, while neither the host's objective function
+        nor the exact Hessian the orbital update returns is, and that the factory lets
+        the solver refresh the model after a rejected step
+        """
+        test_passed = True
+        for qn_method in ("sr1", "bfgs"):
+            curr_vars = self.near_minimum.copy()
+            curr_hess = np.empty((self.n_param, self.n_param))
+            counts = dict.fromkeys(
+                (
+                    "update_orbs",
+                    "obj_func",
+                    "exact_hess_x",
+                    "transport",
+                    "init_hess",
+                    "obj_func_grad",
+                ),
+                0,
+            )
+
+            def exact_hess_x(x, hess_x):
+                counts["exact_hess_x"] += 1
+                hess_x[:] = curr_hess @ x
+
+            def init_hess(x, hess_x):
+                counts["init_hess"] += 1
+                hess_x[:] = np.diag(curr_hess) * x
+
+            def update_orbs(kappa, grad, h_diag):
+                counts["update_orbs"] += 1
+                curr_vars[:] += kappa
+                grad[:] = self._grad(curr_vars)
+                curr_hess[:] = self._hess(curr_vars)
+                h_diag[:] = np.diag(curr_hess)
+                return self._func(curr_vars), exact_hess_x
+
+            def obj_func(kappa):
+                counts["obj_func"] += 1
+                return self._func(curr_vars + kappa)
+
+            def transport(geodesic, tangent_vector):
+                counts["transport"] += 1
+
+            def obj_func_grad(kappa, grad):
+                counts["obj_func_grad"] += 1
+                grad[:] = self._grad(curr_vars + kappa)
+                return self._func(curr_vars + kappa)
+
+            settings = SolverSettings()
+            state = SolverState()
+            rotation_qn_settings = RotationQNSettings()
+            rotation_qn_settings.qn_method = qn_method
+            if qn_method == "sr1":
+                rotation_qn_settings.init_hess = init_hess
+            rotation_qn_settings.obj_func_grad = obj_func_grad
+            update_orbs_rotation_qn, obj_func_rotation_qn = rotation_qn_factory(
+                self.n_param,
+                update_orbs,
+                obj_func,
+                transport,
+                settings,
+                state,
+                rotation_qn_settings,
+            )
+            if not settings.refresh_hess:
+                print(
+                    " test_rotation_qn_factory_py failed: Refresh of the model after a "
+                    f"rejected step not set for {qn_method}."
+                )
+                test_passed = False
+
+            solver(
+                update_orbs_rotation_qn,
+                obj_func_rotation_qn,
+                self.n_param,
+                settings,
+                state,
+            )
+            if not np.allclose(curr_vars, self.minimum1, rtol=0.0, atol=1e-4):
+                print(
+                    " test_rotation_qn_factory_py failed: Solve did not converge to "
+                    f"the minimum for {qn_method}."
+                )
+                test_passed = False
+            if (
+                counts["obj_func"] != 0
+                or counts["exact_hess_x"] != 0
+                or (counts["init_hess"] == 0) == (qn_method == "sr1")
+                or not all(
+                    counts[name]
+                    for name in ("update_orbs", "transport", "obj_func_grad")
+                )
+            ):
+                print(
+                    " test_rotation_qn_factory_py failed: Callback functions not "
+                    "called or host's objective function or exact Hessian called "
+                    f"for {qn_method}."
+                )
+                test_passed = False
+
+        self.assertTrue(test_passed, "test_rotation_qn_factory_py failed")
+        print(" test_rotation_qn_factory_py PASSED")
 
     def test_rotation_qn_settings_layout(self):
         """

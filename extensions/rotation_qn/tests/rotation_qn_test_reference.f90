@@ -16,11 +16,12 @@ module otr_rotation_qn_test_reference
 
     implicit none
 
-    ! reference rotation QN settings, every field but the logging function and the host
-    ! context differing from its default and every integer from the other
+    ! reference rotation QN settings, every field but the callback functions and the
+    ! host context differing from its default and every integer from the other
     type(rotation_qn_settings_type), parameter :: ref_rotation_qn_settings = &
-        rotation_qn_settings_type(logger=null(), verbose=3, max_points=100, &
-                                  qn_method="bfgs")
+        rotation_qn_settings_type(logger=null(), init_hess=null(), &
+                                  init_precond=null(), obj_func_grad=null(), &
+                                  verbose=3, max_points=100, qn_method="bfgs")
 
     interface operator(==)
         module procedure equal_rotation_qn
@@ -148,41 +149,43 @@ contains
 
     end function check_transport_c_funptr
 
-    function check_init_hess_funptr(init_hess_funptr, test_name, message, context) &
-        result(test_passed)
+    function check_obj_func_grad_funptr(obj_func_grad_funptr, test_name, message, &
+                                        context) result(test_passed)
         !
-        ! this function tests a provided initial Hessian function pointer
+        ! this function tests a provided pointer to an objective function that also
+        ! returns the gradient at the trial point
         !
-        use otr_rotation_qn, only: init_hess_type
+        use otr_rotation_qn, only: obj_func_grad_type
 
-        procedure(init_hess_type), intent(in), pointer :: init_hess_funptr
+        procedure(obj_func_grad_type), intent(in), pointer :: obj_func_grad_funptr
         character(len=*), intent(in) :: test_name, message
         class(*), intent(in), pointer :: context
         logical :: test_passed
 
-        real(rp), allocatable :: vector(:), expected(:)
+        real(rp), allocatable :: kappa(:), grad(:)
+        real(rp) :: func
         integer(ip) :: error
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. associated(init_hess_funptr)) then
+        if (.not. associated(obj_func_grad_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Initial Hessian "// &
-                "function provided"//message//" not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Objective function "// &
+                "provided"//message//" not associated with value."
             return
         end if
 
         ! allocate arrays
-        allocate(vector(n_param))
+        allocate(kappa(n_param), grad(n_param))
 
-        ! generate a random input array, which the mock initial Hessian doubles
-        call random_number(vector)
-        expected = 2.0_rp * vector
+        ! generate a random step, whose sum the mock returns as the energy and twice
+        ! which as the gradient
+        call random_number(kappa)
 
-        ! call initial Hessian function pointer
-        call init_hess_funptr(vector, error, context)
+        ! call objective function pointer
+        func = obj_func_grad_funptr(kappa, grad, error, context)
 
         ! check for error
         if (error /= 0) then
@@ -190,57 +193,60 @@ contains
             write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
         end if
 
-        ! check vector
-        if (.not. all(is_close(vector, expected))) then
+        ! check energy and gradient
+        if (.not. is_close(func, sum(kappa)) .or. &
+            .not. all(is_close(grad, 2.0_rp * kappa))) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Vector returned"//message// &
-                " wrong."
+            write(stderr, *) "test_"//test_name// &
+                " failed: Energy or gradient returned"//message//" wrong."
         end if
 
         ! deallocate arrays
-        deallocate(vector, expected)
+        deallocate(kappa, grad)
 
-    end function check_init_hess_funptr
+    end function check_obj_func_grad_funptr
 
-    function check_init_hess_c_funptr(init_hess_c_funptr, test_name, message, &
-                                      context_c) result(test_passed)
+    function check_obj_func_grad_c_funptr(obj_func_grad_c_funptr, test_name, message, &
+                                          context_c) result(test_passed)
         !
-        ! this function tests a provided initial Hessian C function pointer
+        ! this function tests a provided C pointer to an objective function that also
+        ! returns the gradient at the trial point
         !
-        use otr_rotation_qn_c_interface, only: init_hess_c_type
+        use otr_rotation_qn_c_interface, only: obj_func_grad_c_type
 
-        type(c_funptr), intent(in) :: init_hess_c_funptr
+        type(c_funptr), intent(in) :: obj_func_grad_c_funptr
         character(len=*), intent(in) :: test_name, message
         type(c_ptr), intent(in) :: context_c
         logical :: test_passed
 
-        procedure(init_hess_c_type), pointer :: init_hess_funptr
-        real(c_rp), allocatable :: vector(:), expected(:)
+        procedure(obj_func_grad_c_type), pointer :: obj_func_grad_funptr
+        real(c_rp), allocatable :: kappa(:), grad(:)
+        real(c_rp) :: func
         integer(c_ip) :: error
 
         ! assume tests pass
         test_passed = .true.
 
         ! check if function pointer is associated
-        if (.not. c_associated(init_hess_c_funptr)) then
+        if (.not. c_associated(obj_func_grad_c_funptr)) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Initial Hessian "// &
-                "function provided"//message//" not associated with value."
+            write(stderr, *) "test_"//test_name//" failed: Objective function "// &
+                "provided"//message//" not associated with value."
             return
         end if
 
         ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=init_hess_c_funptr, fptr=init_hess_funptr)
+        call c_f_procpointer(cptr=obj_func_grad_c_funptr, fptr=obj_func_grad_funptr)
 
         ! allocate arrays
-        allocate(vector(n_param))
+        allocate(kappa(n_param), grad(n_param))
 
-        ! generate a random input array, which the mock initial Hessian doubles
-        call random_number(vector)
-        expected = 2.0_c_rp * vector
+        ! generate a random step, whose sum the mock returns as the energy and twice
+        ! which as the gradient
+        call random_number(kappa)
 
-        ! call initial Hessian function pointer
-        error = init_hess_funptr(vector, context_c)
+        ! call objective function pointer
+        error = obj_func_grad_funptr(kappa, grad, func, context_c)
 
         ! check for error
         if (error /= 0) then
@@ -248,32 +254,36 @@ contains
             write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
         end if
 
-        ! check vector
-        if (.not. all(is_close(vector, expected))) then
+        ! check energy and gradient
+        if (.not. is_close(func, sum(kappa)) .or. &
+            .not. all(is_close(grad, 2.0_c_rp * kappa))) then
             test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Vector returned"//message// &
-                " wrong."
+            write(stderr, *) "test_"//test_name// &
+                " failed: Energy or gradient returned"//message//" wrong."
         end if
 
         ! deallocate arrays
-        deallocate(vector, expected)
+        deallocate(kappa, grad)
 
-    end function check_init_hess_c_funptr
+    end function check_obj_func_grad_c_funptr
 
     subroutine get_reference_rotation_qn_values(values_out) bind(C)
         !
         ! this subroutine exports the reference rotation QN settings as C settings
         ! whose fields are set one by one without the conversion routines under test,
-        ! the logging function and the host context are set to distinct addresses
+        ! the callback functions and the host context are set to distinct addresses
         !
         use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c
         use test_reference, only: ref_character_to_c
 
         type(rotation_qn_settings_type_c), intent(out) :: values_out
 
-        ! set logging function and host context to distinct addresses
+        ! set callback functions and host context to distinct addresses
         values_out%logger = transfer(1_c_intptr_t, c_null_funptr)
         values_out%context = transfer(2_c_intptr_t, c_null_ptr)
+        values_out%init_hess = transfer(3_c_intptr_t, c_null_funptr)
+        values_out%init_precond = transfer(4_c_intptr_t, c_null_funptr)
+        values_out%obj_func_grad = transfer(5_c_intptr_t, c_null_funptr)
 
         ! set logical, integers and keyword
         values_out%initialized = .true.
@@ -305,6 +315,12 @@ contains
         keyword_c = c_null_char
         call get_reference_rotation_qn_values(values)
         select case (ref_character_from_c(name_c))
+        case ("init_hess")
+            field_value = real(transfer(values%init_hess, 0_c_intptr_t), kind=c_rp)
+        case ("init_precond")
+            field_value = real(transfer(values%init_precond, 0_c_intptr_t), kind=c_rp)
+        case ("obj_func_grad")
+            field_value = real(transfer(values%obj_func_grad, 0_c_intptr_t), kind=c_rp)
         case ("logger")
             field_value = real(transfer(values%logger, 0_c_intptr_t), kind=c_rp)
         case ("context")
@@ -324,7 +340,7 @@ contains
     logical(c_bool) function is_default_rotation_qn_settings(settings_c) bind(C)
         !
         ! this function checks whether C rotation QN settings hold the default values
-        ! without logging function and host context, so that a C test can compare
+        ! without callback functions and host context, so that a C test can compare
         ! against them without values of its own
         !
         use otr_rotation_qn, only: default_rotation_qn_settings
@@ -334,6 +350,9 @@ contains
 
         is_default_rotation_qn_settings = &
             settings_c == default_rotation_qn_settings .and. &
+            .not. c_associated(settings_c%init_hess) .and. &
+            .not. c_associated(settings_c%init_precond) .and. &
+            .not. c_associated(settings_c%obj_func_grad) .and. &
             .not. c_associated(settings_c%logger) .and. &
             .not. c_associated(settings_c%context)
 

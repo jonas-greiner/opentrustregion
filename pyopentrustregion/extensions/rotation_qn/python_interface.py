@@ -18,13 +18,23 @@ from pyopentrustregion.python_interface import (
     kw_len,
     callback_type,
     CallbackInterface,
+    SettingsCallbackInterface,
+    CFunctionInterface,
+    c_buffer,
+    write_back,
     update_orbs_interface_type,
     obj_func_interface_type,
     logger_interface_type,
+    hess_x_interface_type,
+    precond_interface_type,
     UpdateOrbsInterface,
     ObjFuncInterface,
     LoggerInterface,
     LoggerPyInterface,
+    SettingsHessXInterface,
+    HessXPyInterface,
+    PrecondInterface,
+    PrecondPyInterface,
     LibraryCall,
     Settings,
     SolverSettings,
@@ -45,19 +55,62 @@ if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional
 
     TransportType = Callable[[np.ndarray, np.ndarray], None]
-    InitHessType = Callable[[np.ndarray], None]
+    ObjFuncGradType = Callable[[np.ndarray, np.ndarray], float]
 
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
 transport_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
-init_hess_interface_type = callback_type(c_int, POINTER(c_real))
+obj_func_grad_interface_type = callback_type(
+    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
+)
+
+
+class ObjFuncGradInterface(SettingsCallbackInterface):
+    """
+    this class provides the interface to the objective function of the rotation QN
+    settings, which also writes the gradient at the trial point to the memory provided
+    through a pointer
+    """
+
+    def call(self, kappa_ptr, grad_ptr, func_ptr) -> int:
+        # convert pointers to numpy arrays and make the step read-only
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+        kappa.flags.writeable = False
+        grad = np.ctypeslib.as_array(grad_ptr, shape=(self.n_param,))
+
+        func_ptr[0] = self.func(kappa, grad)
+
+        return 0
+
+
+class ObjFuncGradPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to an objective function C function that
+    also returns the gradient at the trial point
+    """
+
+    def __call__(self, kappa: np.ndarray, grad: np.ndarray) -> float:
+        func = c_real()
+        kappa_buffer, grad_buffer = c_buffer(kappa), c_buffer(grad)
+        LibraryCall("objective function", kappa_buffer.size).run(
+            self.funptr,
+            kappa_buffer.ctypes.data_as(POINTER(c_real)),
+            grad_buffer.ctypes.data_as(POINTER(c_real)),
+            byref(func),
+            self.context,
+        )
+        write_back(grad, grad_buffer)
+        return func.value
 
 
 # define classes corresponding to C structs for settings
 class RotationQNSettingsC(Structure):
     _fields_ = [
+        ("init_hess", c_void_p),
+        ("init_precond", c_void_p),
+        ("obj_func_grad", c_void_p),
         ("logger", c_void_p),
         ("initialized", c_bool),
         ("verbose", c_int),
@@ -79,9 +132,19 @@ class RotationQNSettings(Settings):
         )
 
     callback_fields = {
-        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface)
+        "init_hess": (SettingsHessXInterface, hess_x_interface_type, HessXPyInterface),
+        "init_precond": (PrecondInterface, precond_interface_type, PrecondPyInterface),
+        "obj_func_grad": (
+            ObjFuncGradInterface,
+            obj_func_grad_interface_type,
+            ObjFuncGradPyInterface,
+        ),
+        "logger": (LoggerInterface, logger_interface_type, LoggerPyInterface),
     }
 
+    init_hess: Optional[Callable[[np.ndarray, np.ndarray], None]]
+    init_precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
+    obj_func_grad: Optional[ObjFuncGradType]
     logger: Optional[Callable[[str], None]]
 
 
@@ -117,25 +180,6 @@ class TransportInterface(CallbackInterface):
         return 0
 
 
-@dataclass
-class InitHessInterface(CallbackInterface):
-    """
-    this class provides the interface to initialize the Hessian and to write it
-    to the memory provided through pointers
-    """
-
-    init_hess: InitHessType
-
-    def call(self, vector_ptr) -> int:
-        # convert matrix pointers to numpy arrays
-        vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
-
-        # initialize Hessian and retrieve vector
-        self.init_hess(vector)
-
-        return 0
-
-
 def rotation_qn_factory(
     n_param: int,
     update_orbs: Callable[
@@ -144,7 +188,6 @@ def rotation_qn_factory(
     ],
     obj_func: Callable[[np.ndarray], float],
     transport: TransportType,
-    init_hess: InitHessType,
     solver_settings: SolverSettings,
     solver_state: SolverState,
     settings: Optional[RotationQNSettings] = None,
@@ -162,11 +205,9 @@ def rotation_qn_factory(
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
     check_callback_arguments(transport, "transport", ("geodesic", "tangent_vector"))
-    check_callback_arguments(init_hess, "init_hess", ("vector",))
     update_orbs_interface = update_orbs_interface_type(UpdateOrbsInterface(update_orbs))
     obj_func_interface = obj_func_interface_type(ObjFuncInterface(obj_func))
     transport_interface = transport_interface_type(TransportInterface(transport))
-    init_hess_interface = init_hess_interface_type(InitHessInterface(init_hess))
 
     # define result and argument types
     lib.rotation_qn_factory.restype = c_int
@@ -175,7 +216,6 @@ def rotation_qn_factory(
         update_orbs_interface_type,
         obj_func_interface_type,
         transport_interface_type,
-        init_hess_interface_type,
         POINTER(update_orbs_interface_type),
         POINTER(obj_func_interface_type),
         POINTER(c_void_p),
@@ -194,7 +234,6 @@ def rotation_qn_factory(
         update_orbs_interface,
         obj_func_interface,
         transport_interface,
-        init_hess_interface,
         byref(update_orbs_rotation_qn_funptr),
         byref(obj_func_rotation_qn_funptr),
         byref(extension),
@@ -216,7 +255,6 @@ def rotation_qn_factory(
             "update_orbs_interface": update_orbs_interface,
             "obj_func_interface": obj_func_interface,
             "transport_interface": transport_interface,
-            "init_hess_interface": init_hess_interface,
         },
     )
     return extension_functions(
