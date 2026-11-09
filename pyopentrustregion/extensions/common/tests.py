@@ -7,6 +7,7 @@
 import functools
 import gc
 import unittest
+import weakref
 from ctypes import (
     POINTER,
     Array,
@@ -280,8 +281,9 @@ def check_wired_solver_settings(
     Python functions, that the preconditioners the mock factory wired into both levels
     are called with the contexts of their levels, that a Python function assigned
     after the wiring is called with the context the mock factory wrote into the
-    settings, and that the functions the factory returned keep the solver settings and
-    the settings of the extension alive, whose callback functions its object calls
+    settings, and that the functions the factory returned keep the owner of its object
+    alive, which the solver settings keep and which keeps the settings of the extension
+    alive, whose callback functions the object calls
     """
     test_passed = True
 
@@ -341,21 +343,18 @@ def check_wired_solver_settings(
         test_passed = False
     solver_settings.stability_hess_x = None
 
-    # the returned functions keep the solver settings alive and the extension's
-    # settings directly or through the owner of the extension, which the solver
-    # settings keep alive
+    # the returned functions keep the owner of the extension alive, which the solver
+    # settings keep and which keeps the extension's settings alive
     owner = getattr(solver_settings, "_extension_owner", None)
     for function in returned:
-        kept_settings = function.saved_objects.get("settings")
-        if kept_settings is None and owner is not None:
-            kept_settings = owner.saved_objects.get("settings")
         if (
-            function.saved_objects.get("solver_settings") is not solver_settings
-            or kept_settings is not extension_settings
+            owner is None
+            or function.saved_objects.get("owner") is not owner
+            or owner.saved_objects.get("settings") is not extension_settings
         ):
             print(
-                f" {test_name} failed: Returned function does not keep the "
-                "settings alive."
+                f" {test_name} failed: Returned function does not keep the owner "
+                "of the extension alive."
             )
             test_passed = False
 
@@ -969,11 +968,13 @@ class CommonPyInterfaceTests(unittest.TestCase):
         factory returns around the C functions the C factory returned, which have to
         call them with the context of the solver settings through calls of their own,
         which mark the library as innermost and raise an error of these functions, keep
-        the settings alive, copy the orbitals back after every orbital update, also a
-        failed one, and hand over and receive arrays of any layout and kind
+        the owner of the factory's object alive, which the settings hold, copy the
+        orbitals back after every orbital update, also a failed one, and hand over and
+        receive arrays of any layout and kind
         """
         test_passed = True
         solver_settings = SolverSettings()
+        owner = ExtensionOwner(None, solver_settings, {})
         copies = []
         update_orbs, obj_func = extension_functions(
             update_orbs_interface_type(lib.mock_update_orbs),
@@ -984,12 +985,12 @@ class CommonPyInterfaceTests(unittest.TestCase):
 
         for function in (update_orbs, obj_func):
             if (
-                function.saved_objects["solver_settings"] is not solver_settings
+                function.saved_objects["owner"] is not owner
                 or function.context != solver_settings.settings_c.context
             ):
                 print(
                     " test_extension_functions failed: Returned function does not "
-                    "keep the solver settings alive or call with their context."
+                    "keep the owner alive or call with the context of the settings."
                 )
                 test_passed = False
 
@@ -1018,12 +1019,12 @@ class CommonPyInterfaceTests(unittest.TestCase):
             )
             test_passed = False
 
-        # the returned Hessian linear transformation keeps the orbital updating function
-        # alive, which keeps what the object of the factory calls alive
-        if hess_x._owner is not update_orbs:
+        # the returned Hessian linear transformation keeps the owner of the factory's
+        # object alive, which keeps what the object calls alive
+        if hess_x._owner is not owner:
             print(
                 " test_extension_functions failed: Returned Hessian linear "
-                "transformation does not keep the orbital updating function alive."
+                "transformation does not keep the owner alive."
             )
             test_passed = False
         hess_x_out = np.zeros(n_param, dtype=np.float32)
@@ -1096,6 +1097,28 @@ class CommonPyInterfaceTests(unittest.TestCase):
             print(
                 " test_extension_functions failed: Orbitals not copied back after a "
                 "failed orbital update."
+            )
+            test_passed = False
+
+        # the returned functions, the orbital update of which keeps the Hessian linear
+        # transformation it returned last, and the settings are freed without the
+        # garbage collector once nothing else refers to them, also when the owner of a
+        # later factory keeps the functions as the host's
+        ExtensionOwner(
+            None, solver_settings, {"host_functions": (update_orbs, obj_func)}
+        )
+        settings_ref = weakref.ref(solver_settings)
+        update_orbs_ref = weakref.ref(update_orbs)
+        gc.disable()
+        try:
+            del solver_settings, owner, update_orbs, obj_func, hess_x
+            freed = settings_ref() is None and update_orbs_ref() is None
+        finally:
+            gc.enable()
+        if not freed:
+            print(
+                " test_extension_functions failed: Returned functions or settings kept "
+                "alive in a reference cycle."
             )
             test_passed = False
 
