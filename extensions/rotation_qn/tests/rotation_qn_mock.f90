@@ -47,8 +47,8 @@ contains
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
                                   check_hess_x_funptr, check_precond_funptr, &
                                   n_param_ref => n_param
-        use otr_rotation_qn_test_reference, only: check_transport_funptr, &
-                                                  check_obj_func_grad_funptr
+        use otr_rotation_qn_test_reference, only: check_obj_func_grad_funptr, &
+                                                  check_transport_funptr
         use otr_common_mock, only: mock_update_orbs, mock_obj_func
         use otr_common_unit_tests, only: check_mock_factory_logger, &
                                          setup_owning_solver_settings

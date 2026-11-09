@@ -8,7 +8,7 @@ module otr_rotation_qn_c_interface
 
     use opentrustregion_core, only: ip, rp, kw_len, update_orbs_type, obj_func_type
     use c_interface, only: c_ip, c_rp, c_callbacks_type
-    use otr_rotation_qn, only: transport_type, obj_func_grad_type, &
+    use otr_rotation_qn, only: obj_func_grad_type, transport_type, &
                                standard_rotation_qn_factory => rotation_qn_factory
     use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_ptr, c_char, &
                                            c_funptr, c_f_procpointer, c_associated, &
@@ -17,18 +17,6 @@ module otr_rotation_qn_c_interface
     implicit none
 
     ! C-interoperable interfaces for the callback functions
-    abstract interface
-        function transport_c_type(geodesic_c, tangent_vector_c, context_c) &
-            result(error_c) bind(C)
-            import :: c_rp, c_ip, c_ptr
-
-            real(c_rp), intent(in), target :: geodesic_c(*)
-            real(c_rp), intent(inout), target :: tangent_vector_c(*)
-            type(c_ptr), intent(in), value :: context_c
-            integer(c_ip) :: error_c
-        end function transport_c_type
-    end interface
-
     abstract interface
         function obj_func_grad_c_type(kappa_c, grad_c, func_c, context_c) &
             result(error_c) bind(C)
@@ -40,6 +28,18 @@ module otr_rotation_qn_c_interface
             type(c_ptr), intent(in), value :: context_c
             integer(c_ip) :: error_c
         end function obj_func_grad_c_type
+    end interface
+
+    abstract interface
+        function transport_c_type(geodesic_c, tangent_vector_c, context_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip, c_ptr
+
+            real(c_rp), intent(in), target :: geodesic_c(*)
+            real(c_rp), intent(inout), target :: tangent_vector_c(*)
+            type(c_ptr), intent(in), value :: context_c
+            integer(c_ip) :: error_c
+        end function transport_c_type
     end interface
 
     ! bundle of the C callback functions of rotation QN, which holds the initial
@@ -66,9 +66,9 @@ module otr_rotation_qn_c_interface
         standard_rotation_qn_factory
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
     procedure(obj_func_grad_type), pointer :: obj_func_grad_f_wrapper_ptr => &
         obj_func_grad_f_wrapper
+    procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
     interface assignment(=)
@@ -132,8 +132,8 @@ contains
             local_settings_c = default_rotation_qn_settings
         end if
 
-        ! convert the settings, which replaces settings that were not initialized by the
-        ! default settings, and print the warning for these on stderr, since they
+        ! convert the settings, which replaces settings that were not initialized by
+        ! the default settings, and print the warning for these on stderr, since they
         ! provide no logging function
         settings = local_settings_c
         if (.not. local_settings_c%initialized) call warn_uninitialized_settings( &
@@ -203,33 +203,6 @@ contains
 
     end function rotation_qn_factory_c_wrapper
 
-    subroutine transport_f_wrapper(geodesic, tangent_vector, error, context)
-        !
-        ! this subroutine exposes the transport C function to Fortran, finding the C
-        ! function and the host context in the bundle it receives as context
-        !
-        real(rp), intent(in), target :: geodesic(:)
-        real(rp), intent(inout), target :: tangent_vector(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-
-        integer(c_ip) :: error_c
-
-        ! the bundle holds the C function
-        error = 1
-        if (.not. associated(context)) return
-        select type (callbacks => context)
-        type is (rotation_qn_c_callbacks_type)
-            ! call transport C function
-            error_c = &
-                callbacks%transport(geodesic, tangent_vector, callbacks%host_context)
-
-            ! convert error code to Fortran kind
-            error = int(error_c, kind=ip)
-        end select
-
-    end subroutine transport_f_wrapper
-
     function obj_func_grad_f_wrapper(kappa, grad, error, context) result(func)
         !
         ! this function exposes the C objective function of the settings, which also
@@ -261,6 +234,33 @@ contains
         end select
 
     end function obj_func_grad_f_wrapper
+
+    subroutine transport_f_wrapper(geodesic, tangent_vector, error, context)
+        !
+        ! this subroutine exposes the transport C function to Fortran, finding the C
+        ! function and the host context in the bundle it receives as context
+        !
+        real(rp), intent(in), target :: geodesic(:)
+        real(rp), intent(inout), target :: tangent_vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(c_ip) :: error_c
+
+        ! the bundle holds the C function
+        error = 1
+        if (.not. associated(context)) return
+        select type (callbacks => context)
+        type is (rotation_qn_c_callbacks_type)
+            ! call transport C function
+            error_c = &
+                callbacks%transport(geodesic, tangent_vector, callbacks%host_context)
+
+            ! convert error code to Fortran kind
+            error = int(error_c, kind=ip)
+        end select
+
+    end subroutine transport_f_wrapper
 
     subroutine init_rotation_qn_settings_c(settings_c) &
         bind(C, name="init_rotation_qn_settings")

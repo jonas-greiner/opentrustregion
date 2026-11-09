@@ -120,6 +120,7 @@ fortran_tests = {
         "jacobi_davidson_correction",
         "level_shifted_davidson",
         "level_shifted_diag_precond",
+        "level_shifted_divisors",
         "lowest_h_diag_unit_vectors",
         "mat_diag",
         "mat_lowest_eigpairs",

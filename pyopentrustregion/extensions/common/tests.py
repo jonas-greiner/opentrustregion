@@ -74,7 +74,6 @@ fortran_tests = {
         "invoke_evaluate_dm_os",
         "invoke_get_response_cs",
         "invoke_get_response_os",
-        "level_shifted_divisors",
         "logger_callback",
         "matrix_exponential",
         "obj_func_callback",

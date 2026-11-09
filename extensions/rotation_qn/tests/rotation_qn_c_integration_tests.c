@@ -46,8 +46,8 @@ bool is_default_rotation_qn_settings(const rotation_qn_settings_type *settings);
  * settings, which the orbital update, the objective function and the exact Hessian
  * the orbital update returns receive, holds the current point, its Hessian and the
  * Hessian diagonal there, and that of the rotation QN settings, which the initial
- * Hessian, the objective function and the transport function of the settings receive,
- * refers to it; both count the calls of the callback functions
+ * Hessian, its preconditioner, the objective function and the transport function of
+ * the settings receive, refers to it; both count the calls of the callback functions
  * ------------------------------------------------------------------ */
 
 #define N_PARAM HARTMANN6D_N_PARAM
@@ -64,7 +64,7 @@ typedef struct {
 typedef struct {
   int kind;
   solver_host_type *solver_host;
-  int n_transport, n_init_hess, n_obj_func_grad;
+  int n_init_hess, n_init_precond, n_obj_func_grad, n_transport;
 } settings_host_type;
 
 static solver_host_type *solver_host(void *context) {
@@ -119,14 +119,6 @@ static c_int obj_func(const c_real *kappa, c_real *func, void *context) {
   return 0;
 }
 
-static c_int transport(const c_real *geodesic, c_real *tangent_vector, void *context) {
-  settings_host_type *host = settings_host(context);
-  if (!host)
-    return 1;
-  host->n_transport++;
-  return 0;
-}
-
 static c_int init_hess(const c_real *x, c_real *hx, void *context) {
   settings_host_type *host = settings_host(context);
   if (!host)
@@ -134,6 +126,21 @@ static c_int init_hess(const c_real *x, c_real *hx, void *context) {
   host->n_init_hess++;
   for (int i = 0; i < N_PARAM; i++)
     hx[i] = host->solver_host->hess[i][i] * x[i];
+  return 0;
+}
+
+static c_int init_precond(const c_real *residual, const c_real *mu,
+                          c_real *precond_residual, void *context) {
+  settings_host_type *host = settings_host(context);
+  if (!host)
+    return 1;
+  host->n_init_precond++;
+  for (int i = 0; i < N_PARAM; i++) {
+    c_real divisor = host->solver_host->hess[i][i] - *mu;
+    if (fabs(divisor) < 1e-10)
+      divisor = 1e-10;
+    precond_residual[i] = residual[i] / divisor;
+  }
   return 0;
 }
 
@@ -151,6 +158,14 @@ static c_int obj_func_grad(const c_real *kappa, c_real *grad, c_real *func,
   return 0;
 }
 
+static c_int transport(const c_real *geodesic, c_real *tangent_vector, void *context) {
+  settings_host_type *host = settings_host(context);
+  if (!host)
+    return 1;
+  host->n_transport++;
+  return 0;
+}
+
 /* ------------------------------------------------------------------
  * Tests
  * ------------------------------------------------------------------ */
@@ -160,13 +175,15 @@ bool test_rotation_qn_factory_c(void) {
   const char *qn_methods[2] = {"sr1", "bfgs"};
 
   /* solve the Hartmann 6D problem from near its minimum with either updating scheme,
-   * SR1 with the Hessian diagonal as the initial Hessian of the settings and an
-   * identity as their transport function and BFGS with the defaults, which are the
-   * same, and the objective function of the settings, which has to replace the
-   * host's, and check that the solve converges to the minimum, that every callback
-   * function is called with its context, while neither the host's objective function
-   * nor the exact Hessian the orbital update returns is, that the factory lets the
-   * solver refresh the model after a rejected step and that the object is released */
+   * SR1 with every callback function of the settings, the Hessian diagonal as the
+   * initial Hessian, its level-shifted inverse as its preconditioner, the objective
+   * function of the settings, which has to replace the host's, and an identity as
+   * the transport function, and BFGS with none, whose defaults are the same apart
+   * from the objective function, so that the host's is called, and check that the
+   * solve converges to the minimum, that every callback function is called with its
+   * context, while the exact Hessian the orbital update returns is not, that the
+   * factory lets the solver refresh the model after a rejected step only with the
+   * objective function of the settings and that the object is released */
   for (int i_method = 0; i_method < 2; i_method++) {
     solver_host_type host = {SOLVER_HOST};
     memcpy(host.curr_vars, hartmann6d_near_minimum, sizeof(host.curr_vars));
@@ -176,11 +193,13 @@ bool test_rotation_qn_factory_c(void) {
     settings.context = &host;
     rotation_qn_settings_type rotation_qn_settings = rotation_qn_settings_init();
     strcpy(rotation_qn_settings.qn_method, qn_methods[i_method]);
-    if (i_method == 0) {
+    bool callbacks = i_method == 0;
+    if (callbacks) {
       rotation_qn_settings.init_hess = init_hess;
+      rotation_qn_settings.init_precond = init_precond;
+      rotation_qn_settings.obj_func_grad = obj_func_grad;
       rotation_qn_settings.transport = transport;
     }
-    rotation_qn_settings.obj_func_grad = obj_func_grad;
     rotation_qn_settings.context = &settings_ctx;
     solver_state_type state;
 
@@ -198,19 +217,24 @@ bool test_rotation_qn_factory_c(void) {
       ok = false;
       continue;
     }
-    if (!settings.refresh_hess) {
+    if (settings.refresh_hess != callbacks) {
       fprintf(stderr,
               "test_rotation_qn_factory_c failed: Refresh of the model after "
-              "a rejected step not set for %s.\n",
+              "a rejected step not set with exactly the objective function of the "
+              "settings for %s.\n",
               qn_methods[i_method]);
       ok = false;
     }
 
     error = solver(update_orbs_rotation_qn, obj_func_rotation_qn, N_PARAM, &settings,
                    &state);
+    /* keep a deviation that is not a number, which fmax would drop */
     c_real distance = 0.0;
-    for (int i = 0; i < N_PARAM; i++)
-      distance = fmax(distance, fabs(host.curr_vars[i] - hartmann6d_minimum1[i]));
+    for (int i = 0; i < N_PARAM; i++) {
+      c_real deviation = fabs(host.curr_vars[i] - hartmann6d_minimum1[i]);
+      if (!(deviation <= distance))
+        distance = deviation;
+    }
     if (error != 0 || !(distance < 1e-4)) {
       fprintf(stderr,
               "test_rotation_qn_factory_c failed: Solve did not converge to "
@@ -218,14 +242,16 @@ bool test_rotation_qn_factory_c(void) {
               qn_methods[i_method]);
       ok = false;
     }
-    if (host.n_update_orbs == 0 || (settings_ctx.n_init_hess == 0) != (i_method != 0) ||
-        (settings_ctx.n_transport == 0) != (i_method != 0) ||
-        settings_ctx.n_obj_func_grad == 0 || host.n_obj_func != 0 ||
-        host.n_exact_hess_x != 0) {
+    if (host.n_update_orbs == 0 || (settings_ctx.n_init_hess > 0) != callbacks ||
+        (settings_ctx.n_init_precond > 0) != callbacks ||
+        (settings_ctx.n_obj_func_grad > 0) != callbacks ||
+        (settings_ctx.n_transport > 0) != callbacks ||
+        (host.n_obj_func > 0) == callbacks || host.n_exact_hess_x != 0) {
       fprintf(stderr,
               "test_rotation_qn_factory_c failed: Callback functions not "
-              "called with their contexts or host's objective function or "
-              "exact Hessian called for %s.\n",
+              "called with their contexts, host's objective function called "
+              "together with the one of the settings or exact Hessian called "
+              "for %s.\n",
               qn_methods[i_method]);
       ok = false;
     }

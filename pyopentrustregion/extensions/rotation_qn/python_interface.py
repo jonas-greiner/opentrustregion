@@ -58,10 +58,10 @@ if TYPE_CHECKING:
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
 # data
-transport_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
 obj_func_grad_interface_type = callback_type(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
+transport_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
 
 
 class ObjFuncGradInterface(SettingsCallbackInterface):
@@ -101,23 +101,6 @@ class TransportInterface(SettingsCallbackInterface):
         return 0
 
 
-class TransportPyInterface(CFunctionInterface):
-    """
-    this class provides the Python interface to a transport C function
-    """
-
-    def __call__(self, geodesic: np.ndarray, tangent_vector: np.ndarray):
-        geodesic_buffer = c_buffer(geodesic)
-        tangent_vector_buffer = c_buffer(tangent_vector)
-        LibraryCall("transport function", geodesic_buffer.size).run(
-            self.funptr,
-            geodesic_buffer.ctypes.data_as(POINTER(c_real)),
-            tangent_vector_buffer.ctypes.data_as(POINTER(c_real)),
-            self.context,
-        )
-        write_back(tangent_vector, tangent_vector_buffer)
-
-
 class ObjFuncGradPyInterface(CFunctionInterface):
     """
     this class provides the Python interface to an objective function C function that
@@ -136,6 +119,23 @@ class ObjFuncGradPyInterface(CFunctionInterface):
         )
         write_back(grad, grad_buffer)
         return func.value
+
+
+class TransportPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to a transport C function
+    """
+
+    def __call__(self, geodesic: np.ndarray, tangent_vector: np.ndarray):
+        geodesic_buffer = c_buffer(geodesic)
+        tangent_vector_buffer = c_buffer(tangent_vector)
+        LibraryCall("transport function", geodesic_buffer.size).run(
+            self.funptr,
+            geodesic_buffer.ctypes.data_as(POINTER(c_real)),
+            tangent_vector_buffer.ctypes.data_as(POINTER(c_real)),
+            self.context,
+        )
+        write_back(tangent_vector, tangent_vector_buffer)
 
 
 # define classes corresponding to C structs for settings

@@ -1066,6 +1066,8 @@ contains
         ! this subroutine applies a level-shifted preconditioner based on the exact
         ! eigendecomposition of the static part of the Hessian of the orbital basis
         !
+        use opentrustregion_core, only: level_shifted_divisors
+
         class(orbital_basis_type), intent(inout) :: self
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -1324,24 +1326,6 @@ contains
         deallocate(tmp)
 
     end function matrix_exponential
-
-    function level_shifted_divisors(eigval_pairs, mu) result(divisors)
-        !
-        ! this function returns the divisors of a level-shifted preconditioner acting
-        ! in the eigenbasis of the static part of the Hessian: its eigenvalues shifted
-        ! by the level shift, with divisors vanishing in magnitude replaced by a small
-        ! floor
-        !
-        use opentrustregion_core, only: precond_floor
-
-        real(rp), intent(in) :: eigval_pairs(:), mu
-        real(rp) :: divisors(size(eigval_pairs))
-
-        ! shift the eigenvalue pairs and floor vanishing divisors
-        divisors = eigval_pairs - mu
-        where (abs(divisors) < precond_floor) divisors = precond_floor
-
-    end function level_shifted_divisors
 
     function positive_definite_divisors(eigval_pairs) result(divisors)
         !

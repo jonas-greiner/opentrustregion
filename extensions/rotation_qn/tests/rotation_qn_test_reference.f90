@@ -36,120 +36,6 @@ module otr_rotation_qn_test_reference
 
 contains
 
-    function check_transport_funptr(transport_funptr, test_name, message, context) &
-        result(test_passed)
-        !
-        ! this function tests a provided transport function pointer
-        !
-        use otr_rotation_qn, only: transport_type
-
-        procedure(transport_type), intent(in), pointer :: transport_funptr
-        character(len=*), intent(in) :: test_name, message
-        class(*), intent(in), pointer :: context
-        logical :: test_passed
-
-        real(rp), allocatable :: geodesic(:), tangent_vector(:), expected(:)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. associated(transport_funptr)) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Transport function "// &
-                "provided"//message//" not associated with value."
-            return
-        end if
-
-        ! allocate arrays
-        allocate(geodesic(n_param), tangent_vector(n_param))
-
-        ! generate random input arrays, which the mock transport multiplies
-        call random_number(geodesic)
-        call random_number(tangent_vector)
-        expected = geodesic * tangent_vector
-
-        ! call transport function pointer
-        call transport_funptr(geodesic, tangent_vector, error, context)
-
-        ! check for error
-        if (error /= 0) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
-        end if
-
-        ! check tangent vector
-        if (.not. all(is_close(tangent_vector, expected))) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
-                message//" wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(geodesic, tangent_vector, expected)
-
-    end function check_transport_funptr
-
-    function check_transport_c_funptr(transport_c_funptr, test_name, message, &
-                                      context_c) result(test_passed)
-        !
-        ! this function tests a provided transport C function pointer
-        !
-        use otr_rotation_qn_c_interface, only: transport_c_type
-
-        type(c_funptr), intent(in) :: transport_c_funptr
-        character(len=*), intent(in) :: test_name, message
-        type(c_ptr), intent(in) :: context_c
-        logical :: test_passed
-
-        procedure(transport_c_type), pointer :: transport_funptr
-        real(c_rp), allocatable :: geodesic(:), tangent_vector(:), expected(:)
-        integer(c_ip) :: error
-
-        ! assume tests pass
-        test_passed = .true.
-
-        ! check if function pointer is associated
-        if (.not. c_associated(transport_c_funptr)) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Transport function "// &
-                "provided"//message//" not associated with value."
-            return
-        end if
-
-        ! convert to Fortran function pointer
-        call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_funptr)
-
-        ! allocate arrays
-        allocate(geodesic(n_param), tangent_vector(n_param))
-
-        ! generate random input arrays, which the mock transport multiplies
-        call random_number(geodesic)
-        call random_number(tangent_vector)
-        expected = geodesic * tangent_vector
-
-        ! call transport function pointer
-        error = transport_funptr(geodesic, tangent_vector, context_c)
-
-        ! check for error
-        if (error /= 0) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
-        end if
-
-        ! check tangent vector
-        if (.not. all(is_close(tangent_vector, expected))) then
-            test_passed = .false.
-            write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
-                message//" wrong."
-        end if
-
-        ! deallocate arrays
-        deallocate(geodesic, tangent_vector, expected)
-
-    end function check_transport_c_funptr
-
     function check_obj_func_grad_funptr(obj_func_grad_funptr, test_name, message, &
                                         context) result(test_passed)
         !
@@ -267,6 +153,120 @@ contains
         deallocate(kappa, grad)
 
     end function check_obj_func_grad_c_funptr
+
+    function check_transport_funptr(transport_funptr, test_name, message, context) &
+        result(test_passed)
+        !
+        ! this function tests a provided transport function pointer
+        !
+        use otr_rotation_qn, only: transport_type
+
+        procedure(transport_type), intent(in), pointer :: transport_funptr
+        character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
+        logical :: test_passed
+
+        real(rp), allocatable :: geodesic(:), tangent_vector(:), expected(:)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(transport_funptr)) then
+            test_passed = .false.
+            write(stderr, *) "test_"//test_name//" failed: Transport function "// &
+                "provided"//message//" not associated with value."
+            return
+        end if
+
+        ! allocate arrays
+        allocate(geodesic(n_param), tangent_vector(n_param))
+
+        ! generate random input arrays, which the mock transport multiplies
+        call random_number(geodesic)
+        call random_number(tangent_vector)
+        expected = geodesic * tangent_vector
+
+        ! call transport function pointer
+        call transport_funptr(geodesic, tangent_vector, error, context)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
+        end if
+
+        ! check tangent vector
+        if (.not. all(is_close(tangent_vector, expected))) then
+            test_passed = .false.
+            write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
+                message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(geodesic, tangent_vector, expected)
+
+    end function check_transport_funptr
+
+    function check_transport_c_funptr(transport_c_funptr, test_name, message, &
+                                      context_c) result(test_passed)
+        !
+        ! this function tests a provided transport C function pointer
+        !
+        use otr_rotation_qn_c_interface, only: transport_c_type
+
+        type(c_funptr), intent(in) :: transport_c_funptr
+        character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
+        logical :: test_passed
+
+        procedure(transport_c_type), pointer :: transport_funptr
+        real(c_rp), allocatable :: geodesic(:), tangent_vector(:), expected(:)
+        integer(c_ip) :: error
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(transport_c_funptr)) then
+            test_passed = .false.
+            write(stderr, *) "test_"//test_name//" failed: Transport function "// &
+                "provided"//message//" not associated with value."
+            return
+        end if
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=transport_c_funptr, fptr=transport_funptr)
+
+        ! allocate arrays
+        allocate(geodesic(n_param), tangent_vector(n_param))
+
+        ! generate random input arrays, which the mock transport multiplies
+        call random_number(geodesic)
+        call random_number(tangent_vector)
+        expected = geodesic * tangent_vector
+
+        ! call transport function pointer
+        error = transport_funptr(geodesic, tangent_vector, context_c)
+
+        ! check for error
+        if (error /= 0) then
+            test_passed = .false.
+            write(stderr, *) "test_"//test_name//" failed: Error produced"//message//"."
+        end if
+
+        ! check tangent vector
+        if (.not. all(is_close(tangent_vector, expected))) then
+            test_passed = .false.
+            write(stderr, *) "test_"//test_name//" failed: Tangent vector returned"// &
+                message//" wrong."
+        end if
+
+        ! deallocate arrays
+        deallocate(geodesic, tangent_vector, expected)
+
+    end function check_transport_c_funptr
 
     subroutine get_reference_rotation_qn_values(values_out) bind(C)
         !

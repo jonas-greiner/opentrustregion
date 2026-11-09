@@ -18,15 +18,15 @@ extern "C" {
  * Declarations for rotation QN functions and function pointer types
  * ------------------------------------------------------------------ */
 
-/* Transport callback */
-typedef c_int transport_fn(const c_real *geodesic_c, c_real *tangent_vector_c,
-                           void *context);
-typedef transport_fn *transport_fp;
-
 /* Objective function callback that also returns the gradient at the trial point */
 typedef c_int obj_func_grad_fn(const c_real *kappa_c, c_real *grad_c, c_real *func_c,
                                void *context);
 typedef obj_func_grad_fn *obj_func_grad_fp;
+
+/* Transport callback */
+typedef c_int transport_fn(const c_real *geodesic_c, c_real *tangent_vector_c,
+                           void *context);
+typedef transport_fn *transport_fp;
 
 /* ------------------------------------------------------------------
  * Struct corresponding to Fortran type(rotation_qn_settings_type_c)

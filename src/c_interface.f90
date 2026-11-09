@@ -586,10 +586,12 @@ contains
 
     end subroutine update_orbs_f_wrapper
 
-    subroutine hess_x_f_wrapper(x, hess_x, error, context)
+    recursive subroutine hess_x_f_wrapper(x, hess_x, error, context)
         !
         ! this subroutine exposes a C-implemented Hessian linear transformation to
-        ! Fortran
+        ! Fortran, recursively since the Hessian linear transformation of an extension
+        ! object the solver calls through it for C hosts can call the initial Hessian
+        ! of the host through it too
         !
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: hess_x(:)
@@ -608,10 +610,12 @@ contains
 
     end subroutine hess_x_f_wrapper
 
-    subroutine hess_x_f_wrapper_impl(hess_x_funptr, x, hess_x, error, host_context)
+    recursive subroutine hess_x_f_wrapper_impl(hess_x_funptr, x, hess_x, error, &
+                                               host_context)
         !
         ! this subroutine calls the C Hessian linear transformation of a given function
-        ! pointer, which receives the given host context
+        ! pointer, which receives the given host context, recursively since the
+        ! wrappers calling it are re-entered
         !
         procedure(hess_x_c_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(in), target :: x(:)
@@ -629,9 +633,11 @@ contains
 
     end subroutine hess_x_f_wrapper_impl
 
-    function obj_func_f_wrapper(kappa, error, context) result(obj_func)
+    recursive function obj_func_f_wrapper(kappa, error, context) result(obj_func)
         !
-        ! this function exposes a C-implemented objective function to Fortran
+        ! this function exposes a C-implemented objective function to Fortran,
+        ! recursively since the objective function of an extension object the solver
+        ! calls through it for C hosts can call the host's through it too
         !
         real(rp), intent(in), target :: kappa(:)
         integer(ip), intent(out) :: error
@@ -655,9 +661,13 @@ contains
 
     end function obj_func_f_wrapper
 
-    subroutine precond_f_wrapper(residual, mu, precond_residual, error, context)
+    recursive subroutine precond_f_wrapper(residual, mu, precond_residual, error, &
+                                           context)
         !
-        ! this subroutine exposes a C-implemented preconditioner function to Fortran
+        ! this subroutine exposes a C-implemented preconditioner function to Fortran,
+        ! recursively since the preconditioner of an extension object the solver calls
+        ! through it for C hosts can call the preconditioner of the host's initial
+        ! Hessian through it too
         !
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu

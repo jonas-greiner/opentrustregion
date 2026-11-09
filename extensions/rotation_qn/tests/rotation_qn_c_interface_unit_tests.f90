@@ -17,28 +17,6 @@ module otr_rotation_qn_c_interface_unit_tests
 
 contains
 
-    function mock_transport(geodesic_c, tangent_vector_c, context_c) result(error) &
-        bind(C)
-        !
-        ! this subroutine is a mock subroutine for the transport C function, which
-        ! returns the error code set in the host context
-        !
-        use test_reference, only: check_host_context_c, host_context_error
-
-        real(c_rp), intent(in), target :: geodesic_c(*)
-        real(c_rp), intent(inout), target :: tangent_vector_c(*)
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        ! check host context
-        call check_host_context_c(context_c)
-
-        tangent_vector_c(:n_param) = geodesic_c(:n_param) * tangent_vector_c(:n_param)
-
-        error = host_context_error(context_c)
-
-    end function mock_transport
-
     function mock_obj_func_grad(kappa_c, grad_c, func_c, context_c) result(error) &
         bind(C)
         !
@@ -63,6 +41,28 @@ contains
         error = host_context_error(context_c)
 
     end function mock_obj_func_grad
+
+    function mock_transport(geodesic_c, tangent_vector_c, context_c) result(error) &
+        bind(C)
+        !
+        ! this subroutine is a mock subroutine for the transport C function, which
+        ! returns the error code set in the host context
+        !
+        use test_reference, only: check_host_context_c, host_context_error
+
+        real(c_rp), intent(in), target :: geodesic_c(*)
+        real(c_rp), intent(inout), target :: tangent_vector_c(*)
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        tangent_vector_c(:n_param) = geodesic_c(:n_param) * tangent_vector_c(:n_param)
+
+        error = host_context_error(context_c)
+
+    end function mock_transport
 
     logical(c_bool) function test_rotation_qn_factory_c_wrapper() bind(C)
         !
@@ -317,9 +317,9 @@ contains
         end do
         settings%verbose = verbose
 
-        ! call the factory with a mock factory which produces an error after its checks,
-        ! with the armed host context, which has to be returned without functions, an
-        ! extension or writing back the solver settings
+        ! call the factory with a mock factory which produces an error after its
+        ! checks, with the armed host context, which has to be returned without
+        ! functions, an extension or writing back the solver settings
         call arm_host_context_c(settings%context)
         solver_settings_c = default_solver_settings
         solver_settings_c%context = c_loc(host_context)
@@ -353,65 +353,6 @@ contains
         rotation_qn_factory => standard_rotation_qn_factory
 
     end function test_rotation_qn_factory_c_wrapper
-
-    logical(c_bool) function test_transport_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the transport, which finds the C
-        ! function in the bundle it receives as context
-        !
-        use otr_rotation_qn, only: transport_type
-        use otr_rotation_qn_c_interface, only: rotation_qn_c_callbacks_type, &
-                                               transport_f_wrapper
-        use otr_rotation_qn_test_reference, only: check_transport_funptr
-        use test_reference, only: arm_host_context_c, host_context, host_context_reached
-
-        type(rotation_qn_c_callbacks_type), target :: callbacks
-        procedure(transport_type), pointer :: transport_funptr
-        class(*), pointer :: context
-        real(rp) :: geodesic(n_param), tangent_vector(n_param)
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_transport_f_wrapper = .true.
-
-        ! inject mock C function into a bundle, which the wrapper receives as context
-        callbacks%transport => mock_transport
-        call arm_host_context_c(callbacks%host_context)
-        context => callbacks
-
-        ! get pointer to subroutine
-        transport_funptr => transport_f_wrapper
-
-        ! test transport Fortran wrapper
-        if (.not. check_transport_funptr(transport_funptr, "transport_f_wrapper", "", &
-                                         context)) test_transport_f_wrapper = .false.
-
-        ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("transport_f_wrapper")) &
-            test_transport_f_wrapper = .false.
-
-        ! a C function that fails has to have its error returned
-        call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 3
-        call random_number(geodesic)
-        call random_number(tangent_vector)
-        call transport_f_wrapper(geodesic, tangent_vector, error, context)
-        if (error /= 3) then
-            write(stderr, *) "test_transport_f_wrapper failed: Error of the C "// &
-                "function not returned."
-            test_transport_f_wrapper = .false.
-        end if
-
-        ! a context that is no bundle has to produce an error
-        context => null()
-        call transport_f_wrapper(geodesic, tangent_vector, error, context)
-        if (error /= 1) then
-            write(stderr, *) "test_transport_f_wrapper failed: No error produced "// &
-                "without a bundle."
-            test_transport_f_wrapper = .false.
-        end if
-
-    end function test_transport_f_wrapper
 
     logical(c_bool) function test_obj_func_grad_f_wrapper() bind(C)
         !
@@ -471,6 +412,65 @@ contains
         end if
 
     end function test_obj_func_grad_f_wrapper
+
+    logical(c_bool) function test_transport_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the transport, which finds the C
+        ! function in the bundle it receives as context
+        !
+        use otr_rotation_qn, only: transport_type
+        use otr_rotation_qn_c_interface, only: rotation_qn_c_callbacks_type, &
+                                               transport_f_wrapper
+        use otr_rotation_qn_test_reference, only: check_transport_funptr
+        use test_reference, only: arm_host_context_c, host_context, host_context_reached
+
+        type(rotation_qn_c_callbacks_type), target :: callbacks
+        procedure(transport_type), pointer :: transport_funptr
+        class(*), pointer :: context
+        real(rp) :: geodesic(n_param), tangent_vector(n_param)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_transport_f_wrapper = .true.
+
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        callbacks%transport => mock_transport
+        call arm_host_context_c(callbacks%host_context)
+        context => callbacks
+
+        ! get pointer to subroutine
+        transport_funptr => transport_f_wrapper
+
+        ! test transport Fortran wrapper
+        if (.not. check_transport_funptr(transport_funptr, "transport_f_wrapper", "", &
+                                         context)) test_transport_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("transport_f_wrapper")) &
+            test_transport_f_wrapper = .false.
+
+        ! a C function that fails has to have its error returned
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 3
+        call random_number(geodesic)
+        call random_number(tangent_vector)
+        call transport_f_wrapper(geodesic, tangent_vector, error, context)
+        if (error /= 3) then
+            write(stderr, *) "test_transport_f_wrapper failed: Error of the C "// &
+                "function not returned."
+            test_transport_f_wrapper = .false.
+        end if
+
+        ! a context that is no bundle has to produce an error
+        context => null()
+        call transport_f_wrapper(geodesic, tangent_vector, error, context)
+        if (error /= 1) then
+            write(stderr, *) "test_transport_f_wrapper failed: No error produced "// &
+                "without a bundle."
+            test_transport_f_wrapper = .false.
+        end if
+
+    end function test_transport_f_wrapper
 
     logical(c_bool) function test_init_rotation_qn_settings_c() bind(C)
         !
@@ -587,8 +587,8 @@ contains
         end if
 
         ! convert C settings with a logging function that were not initialized, the
-        ! custom values and logging function they still carry have to be replaced by the
-        ! default settings
+        ! custom values and logging function they still carry have to be replaced by
+        ! the default settings
         settings_c%initialized = .false.
         settings = settings_c
         if (associated(settings%init_hess) .or. associated(settings%init_precond) .or. &

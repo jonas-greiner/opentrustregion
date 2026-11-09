@@ -1136,8 +1136,7 @@ contains
         ! with E the expansion directions, P the projection directions and C the
         ! coupling matrix
         !
-        use opentrustregion_core, only: verbosity_error
-        use otr_common, only: level_shifted_divisors
+        use opentrustregion_core, only: verbosity_error, level_shifted_divisors
 
         class(density_qn_type), intent(inout) :: self
         real(rp), intent(in), target :: x(:)

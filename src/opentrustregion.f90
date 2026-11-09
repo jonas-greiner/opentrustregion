@@ -2486,6 +2486,21 @@ contains
 
     end subroutine gram_schmidt
 
+    function level_shifted_divisors(eigvals, mu) result(divisors)
+        !
+        ! this function returns the divisors of a level-shifted preconditioner: the
+        ! diagonal or the eigenvalues of a Hessian shifted by the level shift, with
+        ! divisors vanishing in magnitude replaced by a small floor
+        !
+        real(rp), intent(in) :: eigvals(:), mu
+        real(rp) :: divisors(size(eigvals))
+
+        ! shift the eigenvalues and floor vanishing divisors
+        divisors = eigvals - mu
+        where (abs(divisors) < precond_floor) divisors = precond_floor
+
+    end function level_shifted_divisors
+
     subroutine level_shifted_diag_precond(vector, mu, h_diag, precond_vector, &
                                           settings, error)
         !
@@ -2505,11 +2520,7 @@ contains
             if (error /= 0) return
         ! construct level-shifted preconditioner
         else
-            precond_vector = h_diag - mu
-            where (abs(precond_vector) < precond_floor)
-                precond_vector = precond_floor
-            end where
-            precond_vector = vector / precond_vector
+            precond_vector = vector / level_shifted_divisors(h_diag, mu)
 
             ! ensure basis vector stays in subspace
             if (associated(settings%project)) then

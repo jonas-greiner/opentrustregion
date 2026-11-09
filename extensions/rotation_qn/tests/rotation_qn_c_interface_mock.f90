@@ -45,8 +45,8 @@ contains
         use c_interface, only: logger_c_type, solver_settings_type_c
         use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
                                   check_hess_x_c_funptr, check_precond_c_funptr, n_param
-        use otr_rotation_qn_test_reference, only: &
-            check_transport_c_funptr, check_obj_func_grad_c_funptr, operator(/=)
+        use otr_rotation_qn_test_reference, only: check_obj_func_grad_c_funptr, &
+                                                  check_transport_c_funptr, operator(/=)
         use otr_common_c_interface_mock, only: &
             record_received_callbacks, mock_level_update_orbs, mock_level_obj_func, &
             check_and_wire_solver_settings_c, mock_extension

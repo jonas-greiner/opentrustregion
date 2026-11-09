@@ -3413,42 +3413,6 @@ contains
 
     end function test_matrix_exponential
 
-    logical(c_bool) function test_level_shifted_divisors() bind(C)
-        !
-        ! this function tests the function which returns the divisors of the
-        ! level-shifted preconditioner
-        !
-        use otr_common, only: level_shifted_divisors
-        use opentrustregion_core, only: precond_floor
-
-        real(rp), parameter :: mu = 0.5_rp
-
-        real(rp) :: eigval_pairs(5), expected(5)
-
-        ! assume tests pass
-        test_level_shifted_divisors = .true.
-
-        ! initialize eigenvalue pairs whose shifted values are well separated from the
-        ! floor on both sides of zero, and ones whose shifted values vanish or lie just
-        ! below the floor
-        eigval_pairs = [2.0_rp, -1.0_rp, mu, mu + 0.5_rp * precond_floor, &
-                        mu - 0.5_rp * precond_floor]
-
-        ! the shifted values are returned unless they are smaller in magnitude than the
-        ! floor, in which case they are replaced by the positive floor
-        expected = &
-            [2.0_rp - mu, -1.0_rp - mu, precond_floor, precond_floor, precond_floor]
-
-        ! call function and determine if the divisors are correct
-        if (.not. all(is_close(level_shifted_divisors(eigval_pairs, mu), expected, &
-                               tol * abs(expected)))) then
-            write(stderr, *) "test_level_shifted_divisors failed: Returned "// &
-                "divisors wrong."
-            test_level_shifted_divisors = .false.
-        end if
-
-    end function test_level_shifted_divisors
-
     logical(c_bool) function test_positive_definite_divisors() bind(C)
         !
         ! this function tests the function which returns the divisors of the
