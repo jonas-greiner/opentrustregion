@@ -134,7 +134,7 @@ class ObjFuncPyInterface:
     """
     this class provides the Python interface to the objective function a factory
     returns, which is called with the context the factory has written into the solver
-    settings and keeps these alive, which keep the owner of the factory's object alive
+    settings and keeps the owner of the factory's object alive
     """
 
     obj_func_funptr: Any
@@ -167,10 +167,11 @@ def extension_functions(
     this function returns the orbital updating function and the objective function a
     factory returns, the Python interfaces to the C functions the C factory returned,
     which are called with the context the factory has written into the solver settings
-    and keep these alive, and the orbital update of which copies the orbitals back if
-    the library moves a copy of them
+    and keep the owner of the factory's object alive, which the factory has handed the
+    settings, and the orbital update of which copies the orbitals back if the library
+    moves a copy of them
     """
-    saved_objects = {"solver_settings": solver_settings}
+    saved_objects = {"owner": solver_settings._extension_owner}
     context = solver_settings.settings_c.context
     return (
         UpdateOrbsPyInterface(
@@ -202,13 +203,15 @@ class ExtensionOwner:
     this class owns the extension object a factory created for a Python host and the
     solver settings it wired, which, like their nested stability check settings, keep
     their latest owner alive in place of the owner of the object they were wired with
-    before, which the new owner keeps alive, so that the functions the factory returned
-    only have to keep the solver settings alive; it releases the object once nothing
-    keeps it alive any longer and keeps alive what the object calls: the callback
-    interfaces of the factory call, the C callback functions of the solver settings and
-    their nested settings, which the object took from them and may call once only the
-    nested settings keep it alive, the settings of the extension and the record of the
-    solver state
+    before, which the new owner keeps alive; the functions the factory returned keep
+    this owner alive rather than the settings, since the owner of a later factory can
+    take these functions as the host's, which would otherwise keep the settings that
+    keep it alive in a reference cycle; it releases the object once nothing keeps it
+    alive any longer and keeps alive what the object calls: the callback interfaces of
+    the factory call, the C callback functions of the solver settings and their nested
+    settings, which the object took from them and may call once only the nested
+    settings keep it alive, the settings of the extension and the record of the solver
+    state
     """
 
     def __init__(
@@ -306,7 +309,7 @@ class UpdateOrbsPyInterface:
     """
     this class provides the Python interface to the orbital updating function a factory
     returns, which is called with the context the factory has written into the solver
-    settings and keeps these alive, which keep the owner of the factory's object alive
+    settings and keeps the owner of the factory's object alive
     """
 
     update_orbs_funptr: Any
@@ -355,7 +358,10 @@ class UpdateOrbsPyInterface:
         write_back(h_diag, h_diag_buffer)
 
         # keep the interface of the Hessian linear transformation available as an
-        # attribute and let it keep this object alive
-        self.hess_x = HessXPyInterface(hess_x_funptr, self.context, _owner=self)
+        # attribute and let it keep the owner of the factory's object alive, not this
+        # function, which keeps it
+        self.hess_x = HessXPyInterface(
+            hess_x_funptr, self.context, _owner=self.saved_objects["owner"]
+        )
 
         return func.value, self.hess_x
