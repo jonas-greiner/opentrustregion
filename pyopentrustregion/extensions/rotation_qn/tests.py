@@ -133,23 +133,27 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
         """
         this function tests that the interfaces to the transport and initial Hessian
         functions report an exception or an interruption raised by the function as an
-        error and keep it, and that the transport function receives the geodesic
-        read-only
+        error and keep it with the call whose library called them, and that the
+        transport function receives the geodesic read-only
         """
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
         output = np.zeros(n_param)
         output_ptr = output.ctypes.data_as(POINTER(c_real))
         interfaces = {
-            "transport function": lambda func, exc: TransportInterface(
-                func, n_param, exc
-            )(vector_ptr, output_ptr, None),
-            "initial Hessian function": lambda func, exc: InitHessInterface(
-                func, n_param, exc
-            )(output_ptr, None),
+            "transport function": lambda func: TransportInterface(func)(
+                vector_ptr, output_ptr, None
+            ),
+            "initial Hessian function": lambda func: InitHessInterface(func)(
+                output_ptr, None
+            ),
         }
         test_passed = check_callback_interfaces(
-            "test_callback_interfaces", interfaces, ["transport function"], vector
+            "test_callback_interfaces",
+            interfaces,
+            ["transport function"],
+            vector,
+            n_param,
         )
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")

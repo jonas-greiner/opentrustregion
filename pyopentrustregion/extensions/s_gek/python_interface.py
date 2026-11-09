@@ -24,8 +24,7 @@ from pyopentrustregion.python_interface import (
     ObjFuncInterface,
     LoggerInterface,
     LoggerPyInterface,
-    adopt_collector,
-    raise_on_failure,
+    LibraryCall,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -42,7 +41,7 @@ from pyopentrustregion.extensions.common.python_interface import (
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Dict
+    from typing import Tuple, Callable, Optional
 
     ChangeReferenceType = Callable[
         [np.ndarray, np.ndarray, np.ndarray, np.ndarray], None
@@ -105,8 +104,6 @@ class ChangeReferenceInterface(CallbackInterface):
     """
 
     change_reference: ChangeReferenceType
-    n_param: int
-    exception: Dict[str, BaseException]
 
     def call(
         self, new_ref_ptr, n_points, kappa_list_ptr, local_grad_list_ptr, grad_list_ptr
@@ -146,11 +143,6 @@ def s_gek_factory(
     ],
     Callable[[np.ndarray], float],
 ]:
-    # collector for exceptions raised inside the wrapped user callbacks; adopted from
-    # update_orbs or obj_func when these are themselves factory-produced so a whole
-    # chain of factories shares one, and handed to solver through the returned objects
-    exception = adopt_collector(update_orbs, obj_func)
-
     # the C interface cannot check whether the orbital updating function and the
     # objective function belong to the solver settings
     check_wrapped_functions(update_orbs, obj_func, solver_settings)
@@ -162,19 +154,11 @@ def s_gek_factory(
         "change_reference",
         ("new_ref", "kappa_list", "local_grad_list", "grad_list"),
     )
-    update_orbs_interface = update_orbs_interface_type(
-        UpdateOrbsInterface(update_orbs, n_param, exception)
-    )
-    obj_func_interface = obj_func_interface_type(
-        ObjFuncInterface(obj_func, n_param, exception)
-    )
+    update_orbs_interface = update_orbs_interface_type(UpdateOrbsInterface(update_orbs))
+    obj_func_interface = obj_func_interface_type(ObjFuncInterface(obj_func))
     change_reference_interface = change_reference_interface_type(
-        ChangeReferenceInterface(change_reference, n_param, exception)
+        ChangeReferenceInterface(change_reference)
     )
-
-    # hand the logging function of the settings the exception collector of the call
-    if settings is not None:
-        settings.prepare_call(None, exception)
 
     # define result and argument types
     lib.s_gek_factory.restype = c_int
@@ -195,7 +179,8 @@ def s_gek_factory(
     update_orbs_s_gek_funptr = update_orbs_interface_type()
     obj_func_s_gek_funptr = obj_func_interface_type()
     extension = c_void_p()
-    error = lib.s_gek_factory(
+    LibraryCall("S-GEK factory", n_param).run(
+        lib.s_gek_factory,
         n_param,
         update_orbs_interface,
         obj_func_interface,
@@ -207,8 +192,6 @@ def s_gek_factory(
         byref(solver_state.state_c),
         None if settings is None else byref(settings.settings_c),
     )
-
-    raise_on_failure(error, exception, "S-GEK factory")
 
     # the owner of the S-GEK object, which the solver settings keep alive, keeps alive
     # what the object calls, and the returned functions are called with the context
@@ -226,5 +209,5 @@ def s_gek_factory(
         },
     )
     return extension_functions(
-        update_orbs_s_gek_funptr, obj_func_s_gek_funptr, solver_settings, exception
+        update_orbs_s_gek_funptr, obj_func_s_gek_funptr, solver_settings
     )

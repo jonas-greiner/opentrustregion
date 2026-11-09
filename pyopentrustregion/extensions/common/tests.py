@@ -28,6 +28,7 @@ from pyopentrustregion.tests import (
     n_param,
     add_tests,
     print_separator,
+    call_from_library,
     check_callback_interfaces,
 )
 from pyopentrustregion.python_interface import (
@@ -40,7 +41,8 @@ from pyopentrustregion.python_interface import (
     SolverSettings,
     SolverState,
     solver,
-    interruption_state,
+    running_call,
+    LibraryCall,
 )
 
 from pyopentrustregion.extensions.common.python_interface import (
@@ -315,8 +317,8 @@ def check_wired_solver_settings(
             test_passed = False
 
     # assign a Hessian linear transformation for the stability check after the wiring
-    # and call it through the C settings with the context the mock factory wrote and
-    # the number of parameters and exception collector the solver would hand it
+    # and call it through the C settings with the context the mock factory wrote, as
+    # the library of a solver call does
     x = np.ones(n_param, dtype=np.float64)
     hess_x = np.zeros(n_param, dtype=np.float64)
 
@@ -324,8 +326,9 @@ def check_wired_solver_settings(
         hess_x[:] = 4 * x
 
     solver_settings.stability_hess_x = stability_hess_x
-    solver_settings.prepare_call(n_param, {})
-    error = hess_x_interface_type(solver_settings.settings_c.stability_hess_x)(
+    error = call_from_library(
+        LibraryCall("solver", n_param),
+        hess_x_interface_type(solver_settings.settings_c.stability_hess_x),
         x.ctypes.data_as(POINTER(c_real)),
         hess_x.ctypes.data_as(POINTER(c_real)),
         solver_settings.settings_c.context,
@@ -501,7 +504,8 @@ class ToyRun:
     row-major, so that the library rotates a copy of them, and the open-shell ones
     column-major, so that it rotates them in place, or density matrices, together with
     the density matrix evaluating functions of the orbital basis and density QN, which
-    count their calls and record whether the solver state was current in them
+    count their calls and record whether the solver state was current in them, and the
+    response function of the orbital basis, which raises a given exception, if any
     """
 
     def __init__(self, mo_basis, n_particle):
@@ -521,6 +525,7 @@ class ToyRun:
         }
         self.n_updates_seen = {"evaluate_dm": 0, "density_qn_evaluate_dm": 0}
         self.state_not_current = False
+        self.response_failure = None
 
         # MO coefficients of fewer MOs than AOs for every channel, so that the numbers
         # of AOs and MOs cannot be confused, or the density matrices of their occupied
@@ -609,6 +614,8 @@ class ToyRun:
 
         def response(ddm, response):
             self.called("get_response")
+            if self.response_failure is not None:
+                raise self.response_failure
             ddm_total = 2.0 * ddm if ddm.ndim == 2 else ddm.sum(axis=0)
             response[...] = (
                 np.einsum("pqrs,rs->pq", model.g, ddm_total)
@@ -901,8 +908,8 @@ class CommonPyInterfaceTests(unittest.TestCase):
         """
         this function tests the Python interfaces to the density matrix evaluating
         function and the response function it returns, which report an exception or an
-        interruption as an error and keep it, also a missing response function, and
-        hand over the density matrix read-only
+        interruption as an error and keep it with the call whose library called them,
+        also a missing response function, and hand over the density matrix read-only
         """
         # initialize test flag
         test_passed = True
@@ -912,21 +919,21 @@ class CommonPyInterfaceTests(unittest.TestCase):
         def evaluate_dm_without_response(dm_ao, fock, get_response):
             return np.sum(dm_ao), None
 
-        exception = {}
-        evaluate_dm = EvaluateDMInterface(
-            evaluate_dm_without_response, n_ao, 1, True, exception
-        )
+        library_call = LibraryCall("solver", n_param)
+        evaluate_dm = EvaluateDMInterface(evaluate_dm_without_response, n_ao, 1, True)
         dm_ao = np.full(2 * (n_ao,), 1.0, dtype=np.float64)
         energy = (c_real * 1)()
         get_response_funptr = (c_void_p * 1)()
-        error = evaluate_dm(
+        error = call_from_library(
+            library_call,
+            evaluate_dm,
             dm_ao.ctypes.data_as(POINTER(c_real)),
             energy,
             None,
             get_response_funptr,
             None,
         )
-        if error == 0 or not isinstance(exception.get("exc"), RuntimeError):
+        if error == 0 or not isinstance(library_call.failure, RuntimeError):
             print(
                 " test_evaluate_dm_py_interface failed: Missing response function "
                 "requested from density matrix evaluating function does not produce "
@@ -940,14 +947,14 @@ class CommonPyInterfaceTests(unittest.TestCase):
         response = np.zeros(2 * (n_ao,))
         response_ptr = response.ctypes.data_as(POINTER(c_real))
         interfaces = {
-            "density matrix evaluating function": lambda func, exc: (
-                EvaluateDMInterface(func, n_ao, 1, True, exc)(
+            "density matrix evaluating function": lambda func: (
+                EvaluateDMInterface(func, n_ao, 1, True)(
                     dm_ao_ptr, (c_real * 1)(), None, None, None
                 )
             ),
-            "response function": lambda func, exc: GetResponseInterface(
-                func, n_ao, 1, True, exc
-            )(dm_ao_ptr, response_ptr, None),
+            "response function": lambda func: GetResponseInterface(func, n_ao, 1, True)(
+                dm_ao_ptr, response_ptr, None
+            ),
         }
         test_passed &= check_callback_interfaces(
             "test_evaluate_dm_py_interface", interfaces, list(interfaces), dm_ao
@@ -960,33 +967,29 @@ class CommonPyInterfaceTests(unittest.TestCase):
         """
         this function tests the orbital updating function and the objective function a
         factory returns around the C functions the C factory returned, which have to
-        call them with the context of the solver settings while marking the library as
-        innermost, keep these alive, share the collector of the factory call, copy the
-        orbitals back after every orbital update and hand over and receive arrays of any
-        layout and kind
+        call them with the context of the solver settings through calls of their own,
+        which mark the library as innermost and raise an error of these functions, keep
+        the settings alive, copy the orbitals back after every orbital update, also a
+        failed one, and hand over and receive arrays of any layout and kind
         """
         test_passed = True
         solver_settings = SolverSettings()
-        exception = {}
         copies = []
         update_orbs, obj_func = extension_functions(
             update_orbs_interface_type(lib.mock_update_orbs),
             obj_func_interface_type(lib.mock_obj_func),
             solver_settings,
-            exception,
             lambda: copies.append(True),
         )
 
         for function in (update_orbs, obj_func):
             if (
                 function.saved_objects["solver_settings"] is not solver_settings
-                or function._otr_exception is not exception
                 or function.context != solver_settings.settings_c.context
             ):
                 print(
                     " test_extension_functions failed: Returned function does not "
-                    "keep the solver settings alive, share the collector or call with "
-                    "their context."
+                    "keep the solver settings alive or call with their context."
                 )
                 test_passed = False
 
@@ -1039,30 +1042,60 @@ class CommonPyInterfaceTests(unittest.TestCase):
             test_passed = False
 
         # the returned functions mark the library as innermost while its C functions
-        # run
+        # run, through calls of their own, which raise an error of these functions,
+        # after the orbitals are copied back
         marks = []
+        error_code = 0
 
         def marking_update_orbs(*args):
-            marks.append(interruption_state.stack)
-            return 0
+            marks.append(running_call.get())
+            return error_code
 
         def marking_obj_func(*args):
-            marks.append(interruption_state.stack)
-            return 0
+            marks.append(running_call.get())
+            return error_code
 
         c_functions = (
             update_orbs_interface_type(marking_update_orbs),
             obj_func_interface_type(marking_obj_func),
         )
+        copies.clear()
         update_orbs, obj_func = extension_functions(
-            *c_functions, solver_settings, exception
+            *c_functions, solver_settings, lambda: copies.append(True)
         )
         update_orbs(kappa, grad, h_diag)
         obj_func(kappa)
-        if marks != [(False,), (False,)]:
+        if len(marks) != 2 or not all(isinstance(mark, LibraryCall) for mark in marks):
             print(
                 " test_extension_functions failed: Library not marked as innermost "
                 "while the returned functions call its C functions."
+            )
+            test_passed = False
+        error_code = 5
+        copies.clear()
+        for name, call in (
+            ("orbital update", lambda: update_orbs(kappa, grad, h_diag)),
+            ("objective function", lambda: obj_func(kappa)),
+        ):
+            try:
+                call()
+            except RuntimeError as e:
+                if "(code 5)" not in str(e):
+                    print(
+                        f" test_extension_functions failed: Error of the {name} raised "
+                        "without its code."
+                    )
+                    test_passed = False
+            else:
+                print(
+                    f" test_extension_functions failed: Error of the {name} not "
+                    "raised."
+                )
+                test_passed = False
+        if copies != [True]:
+            print(
+                " test_extension_functions failed: Orbitals not copied back after a "
+                "failed orbital update."
             )
             test_passed = False
 

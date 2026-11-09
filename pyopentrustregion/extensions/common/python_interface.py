@@ -22,8 +22,7 @@ from pyopentrustregion.python_interface import (
     HessXPyInterface,
     c_buffer,
     write_back,
-    raise_callback_error,
-    call_library,
+    LibraryCall,
 )
 
 if TYPE_CHECKING:
@@ -61,7 +60,6 @@ class GetResponseInterface(CallbackInterface):
     n_ao: int
     n_particle: int
     closed_shell: bool
-    exception: Dict[str, BaseException]
 
     def call(self, dm_ao_ptr, response_ptr) -> int:
         # convert matrix pointers to numpy arrays and make the density matrix read-only
@@ -93,7 +91,6 @@ class EvaluateDMInterface(CallbackInterface):
     n_ao: int
     n_particle: int
     closed_shell: bool
-    exception: Dict[str, BaseException]
     get_response_funptr: Optional[Any] = None
 
     def call(self, dm_ao_ptr, energy_ptr, fock_ptr, get_response_funptr) -> int:
@@ -114,7 +111,7 @@ class EvaluateDMInterface(CallbackInterface):
 
         if get_response_funptr:
             if get_response is None:
-                self.exception["exc"] = RuntimeError(
+                self.library_call.failure = RuntimeError(
                     "evaluate_dm returned no response function although one was "
                     "requested."
                 )
@@ -124,11 +121,7 @@ class EvaluateDMInterface(CallbackInterface):
             # not garbage collected while the library still calls it
             self.get_response_funptr = get_response_interface_type(
                 GetResponseInterface(
-                    get_response,
-                    self.n_ao,
-                    self.n_particle,
-                    self.closed_shell,
-                    self.exception,
+                    get_response, self.n_ao, self.n_particle, self.closed_shell
                 )
             )
             get_response_funptr[0] = self.get_response_funptr
@@ -146,7 +139,6 @@ class ObjFuncPyInterface:
 
     obj_func_funptr: Any
     saved_objects: Dict[str, Any]
-    _otr_exception: Optional[Dict[str, BaseException]] = None
     context: Optional[int] = None
 
     def __call__(self, kappa: np.ndarray) -> float:
@@ -154,12 +146,12 @@ class ObjFuncPyInterface:
         func = c_real()
 
         # get pointers to arrays
-        kappa_ptr = c_buffer(kappa).ctypes.data_as(POINTER(c_real))
+        kappa_buffer = c_buffer(kappa)
+        kappa_ptr = kappa_buffer.ctypes.data_as(POINTER(c_real))
 
         # objective function
-        error = call_library(self.obj_func_funptr, kappa_ptr, byref(func), self.context)
-        raise_callback_error(
-            error, self._otr_exception, "Objective function raised error."
+        LibraryCall("objective function", kappa_buffer.size).run(
+            self.obj_func_funptr, kappa_ptr, byref(func), self.context
         )
 
         return func.value
@@ -169,7 +161,6 @@ def extension_functions(
     update_orbs_funptr: Any,
     obj_func_funptr: Any,
     solver_settings: SolverSettings,
-    exception: Dict[str, BaseException],
     copy_back: Optional[Callable[[], None]] = None,
 ) -> Tuple[UpdateOrbsPyInterface, ObjFuncPyInterface]:
     """
@@ -185,14 +176,12 @@ def extension_functions(
         UpdateOrbsPyInterface(
             update_orbs_funptr=update_orbs_funptr,
             saved_objects=saved_objects,
-            _otr_exception=exception,
             context=context,
             copy_back=copy_back,
         ),
         ObjFuncPyInterface(
             obj_func_funptr=obj_func_funptr,
             saved_objects=saved_objects,
-            _otr_exception=exception,
             context=context,
         ),
     )
@@ -237,11 +226,10 @@ class ExtensionOwner:
 class OrbitalOwner(ExtensionOwner):
     """
     this class owns the orbital basis object an MO or OAO factory created for a Python
-    host like ExtensionOwner and also holds the dimensions of its orbitals, the
-    collector of the exceptions of the factory call and, if the library moves a copy of
-    the orbitals of the caller, the function that copies them back, which the density
-    QN factory, which builds on the object, needs for its own callback interfaces and
-    orbital updating function and shares with them
+    host like ExtensionOwner and also holds the dimensions of its orbitals and, if the
+    library moves a copy of the orbitals of the caller, the function that copies them
+    back, which the density QN factory, which builds on the object, needs for its own
+    callback interfaces and orbital updating function
     """
 
     def __init__(
@@ -251,13 +239,11 @@ class OrbitalOwner(ExtensionOwner):
         saved_objects: Dict[str, Any],
         n_ao: int,
         n_particle: int,
-        exception: Dict[str, BaseException],
         copy_back: Optional[Callable[[], None]] = None,
     ):
         super().__init__(extension, solver_settings, saved_objects)
         self.n_ao = n_ao
         self.n_particle = n_particle
-        self.exception = exception
         self.copy_back = copy_back
 
 
@@ -318,9 +304,6 @@ class UpdateOrbsPyInterface:
     update_orbs_funptr: Any
     saved_objects: Dict[str, Any]
     hess_x: Optional[Callable[[np.ndarray, np.ndarray], None]] = None
-    # collector of the exceptions of the factory call, which the solver adopts, so that
-    # it chains the exceptions raised inside the callback functions the object calls
-    _otr_exception: Optional[Dict[str, BaseException]] = None
     context: Optional[int] = None
     # function copying the orbitals back to the array of the caller after every update
     # if the library moves a copy of them
@@ -333,8 +316,12 @@ class UpdateOrbsPyInterface:
         func = c_real()
 
         # get pointers to arrays
-        grad_buffer, h_diag_buffer = c_buffer(grad), c_buffer(h_diag)
-        kappa_ptr = c_buffer(kappa).ctypes.data_as(POINTER(c_real))
+        kappa_buffer, grad_buffer, h_diag_buffer = (
+            c_buffer(kappa),
+            c_buffer(grad),
+            c_buffer(h_diag),
+        )
+        kappa_ptr = kappa_buffer.ctypes.data_as(POINTER(c_real))
         grad_ptr = grad_buffer.ctypes.data_as(POINTER(c_real))
         h_diag_ptr = h_diag_buffer.ctypes.data_as(POINTER(c_real))
 
@@ -344,7 +331,7 @@ class UpdateOrbsPyInterface:
         # update orbital function and copy the orbitals back, also on failure, since
         # they may have been moved by then
         try:
-            error = call_library(
+            LibraryCall("orbital update", kappa_buffer.size).run(
                 self.update_orbs_funptr,
                 kappa_ptr,
                 byref(func),
@@ -358,14 +345,9 @@ class UpdateOrbsPyInterface:
                 self.copy_back()
         write_back(grad, grad_buffer)
         write_back(h_diag, h_diag_buffer)
-        raise_callback_error(
-            error, self._otr_exception, "Orbital updating function raised error."
-        )
 
         # keep the interface of the Hessian linear transformation available as an
         # attribute and let it keep this object alive
-        self.hess_x = HessXPyInterface(
-            hess_x_funptr, self._otr_exception, self.context, _owner=self
-        )
+        self.hess_x = HessXPyInterface(hess_x_funptr, self.context, _owner=self)
 
         return func.value, self.hess_x

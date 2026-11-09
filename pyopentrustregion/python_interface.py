@@ -21,7 +21,6 @@ from ctypes import (
     POINTER,
     byref,
     string_at,
-    cast,
     addressof,
     memmove,
     c_double,
@@ -35,6 +34,7 @@ from ctypes import (
     sizeof,
     Structure,
 )
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -146,44 +146,106 @@ conv_check_interface_type = callback_type(c_int, POINTER(c_bool))
 logger_interface_type = callback_type(None, c_char_p)
 
 
-def adopt_collector(*callbacks: Any) -> Dict[str, BaseException]:
-    """
-    this function returns the exception collector to use for a run
-    """
-    for callback in callbacks:
-        collector = getattr(callback, "_otr_exception", None)
-        if collector is not None:
-            collector.clear()
-            return collector
+# the call whose library runs innermost in the current thread, None while a callback
+# function or no call runs
+running_call: ContextVar[Optional[LibraryCall]] = ContextVar(
+    "running_call", default=None
+)
 
-    return {}
-
-
-class InterruptionState(threading.local):
-    """
-    this class keeps, separately for every thread, a stack of the running calls, True
-    for a callback function and False for the library, innermost last, and an
-    interruption that arrived while the library ran and is raised later
-    """
-
-    stack: tuple = ()
-    pending: Optional[BaseException] = None
-
-
-interruption_state = InterruptionState()
+# the call whose library called the callback function that runs innermost in the
+# current thread, with which the interface of that function keeps what it raises
+calling_call: ContextVar[Optional[LibraryCall]] = ContextVar(
+    "calling_call", default=None
+)
 
 
 def defer_interruption(signum, frame):
     """
     this function handles SIGINT during a call into the library, it raises a
     KeyboardInterrupt right away while a callback function runs, but only records it
-    while the library runs, since Python would otherwise raise it on entering the next
-    callback function, where ctypes would drop it
+    with the call while the library runs, since Python would otherwise raise it on
+    entering the next callback function, where ctypes would drop it
     """
-    if interruption_state.stack and not interruption_state.stack[-1]:
-        interruption_state.pending = KeyboardInterrupt()
+    library_call = running_call.get()
+    if library_call is not None:
+        library_call.interruption = KeyboardInterrupt()
     else:
         signal.default_int_handler(signum, frame)
+
+
+@dataclass(eq=False)
+class LibraryCall:
+    """
+    this class makes a call into the library with a number of parameters, if it has
+    one, the interfaces of the callback functions its library calls keep what these
+    raise here, since ctypes would drop it, the exception of a failed callback
+    function, the first one of the logging function and an interruption, such as a
+    KeyboardInterrupt of a callback function or SIGINT while the library runs, which
+    the call raises once the library has returned
+    """
+
+    name: str
+    n_param: Optional[int]
+    failure: Optional[Exception] = None
+    logger_failure: Optional[Exception] = None
+    interruption: Optional[BaseException] = None
+
+    def run(self, function: Callable[..., Optional[int]], *args) -> None:
+        """
+        this function calls into the library and marks it as innermost while it runs,
+        in the main thread it also replaces Python's default handler of SIGINT with
+        defer_interruption meanwhile, and reports what the callback functions raised
+        once the library has returned
+        """
+        outer = running_call.get()
+        install = (
+            threading.current_thread() is threading.main_thread()
+            and signal.getsignal(signal.SIGINT) is signal.default_int_handler
+        )
+        try:
+            try:
+                if install:
+                    signal.signal(signal.SIGINT, defer_interruption)
+                running_call.set(self)
+                error = function(*args)
+            finally:
+                # restore the handler while the library is still marked as innermost,
+                # since Python handles a pending signal while it switches the handler,
+                # which defer_interruption then records instead of raising it here
+                if install:
+                    signal.signal(signal.SIGINT, signal.default_int_handler)
+                running_call.set(outer)
+            self.report(error)
+        finally:
+            # forget what the callback functions raised, since the interfaces in its
+            # tracebacks refer to this call, which would otherwise form a reference
+            # cycle that keeps the frames of the call and the callback functions alive
+            # until the next garbage collection
+            self.failure = self.logger_failure = self.interruption = None
+
+    def report(self, error: Optional[int]) -> None:
+        """
+        this function raises an interruption as it is and an error with the exception
+        of a failed callback function as its cause, while a failed logging function
+        cannot affect the result and is therefore only reported as a warning, both
+        before an error and instead of one, in a frame of its own, since the tracebacks
+        of the callback functions refer to the frame that called the library, which
+        would otherwise form a reference cycle with the warning
+        """
+        if self.interruption is not None:
+            raise self.interruption
+        if self.logger_failure is not None:
+            warning = RuntimeWarning(
+                f"OpenTrustRegion {self.name} called a logging function that raised "
+                f"{self.logger_failure!r}, so log messages from that point on may be "
+                "missing."
+            )
+            warning.__cause__ = self.logger_failure
+            warnings.warn(warning, stacklevel=4)
+        if error:
+            raise RuntimeError(
+                f"OpenTrustRegion {self.name} produced error (code {error})."
+            ) from self.failure
 
 
 # define interface factories
@@ -193,38 +255,67 @@ class CallbackInterface:
     hands every callback function the opaque host context as its last argument while
     Python hosts carry their data in closures instead, so it is dropped here and the
     subclasses only implement call without it, an exception is reported to the library
-    as an error, since ctypes would drop it
+    as an error, since ctypes would drop it, and kept with the call whose library
+    called the callback function, so that an interface that outlives a call, as those
+    of the settings and of the factories do, keeps it with every call that calls it
     """
 
-    exception: Dict[str, BaseException]
+    @property
+    def library_call(self) -> LibraryCall:
+        """
+        this function returns the call whose library called the callback function
+        """
+        return calling_call.get()
+
+    @property
+    def n_param(self) -> Optional[int]:
+        return self.library_call.n_param
 
     def __call__(self, *args):
         # catch every exception, since ctypes drops one that leaves this function and
-        # hands the library an undefined return value instead
-        outer = interruption_state.stack
+        # hands the library an undefined return value instead, and mark the callback
+        # function as innermost while it runs, so that SIGINT raises right away, and
+        # the call whose library called it as the one that keeps what it raises
+        outer = running_call.get()
+        outer_calling = calling_call.get()
         try:
-            interruption_state.stack = outer + (True,)
+            running_call.set(None)
 
-            # stop the call for an interruption that arrived while the library ran
-            if interruption_state.pending is not None:
-                pending, interruption_state.pending = interruption_state.pending, None
-                raise pending
+            # with no call running, as when C calls the callback function outside a
+            # call into the library, it keeps what it raises with a call of its own
+            # without a number of parameters, so that it still reports an error rather
+            # than raise inside ctypes
+            calling_call.set(
+                outer if outer is not None else LibraryCall("callback function", None)
+            )
+
+            # report an interruption that arrived while the library ran without calling
+            # the callback function, the call raises it once the library has returned
+            if self.library_call.interruption is not None:
+                raise self.library_call.interruption
 
             result = self.call(*args[:-1])
         except BaseException as e:
             # unmark the callback function before calling fail, so that an interruption
             # arriving during that call is recorded instead of raised outside the try
-            interruption_state.stack = outer
-            return self.fail(e)
-        interruption_state.stack = outer
+            running_call.set(outer)
+            error = self.fail(e)
+            calling_call.set(outer_calling)
+            return error
+        running_call.set(outer)
+        calling_call.set(outer_calling)
         return result
 
     def fail(self, e: BaseException) -> Optional[int]:
         """
-        this function keeps the exception of a callback function, which is raised once
-        the call has returned, and returns the error code that stops the call
+        this function keeps the exception of a callback function with the call, which
+        raises it once the library has returned, and returns the error code that stops
+        the library
         """
-        self.exception["exc"] = e
+        if isinstance(e, Exception):
+            self.library_call.failure = e
+        else:
+            self.library_call.interruption = e
         return 1
 
 
@@ -235,8 +326,6 @@ class ObjFuncInterface(CallbackInterface):
     """
 
     obj_func: Callable[[np.ndarray], float]
-    n_param: int
-    exception: Dict[str, BaseException]
 
     def call(self, kappa_ptr, func_ptr) -> int:
         # convert matrix pointers to numpy arrays and make read-only
@@ -255,8 +344,6 @@ class HessXInterface(CallbackInterface):
     """
 
     hess_x: Callable[[np.ndarray, np.ndarray], None]
-    n_param: int
-    exception: Dict[str, BaseException]
 
     def call(self, x_ptr, hx_ptr) -> int:
         # convert trial vector pointer to numpy array and make read-only
@@ -280,8 +367,6 @@ class UpdateOrbsInterface(CallbackInterface):
         [np.ndarray, np.ndarray, np.ndarray],
         Tuple[float, Callable[[np.ndarray, np.ndarray], None]],
     ]
-    n_param: int
-    exception: Dict[str, BaseException]
     hess_x_funptr: Optional[Any] = None
 
     def call(self, kappa_ptr, func_ptr, grad_ptr, h_diag_ptr, hess_x_funptr) -> int:
@@ -301,7 +386,7 @@ class UpdateOrbsInterface(CallbackInterface):
         if hess_x is None:
             return 0
         if not callable(hess_x):
-            self.exception["exc"] = TypeError(
+            self.library_call.failure = TypeError(
                 "Orbital update returned a Hessian linear transformation of type "
                 f"{type(hess_x).__name__}, which is not callable."
             )
@@ -309,9 +394,7 @@ class UpdateOrbsInterface(CallbackInterface):
 
         # keep the interface of the Hessian linear transformation on this object so
         # that it is not garbage collected while the library still calls it
-        self.hess_x_funptr = hess_x_interface_type(
-            HessXInterface(hess_x, self.n_param, self.exception)
-        )
+        self.hess_x_funptr = hess_x_interface_type(HessXInterface(hess_x))
         hess_x_funptr[0] = self.hess_x_funptr
 
         return 0
@@ -322,24 +405,17 @@ class SettingsCallbackInterface(CallbackInterface):
     """
     this class is the base class of the interfaces to the callback functions of a
     settings object, which the settings build once per callback function and which
-    call the callable currently assigned to it with the number of parameters and the
-    exception collector the settings hold for the current call into the library
+    call the callable currently assigned to it, holding the callables of the settings
+    rather than the settings themselves, which hold the interface, so that the two form
+    no reference cycle
     """
 
-    settings: Settings
+    callables: Dict[str, Optional[Callable]]
     name: str
 
     @property
     def func(self) -> Callable:
-        return self.settings._callables[self.name]
-
-    @property
-    def n_param(self) -> Optional[int]:
-        return self.settings._n_param
-
-    @property
-    def exception(self) -> Dict[str, BaseException]:
-        return self.settings._exception
+        return self.callables[self.name]
 
 
 class PrecondInterface(SettingsCallbackInterface):
@@ -458,30 +534,13 @@ class LoggerInterface(SettingsCallbackInterface):
         """
         this function keeps the first exception of the logging function, which returns
         no error code since the result does not depend on it, for a warning once the
-        call has returned, and records an interruption, so that the next callback
-        function stops the call
+        library has returned, and an interruption, so that the next callback function
+        stops the library
         """
-        if isinstance(e, Exception):
-            self.exception.setdefault("logger", e)
-        else:
-            interruption_state.pending = e
-
-
-def raise_callback_error(
-    error: int, exception: Optional[Dict[str, BaseException]], msg
-):
-    """
-    this function raises if a C callback function called from Python failed, with the
-    exception raised by a failing Python callback function it reached as its cause,
-    while an interruption of such a function, such as a KeyboardInterrupt, is raised
-    as it is
-    """
-    if error != 0:
-        if exception is not None and "exc" in exception:
-            if not isinstance(exception["exc"], Exception):
-                raise exception["exc"]
-            raise RuntimeError(msg) from exception["exc"]
-        raise RuntimeError(msg)
+        if not isinstance(e, Exception):
+            self.library_call.interruption = e
+        elif self.library_call.logger_failure is None:
+            self.library_call.logger_failure = e
 
 
 def c_buffer(array: np.ndarray) -> np.ndarray:
@@ -509,11 +568,11 @@ class CFunctionInterface:
     """
     this class is the base class of the Python interfaces to C callback functions,
     such as those a factory returns or wires into settings, which are called with the
-    context they belong to through call_library and keep the object they rely on alive
+    context they belong to through a call of their own and keep the object they rely on
+    alive
     """
 
     funptr: Any
-    _otr_exception: Optional[Dict[str, BaseException]] = None
     context: Optional[int] = None
     _owner: Any = None
 
@@ -526,18 +585,13 @@ class HessXPyInterface(CFunctionInterface):
 
     def __call__(self, x: np.ndarray, hess_x: np.ndarray):
         x_buffer, hess_x_buffer = c_buffer(x), c_buffer(hess_x)
-        error = call_library(
+        LibraryCall("Hessian linear transformation", x_buffer.size).run(
             self.funptr,
             x_buffer.ctypes.data_as(POINTER(c_real)),
             hess_x_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
         )
         write_back(hess_x, hess_x_buffer)
-        raise_callback_error(
-            error,
-            self._otr_exception,
-            "Hessian linear transformation function raised error.",
-        )
 
 
 class PrecondPyInterface(CFunctionInterface):
@@ -549,7 +603,7 @@ class PrecondPyInterface(CFunctionInterface):
     def __call__(self, residual: np.ndarray, mu: float, precond_residual: np.ndarray):
         residual_buffer = c_buffer(residual)
         precond_residual_buffer = c_buffer(precond_residual)
-        error = call_library(
+        LibraryCall("preconditioner", residual_buffer.size).run(
             self.funptr,
             residual_buffer.ctypes.data_as(POINTER(c_real)),
             byref(c_real(mu)),
@@ -557,9 +611,6 @@ class PrecondPyInterface(CFunctionInterface):
             self.context,
         )
         write_back(precond_residual, precond_residual_buffer)
-        raise_callback_error(
-            error, self._otr_exception, "Preconditioner function raised error."
-        )
 
 
 class PrecondPDPyInterface(CFunctionInterface):
@@ -571,18 +622,13 @@ class PrecondPDPyInterface(CFunctionInterface):
     def __call__(self, residual: np.ndarray, precond_residual: np.ndarray):
         residual_buffer = c_buffer(residual)
         precond_residual_buffer = c_buffer(precond_residual)
-        error = call_library(
+        LibraryCall("positive-definite preconditioner", residual_buffer.size).run(
             self.funptr,
             residual_buffer.ctypes.data_as(POINTER(c_real)),
             precond_residual_buffer.ctypes.data_as(POINTER(c_real)),
             self.context,
         )
         write_back(precond_residual, precond_residual_buffer)
-        raise_callback_error(
-            error,
-            self._otr_exception,
-            "Positive-definite preconditioner function raised error.",
-        )
 
 
 class ProjectPyInterface(CFunctionInterface):
@@ -592,13 +638,10 @@ class ProjectPyInterface(CFunctionInterface):
 
     def __call__(self, vector: np.ndarray):
         vector_buffer = c_buffer(vector)
-        error = call_library(
+        LibraryCall("projection", vector_buffer.size).run(
             self.funptr, vector_buffer.ctypes.data_as(POINTER(c_real)), self.context
         )
         write_back(vector, vector_buffer)
-        raise_callback_error(
-            error, self._otr_exception, "Projection function raised error."
-        )
 
 
 class GetExtraTrialVectorsPyInterface(CFunctionInterface):
@@ -608,16 +651,13 @@ class GetExtraTrialVectorsPyInterface(CFunctionInterface):
 
     def __call__(self, trial_vectors: np.ndarray):
         trial_vectors_buffer = c_buffer(trial_vectors)
-        error = call_library(
+        LibraryCall("extra trial vector function", trial_vectors.shape[-1]).run(
             self.funptr,
             trial_vectors_buffer.ctypes.data_as(POINTER(c_real)),
             trial_vectors.shape[0],
             self.context,
         )
         write_back(trial_vectors, trial_vectors_buffer)
-        raise_callback_error(
-            error, self._otr_exception, "Extra trial vector function raised error."
-        )
 
 
 class ConvCheckPyInterface(CFunctionInterface):
@@ -627,9 +667,8 @@ class ConvCheckPyInterface(CFunctionInterface):
 
     def __call__(self) -> bool:
         converged = c_bool()
-        error = call_library(self.funptr, byref(converged), self.context)
-        raise_callback_error(
-            error, self._otr_exception, "Convergence check function raised error."
+        LibraryCall("convergence check", None).run(
+            self.funptr, byref(converged), self.context
         )
         return converged.value
 
@@ -640,7 +679,9 @@ class LoggerPyInterface(CFunctionInterface):
     """
 
     def __call__(self, message: str):
-        call_library(self.funptr, message.encode("utf-8"), self.context)
+        LibraryCall("logging function", None).run(
+            self.funptr, message.encode("utf-8"), self.context
+        )
 
 
 # define classes corresponding to C structs for settings
@@ -779,8 +820,6 @@ class Settings:
     own_attributes: Tuple[str, ...] = (
         "settings_c",
         "_callables",
-        "_call",
-        "_no_call_exception",
         "_callbacks",
         "_callback_addresses",
     )
@@ -801,34 +840,23 @@ class Settings:
         else:
             self.settings_c = settings_c
 
-        # the callables assigned to the callback functions, and, for every thread, the
-        # number of parameters and the exception collector of its current call into
-        # the library, which the interfaces of the callback functions read when they
-        # are called
+        # the callables assigned to the callback functions
         self._callables: Dict[str, Optional[Callable]] = {}
-        self._call = threading.local()
-        self._no_call_exception: Dict[str, BaseException] = {}
 
         # build the C callback function of every callback function once, which calls
         # the callable currently assigned to it, so that the C settings only change
         # when a callable is assigned and a factory can keep them like those of a C
-        # host
+        # host, and write down its address, which ctypes.cast would read through a
+        # reference cycle that keeps the settings alive until the next garbage
+        # collection
         self._callbacks = {
-            name: interface_type(interface(self, name))
+            name: interface_type(interface(self._callables, name))
             for name, (interface, interface_type, _) in self.callback_fields.items()
         }
         self._callback_addresses = {
-            name: cast(callback, c_void_p).value
+            name: c_void_p.from_buffer(callback).value
             for name, callback in self._callbacks.items()
         }
-
-    @property
-    def _n_param(self) -> Optional[int]:
-        return getattr(self._call, "n_param", None)
-
-    @property
-    def _exception(self) -> Dict[str, BaseException]:
-        return getattr(self._call, "exception", self._no_call_exception)
 
     def __setattr__(self, name: str, value: Any) -> None:
         """
@@ -888,26 +916,6 @@ class Settings:
         """
         for name in self.callback_fields:
             setattr(settings, name, copy_callback(getattr(self, name)))
-
-    def prepare_call(self, n_param: Optional[int], exception: Dict[str, BaseException]):
-        """
-        this function hands the callback functions the number of parameters and the
-        exception collector of a call into the library in the calling thread and
-        returns those of the call it interrupts, which the call restores when it
-        returns, so that calls nested in one another or running in different threads
-        can share the settings
-        """
-        interrupted = (self._n_param, self._exception)
-        self._call.n_param = n_param
-        self._call.exception = exception
-        return interrupted
-
-    def restore_call(self, interrupted):
-        """
-        this function hands the callback functions the number of parameters and the
-        exception collector of the call a returning call interrupted
-        """
-        self._call.n_param, self._call.exception = interrupted
 
 
 class SolverSettings(Settings):
@@ -984,27 +992,6 @@ class SolverSettings(Settings):
             settings.stability_settings, copy_callback
         )
 
-    def prepare_call(self, n_param: Optional[int], exception: Dict[str, BaseException]):
-        """
-        this function hands the callback functions of the settings and of their
-        nested stability check settings the number of parameters and the exception
-        collector of a call into the library and returns those of the call it
-        interrupts
-        """
-        return (
-            super().prepare_call(n_param, exception),
-            self.stability_settings.prepare_call(n_param, exception),
-        )
-
-    def restore_call(self, interrupted):
-        """
-        this function hands the callback functions of the settings and of their
-        nested stability check settings the number of parameters and the exception
-        collector of the call a returning call interrupted
-        """
-        super().restore_call(interrupted[0])
-        self.stability_settings.restore_call(interrupted[1])
-
 
 class StabilitySettings(Settings):
 
@@ -1062,10 +1049,7 @@ def bind_callback_fields(cls: type[Settings]):
                 if funptr == self._callback_addresses[name]:
                     return self._callables.get(name)
                 return py_interface(
-                    interface_type(funptr),
-                    _otr_exception=self._exception,
-                    context=self.settings_c.context,
-                    _owner=self,
+                    interface_type(funptr), context=self.settings_c.context, _owner=self
                 )
 
             def setter(self, func):
@@ -1229,60 +1213,6 @@ bind_state_fields(SolverState)
 bind_state_fields(StabilityState)
 
 
-def raise_on_failure(error: int, exception: Dict[str, BaseException], name: str):
-    """
-    this function raises if a call into the library failed, with the exception raised
-    by a failing callback function as its cause, a failed logger cannot affect the
-    result and is therefore only reported as a warning, both before an error and
-    instead of one, while an interruption of a callback function, such as a
-    KeyboardInterrupt, is raised as it is
-    """
-    if "exc" in exception and not isinstance(exception["exc"], Exception):
-        raise exception["exc"]
-    if "logger" in exception:
-        warning = RuntimeWarning(
-            f"OpenTrustRegion {name} called a logging function that raised "
-            f"{exception['logger']!r}, so log messages from that point on may be "
-            "missing."
-        )
-        warning.__cause__ = exception["logger"]
-        warnings.warn(warning, stacklevel=3)
-    if error:
-        raise RuntimeError(
-            f"OpenTrustRegion {name} produced error (code {error})."
-        ) from exception.get("exc")
-
-
-def call_library(function: Callable[..., Any], *args) -> Any:
-    """
-    this function calls into the library and marks it as innermost while it runs, in
-    the main thread it also replaces Python's default handler of SIGINT with
-    defer_interruption meanwhile, and raises an interruption that arrived after the
-    last callback function once the call has returned
-    """
-    outer = interruption_state.stack
-    install = (
-        threading.current_thread() is threading.main_thread()
-        and signal.getsignal(signal.SIGINT) is signal.default_int_handler
-    )
-    try:
-        if install:
-            signal.signal(signal.SIGINT, defer_interruption)
-        interruption_state.stack = outer + (False,)
-        result = function(*args)
-    finally:
-        # restore the handler while the library is still marked as innermost, since
-        # Python handles a pending signal while it switches the handler, which
-        # defer_interruption then records instead of raising it here
-        if install:
-            signal.signal(signal.SIGINT, signal.default_int_handler)
-        interruption_state.stack = outer
-    if interruption_state.pending is not None:
-        pending, interruption_state.pending = interruption_state.pending, None
-        raise pending
-    return result
-
-
 def solver(
     update_orbs: Callable[
         [np.ndarray, np.ndarray, np.ndarray],
@@ -1293,23 +1223,12 @@ def solver(
     settings: Optional[SolverSettings] = None,
     state: Optional[SolverState] = None,
 ):
-    # collector for exceptions raised inside the callback interfaces, adopted from a
-    # factory-produced callback when there is one so its exceptions are chained too
-    exception = adopt_collector(update_orbs, obj_func)
+    # call into the library, which keeps what the callback functions raise
+    library_call = LibraryCall("solver", n_param)
 
     # define interfaces for callback functions
-    obj_func_interface = obj_func_interface_type(
-        ObjFuncInterface(obj_func, n_param, exception)
-    )
-    update_orbs_interface = update_orbs_interface_type(
-        UpdateOrbsInterface(update_orbs, n_param, exception)
-    )
-
-    # hand the callback functions of the settings the number of parameters and the
-    # exception collector of the call, and those of the call it interrupts back when it
-    # returns
-    if settings is not None:
-        interrupted = settings.prepare_call(n_param, exception)
+    obj_func_interface = obj_func_interface_type(ObjFuncInterface(obj_func))
+    update_orbs_interface = update_orbs_interface_type(UpdateOrbsInterface(update_orbs))
 
     # define result and argument types
     lib.solver.restype = c_int
@@ -1322,20 +1241,14 @@ def solver(
     ]
 
     # call Fortran function
-    try:
-        error = call_library(
-            lib.solver,
-            update_orbs_interface,
-            obj_func_interface,
-            n_param,
-            byref(settings.settings_c) if settings is not None else None,
-            byref(state.state_c) if state is not None else None,
-        )
-    finally:
-        if settings is not None:
-            settings.restore_call(interrupted)
-
-    raise_on_failure(error, exception, "solver")
+    library_call.run(
+        lib.solver,
+        update_orbs_interface,
+        obj_func_interface,
+        n_param,
+        byref(settings.settings_c) if settings is not None else None,
+        byref(state.state_c) if state is not None else None,
+    )
 
 
 def stability_check(
@@ -1366,18 +1279,11 @@ def stability_check(
             f"float64 array of shape ({n_param},)."
         )
 
-    # collector for exceptions raised inside the callback interfaces, adopted from a
-    # factory-produced callback when there is one so its exceptions are chained too
-    exception = adopt_collector(hess_x)
+    # call into the library, which keeps what the callback functions raise
+    library_call = LibraryCall("stability check", n_param)
 
     # define interfaces for callback functions
-    hess_x_interface = hess_x_interface_type(HessXInterface(hess_x, n_param, exception))
-
-    # hand the callback functions of the settings the number of parameters and the
-    # exception collector of the call, and those of the call it interrupts back when it
-    # returns
-    if settings is not None:
-        interrupted = settings.prepare_call(n_param, exception)
+    hess_x_interface = hess_x_interface_type(HessXInterface(hess_x))
 
     # define result and argument types
     lib.stability_check.restype = c_int
@@ -1395,21 +1301,15 @@ def stability_check(
     stable = c_bool(False)
 
     # call Fortran function
-    try:
-        error = call_library(
-            lib.stability_check,
-            h_diag.ctypes.data_as(POINTER(c_real)),
-            hess_x_interface,
-            n_param,
-            byref(stable),
-            byref(settings.settings_c) if settings is not None else None,
-            byref(state.state_c) if state is not None else None,
-            kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
-        )
-    finally:
-        if settings is not None:
-            settings.restore_call(interrupted)
-
-    raise_on_failure(error, exception, "stability check")
+    library_call.run(
+        lib.stability_check,
+        h_diag.ctypes.data_as(POINTER(c_real)),
+        hess_x_interface,
+        n_param,
+        byref(stable),
+        byref(settings.settings_c) if settings is not None else None,
+        byref(state.state_c) if state is not None else None,
+        kappa.ctypes.data_as(POINTER(c_real)) if kappa is not None else None,
+    )
 
     return stable.value

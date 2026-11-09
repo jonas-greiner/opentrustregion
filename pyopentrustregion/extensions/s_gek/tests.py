@@ -120,19 +120,20 @@ class SGEKPyInterfaceTests(unittest.TestCase):
         """
         this function tests that the interface to the change of reference function
         reports an exception or an interruption raised by the function as an error and
-        keeps it, and that the function receives the new reference read-only
+        keeps it with the call whose library called it, and that the function receives
+        the new reference read-only
         """
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
         output = np.zeros(n_param)
         output_ptr = output.ctypes.data_as(POINTER(c_real))
         interfaces = {
-            "change of reference function": lambda func, exc: ChangeReferenceInterface(
-                func, n_param, exc
-            )(vector_ptr, 1, output_ptr, output_ptr, output_ptr, None),
+            "change of reference function": lambda func: ChangeReferenceInterface(func)(
+                vector_ptr, 1, output_ptr, output_ptr, output_ptr, None
+            ),
         }
         test_passed = check_callback_interfaces(
-            "test_callback_interfaces", interfaces, list(interfaces), vector
+            "test_callback_interfaces", interfaces, list(interfaces), vector, n_param
         )
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")

@@ -20,7 +20,7 @@ from pyopentrustregion.python_interface import (
     logger_interface_type,
     LoggerInterface,
     LoggerPyInterface,
-    raise_on_failure,
+    LibraryCall,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -191,11 +191,6 @@ def mo_factory(
     mo_coeff_ptr = mo_coeff_buffer.ctypes.data_as(POINTER(c_real))
     ao_overlap_ptr = ao_overlap.ctypes.data_as(POINTER(c_real))
 
-    # collector for exceptions raised inside the callback functions the object calls,
-    # which the solver adopts from the returned functions and the density QN factory
-    # shares
-    exception = {}
-
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check, without a density matrix evaluating function for an object only the
     # density QN factory builds on
@@ -205,12 +200,8 @@ def mo_factory(
             evaluate_dm, "evaluate_dm", ("dm", "fock", "get_response")
         )
         evaluate_dm_interface = evaluate_dm_interface_type(
-            EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell, exception)
+            EvaluateDMInterface(evaluate_dm, n_ao, n_particle, closed_shell)
         )
-
-    # hand the logging function of the settings the exception collector of the call
-    if settings is not None:
-        settings.prepare_call(None, exception)
 
     # define result and argument types
     lib.mo_factory.restype = c_int
@@ -235,7 +226,8 @@ def mo_factory(
     update_orbs_mo_funptr = update_orbs_interface_type()
     obj_func_mo_funptr = obj_func_interface_type()
     extension = c_void_p()
-    error = lib.mo_factory(
+    LibraryCall("MO factory", None).run(
+        lib.mo_factory,
         mo_coeff_ptr,
         ao_overlap_ptr,
         n_occ_c,
@@ -251,8 +243,6 @@ def mo_factory(
         None if settings is None else byref(settings.settings_c),
         orbsym_c,
     )
-
-    raise_on_failure(error, exception, "MO factory")
 
     # the owner of the MO object, which the solver settings keep alive, keeps alive
     # what the object calls and the MO coefficients it rotates and holds the dimensions
@@ -271,7 +261,6 @@ def mo_factory(
         },
         n_ao,
         n_particle,
-        exception,
         (
             None
             if in_place
@@ -282,6 +271,5 @@ def mo_factory(
         update_orbs_mo_funptr,
         obj_func_mo_funptr,
         solver_settings,
-        exception,
         owner.copy_back,
     )

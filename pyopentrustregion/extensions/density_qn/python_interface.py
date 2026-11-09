@@ -23,7 +23,7 @@ from pyopentrustregion.python_interface import (
     logger_interface_type,
     LoggerInterface,
     LoggerPyInterface,
-    raise_on_failure,
+    LibraryCall,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -40,7 +40,7 @@ from pyopentrustregion.extensions.common.python_interface import (
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Dict
+    from typing import Tuple, Callable, Optional
 
     DensityQNEvaluateDMType = Callable[
         [
@@ -117,7 +117,6 @@ class DensityQNEvaluateDMInterface(CallbackInterface):
     n_ao: int
     n_particle: int
     closed_shell: bool
-    exception: Dict[str, BaseException]
 
     def call(
         self,
@@ -182,11 +181,6 @@ def density_qn_factory(
         )
     n_ao, n_particle = orbitals.n_ao, orbitals.n_particle
 
-    # collector for exceptions raised inside the callback functions the object calls,
-    # shared with the orbital basis object, whose functions the density QN object
-    # calls, which the solver adopts from the returned functions
-    exception = orbitals.exception
-
     # define interfaces for callback functions, whose arguments the C interface cannot
     # check
     check_callback_arguments(
@@ -195,14 +189,8 @@ def density_qn_factory(
         ("dm", "fock", "v_coulomb", "v_exchange", "v_nonlinear"),
     )
     evaluate_dm_interface = density_qn_evaluate_dm_interface_type(
-        DensityQNEvaluateDMInterface(
-            evaluate_dm, n_ao, n_particle, n_particle == 1, exception
-        )
+        DensityQNEvaluateDMInterface(evaluate_dm, n_ao, n_particle, n_particle == 1)
     )
-
-    # hand the logging function of the settings the exception collector of the call
-    if settings is not None:
-        settings.prepare_call(None, exception)
 
     # define result and argument types
     lib.density_qn_factory.restype = c_int
@@ -220,7 +208,8 @@ def density_qn_factory(
     update_orbs_density_qn_funptr = update_orbs_interface_type()
     obj_func_density_qn_funptr = obj_func_interface_type()
     extension = c_void_p()
-    error = lib.density_qn_factory(
+    LibraryCall("density QN factory", None).run(
+        lib.density_qn_factory,
         evaluate_dm_interface,
         byref(update_orbs_density_qn_funptr),
         byref(obj_func_density_qn_funptr),
@@ -229,8 +218,6 @@ def density_qn_factory(
         byref(solver_state.state_c),
         None if settings is None else byref(settings.settings_c),
     )
-
-    raise_on_failure(error, exception, "density QN factory")
 
     # the owner of the density QN object, which the solver settings keep alive, keeps
     # alive what the object calls and the owner of the orbital basis object, which the
@@ -251,6 +238,5 @@ def density_qn_factory(
         update_orbs_density_qn_funptr,
         obj_func_density_qn_funptr,
         solver_settings,
-        exception,
         orbitals.copy_back,
     )

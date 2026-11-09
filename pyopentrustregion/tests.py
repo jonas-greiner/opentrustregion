@@ -49,16 +49,15 @@ from pyopentrustregion.python_interface import (
     c_real,
     ext,
     _load_lib,
-    interruption_state,
+    running_call,
+    calling_call,
     defer_interruption,
+    LibraryCall,
     ObjFuncInterface,
     HessXInterface,
     UpdateOrbsInterface,
     c_buffer,
     write_back,
-    raise_on_failure,
-    raise_callback_error,
-    call_library,
     check_struct_sizes,
     hess_x_interface_type,
     precond_interface_type,
@@ -259,14 +258,30 @@ def reference_state(name, field_type):
     return value
 
 
-def check_callback_interfaces(test_name, interfaces, read_only, input_array):
+def call_from_library(library_call, interface, *args):
+    """
+    this function calls an interface to a Python callback function as the library of
+    a call does, with the call marked as the one whose library runs innermost
+    """
+    outer = running_call.get()
+    running_call.set(library_call)
+    try:
+        return interface(*args)
+    finally:
+        running_call.set(outer)
+
+
+def check_callback_interfaces(
+    test_name, interfaces, read_only, input_array, n_param=None
+):
     """
     this function checks that interfaces to Python callback functions, given by name
-    as functions calling the interface with a callback function and an exception
-    collector, report an exception or an interruption raised by the callback function
-    as an error and keep it, and that those named in read_only hand the callback
-    function their input, the given array, read-only as its first argument, so that
-    writing into it is reported as an error and leaves the input unchanged
+    as functions calling the interface with a callback function, report an exception
+    or an interruption raised by the callback function as an error and keep it with
+    the call whose library called them, which has the given number of parameters, and
+    that those named in read_only hand the callback function their input, the given
+    array, read-only as its first argument, so that writing into it is reported as an
+    error and leaves the input unchanged
     """
     test_passed = True
 
@@ -278,17 +293,22 @@ def check_callback_interfaces(test_name, interfaces, read_only, input_array):
 
     for error_type in (ValueError, KeyboardInterrupt):
         for name, call in interfaces.items():
-            exception = {}
-            if call(raising(error_type), exception) != 1:
+            library_call = LibraryCall(test_name, n_param)
+            if call_from_library(library_call, call, raising(error_type)) != 1:
                 print(
                     f" {test_name} failed: {error_type.__name__} raised by {name} not "
                     "reported as error."
                 )
                 test_passed = False
-            if not isinstance(exception.get("exc"), error_type):
+            kept = (
+                library_call.failure
+                if issubclass(error_type, Exception)
+                else library_call.interruption
+            )
+            if not isinstance(kept, error_type):
                 print(
                     f" {test_name} failed: {error_type.__name__} raised by {name} not "
-                    "kept."
+                    "kept with the call."
                 )
                 test_passed = False
 
@@ -297,9 +317,9 @@ def check_callback_interfaces(test_name, interfaces, read_only, input_array):
 
     original = input_array.copy()
     for name in read_only:
-        exception = {}
-        error = interfaces[name](writing_into_input, exception)
-        if error != 1 or not isinstance(exception.get("exc"), ValueError):
+        library_call = LibraryCall(test_name, n_param)
+        error = call_from_library(library_call, interfaces[name], writing_into_input)
+        if error != 1 or not isinstance(library_call.failure, ValueError):
             print(
                 f" {test_name} failed: Writing into the input of the {name} not "
                 "reported as error."
@@ -516,29 +536,14 @@ class PyInterfaceUnitTests(unittest.TestCase):
             )
 
         # call solver python interface with optional arguments, the result of the mock
-        # is cleared before and read right after the call, keep the C settings to check
-        # that the calls leave them unchanged, and hand the settings the number of
-        # parameters and the exception collector of a call this one interrupts, which
-        # the call has to hand back when it returns
+        # is cleared before and read right after the call, and keep the C settings to
+        # check that the calls leave them unchanged
         c_settings = bytes(settings.settings_c)
         interface_flag = c_bool.in_dll(lib, "test_solver_interface")
         interface_flag.value = False
         state = SolverState()
-        interrupted_exception: dict = {}
-        settings.prepare_call(n_param + 1, interrupted_exception)
         solver(mock_update_orbs, mock_obj_func, n_param, settings, state=state)
         interface_passed = interface_flag.value
-        call_restored = (
-            settings._n_param == n_param + 1
-            and settings._exception is interrupted_exception
-            and settings.stability_settings._n_param == n_param + 1
-            and settings.stability_settings._exception is interrupted_exception
-        )
-        if not call_restored:
-            print(
-                " test_solver_py_interface failed: Call data of the interrupted call "
-                "not restored."
-            )
 
         # check that the state is passed, which the mock fills with the reference
         # values
@@ -647,14 +652,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "was not reported."
             )
 
-        # the solver marks the library as innermost while it runs, around the callback
-        # function marked within it, and raises an interruption of a callback function
-        # as it is
+        # the solver calls the library through a call of its own, which raises an
+        # interruption of a callback function as it is
         interruption = KeyboardInterrupt()
-        marks = []
 
         def interrupted_obj_func(kappa):
-            marks.append(interruption_state.stack)
             raise interruption
 
         raised = None
@@ -662,11 +664,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
             solver(mock_update_orbs, interrupted_obj_func, n_param, settings)
         except KeyboardInterrupt as e:
             raised = e
-        interruption_raised = raised is interruption and marks == [(False, True)]
+        interruption_raised = raised is interruption
         if not interruption_raised:
             print(
-                " test_solver_py_interface failed: Library not marked as innermost or "
-                "interruption of callback function not raised."
+                " test_solver_py_interface failed: Interruption of callback function "
+                "not raised."
             )
 
         # call solver python interface without settings, which have to be passed as
@@ -685,7 +687,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         self.assertTrue(
             interface_passed
-            and call_restored
             and state_passed
             and test_logger
             and callbacks_called
@@ -736,16 +737,12 @@ class PyInterfaceUnitTests(unittest.TestCase):
         kappa = np.zeros(n_param, dtype=np.float64)
 
         # call stability check python interface with optional arguments, the result of
-        # the mock is cleared before and read right after the call, check that the
-        # call leaves the C settings unchanged, and hand the settings the number of
-        # parameters and the exception collector of a call this one interrupts, which
-        # the call has to hand back when it returns
+        # the mock is cleared before and read right after the call, and check that the
+        # call leaves the C settings unchanged
         interface_flag = c_bool.in_dll(lib, "test_stability_check_interface")
         interface_flag.value = False
         state = StabilityState()
         c_settings = bytes(settings.settings_c)
-        interrupted_exception: dict = {}
-        settings.prepare_call(n_param + 1, interrupted_exception)
         stable = stability_check(
             h_diag, mock_hess_x, n_param, settings, kappa=kappa, state=state
         )
@@ -755,15 +752,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
             print(
                 " test_stability_check_py_interface failed: C settings changed by the "
                 "call."
-            )
-        call_restored = (
-            settings._n_param == n_param + 1
-            and settings._exception is interrupted_exception
-        )
-        if not call_restored:
-            print(
-                " test_stability_check_py_interface failed: Call data of the "
-                "interrupted call not restored."
             )
 
         # check that the state is passed, which the mock fills with the reference
@@ -851,14 +839,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "Hessian linear transformation was not reported."
             )
 
-        # the stability check marks the library as innermost while it runs, around the
-        # callback function marked within it, and raises an interruption of a callback
-        # function as it is
+        # the stability check calls the library through a call of its own, which
+        # raises an interruption of a callback function as it is
         interruption = KeyboardInterrupt()
-        marks = []
 
         def interrupted_hess_x(x, hess_x):
-            marks.append(interruption_state.stack)
             raise interruption
 
         raised = None
@@ -866,11 +851,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
             stability_check(h_diag, interrupted_hess_x, n_param, settings)
         except KeyboardInterrupt as e:
             raised = e
-        interruption_raised = raised is interruption and marks == [(False, True)]
+        interruption_raised = raised is interruption
         if not interruption_raised:
             print(
-                " test_stability_check_py_interface failed: Library not marked as "
-                "innermost or interruption of callback function not raised."
+                " test_stability_check_py_interface failed: Interruption of callback "
+                "function not raised."
             )
 
         # a Hessian diagonal given as a strided view, of another type or as a list is
@@ -931,7 +916,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
         self.assertTrue(
             interface_passed
             and c_settings_kept
-            and call_restored
             and state_passed
             and test_logger
             and stable
@@ -1091,9 +1075,9 @@ class PyInterfaceUnitTests(unittest.TestCase):
     def _callbacks_wired(test_name, settings_class):
         """
         this function checks that the C callback functions of a settings object report
-        an exception raised by the callable assigned to a callback function during a
-        call as an error and keep it with the exceptions of the call, also for the
-        nested stability check settings
+        an exception raised by the callable assigned to a callback function as an error
+        and keep it with the call whose library called them, also for the nested
+        stability check settings
         """
         test_passed = True
         n_param = 2
@@ -1126,20 +1110,18 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 failures[prefix + name] = ValueError(prefix + name)
                 setattr(some_settings, name, raising(failures[prefix + name]))
 
-        # hand the settings the exception collector of a call and call the C callback
-        # function of each callback function
-        exception = {}
-        settings.prepare_call(n_param, exception)
+        # call the C callback function of each callback function as the library of a
+        # call does
         for some_settings, prefix in all_settings:
             for name in arguments.keys() & some_settings.callback_fields.keys():
-                exception.clear()
+                library_call = LibraryCall("solver", n_param)
                 interface = cast(
                     c_void_p(getattr(some_settings.settings_c, name)),
                     some_settings.callback_fields[name][1],
                 )
-                if interface(*arguments[name], None) != 1 or (
-                    exception.get("exc") is not failures[prefix + name]
-                ):
+                if call_from_library(
+                    library_call, interface, *arguments[name], None
+                ) != 1 or (library_call.failure is not failures[prefix + name]):
                     print(
                         f" {test_name} failed: Exception raised by {prefix}{name} not "
                         "reported as error or not kept."
@@ -1216,18 +1198,18 @@ class PyInterfaceUnitTests(unittest.TestCase):
     def test_defer_interruption(self):
         """
         this function tests that the handler of SIGINT only records an interruption
-        while the library runs and raises it otherwise
+        with the call whose library runs innermost and raises it otherwise
         """
         test_passed = True
+        library_call = LibraryCall("solver", 1)
         try:
-            for stack, deferred, case in [
-                ((False,), True, "while the library is innermost"),
-                ((False, True, False), True, "while a nested call is innermost"),
-                ((False, True), False, "while a callback function is innermost"),
-                ((), False, "outside a call into the library"),
+            for innermost, case in [
+                (library_call, "while the library runs"),
+                (None, "while a callback function or no call runs"),
             ]:
-                interruption_state.stack = stack
-                interruption_state.pending = None
+                running_call.set(innermost)
+                library_call.interruption = None
+                deferred = innermost is not None
                 raised = False
                 try:
                     defer_interruption(signal.SIGINT, None)
@@ -1239,32 +1221,243 @@ class PyInterfaceUnitTests(unittest.TestCase):
                         f"{'raised' if raised else 'not raised'} {case}."
                     )
                     test_passed = False
-                if (
-                    isinstance(interruption_state.pending, KeyboardInterrupt)
-                    != deferred
-                ):
+                if isinstance(library_call.interruption, KeyboardInterrupt) != deferred:
                     print(
                         " test_defer_interruption failed: Interruption "
                         f"{'not recorded' if deferred else 'recorded'} {case}."
                     )
                     test_passed = False
         finally:
-            interruption_state.stack = ()
-            interruption_state.pending = None
+            running_call.set(None)
 
         self.assertTrue(test_passed, "test_defer_interruption failed")
         print(" test_defer_interruption PASSED")
+
+    def test_library_call(self):
+        """
+        this function tests that a call into the library passes on the arguments and
+        marks the library as innermost, that it replaces Python's default handler of
+        SIGINT in the main thread only and restores it afterwards, also when the
+        library raises, that it raises an error with its code and the exception of a
+        failed callback function as its cause, reports a failed logging function as a
+        warning with its exception as the cause both with and without an error and
+        nothing without either, that it raises an interruption as it is, also one that
+        arrives while the handler is restored, and that it forgets what it kept
+        """
+        test_passed = True
+        library_call = LibraryCall("solver", 1)
+        seen = []
+
+        def library(*args):
+            seen.append((args, running_call.get(), signal.getsignal(signal.SIGINT)))
+            return 0
+
+        def check_restored(case):
+            check_passed = True
+            if signal.getsignal(signal.SIGINT) is not signal.default_int_handler:
+                print(f" test_library_call failed: Handler not restored {case}.")
+                check_passed = False
+            if running_call.get() is not None:
+                print(f" test_library_call failed: Mark not restored {case}.")
+                check_passed = False
+            if (
+                library_call.failure is not None
+                or library_call.logger_failure is not None
+                or library_call.interruption is not None
+            ):
+                print(f" test_library_call failed: Failures kept {case}.")
+                check_passed = False
+            return check_passed
+
+        original_handler = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            # the outermost call from the main thread defers interruptions
+            library_call.run(library, 1, "a")
+            if seen != [((1, "a"), library_call, defer_interruption)]:
+                print(
+                    " test_library_call failed: Outermost call from the main thread "
+                    "not made correctly."
+                )
+                test_passed = False
+            test_passed &= check_restored("after the outermost call")
+
+            # a nested call keeps the handler, marks its own library as innermost and
+            # restores the mark of the outer one
+            nested_call = LibraryCall("stability check", 1)
+            restored = []
+
+            def nesting_library():
+                nested_call.run(library)
+                restored.append(running_call.get())
+                return 0
+
+            seen.clear()
+            library_call.run(nesting_library)
+            if seen != [((), nested_call, defer_interruption)] or restored != [
+                library_call
+            ]:
+                print(" test_library_call failed: Nested call not made correctly.")
+                test_passed = False
+            test_passed &= check_restored("after a nested call")
+
+            # a call from another thread neither replaces the handler nor marks the
+            # main thread
+            seen.clear()
+            thread = threading.Thread(target=library_call.run, args=(library,))
+            thread.start()
+            thread.join()
+            if seen != [((), library_call, signal.default_int_handler)]:
+                print(
+                    " test_library_call failed: Call from another thread not made "
+                    "correctly."
+                )
+                test_passed = False
+            test_passed &= check_restored("after a call from another thread")
+
+            # a call raises the exception of the library and restores the handler
+            def failing_library():
+                raise ValueError("library failure")
+
+            try:
+                library_call.run(failing_library)
+                print(" test_library_call failed: Exception of library not raised.")
+                test_passed = False
+            except ValueError:
+                pass
+            test_passed &= check_restored("after a call that raises")
+
+            # an error is raised with its code and the exception of a failed callback
+            # function as its cause, never the one of a failed logging function, which
+            # is reported as a warning with its exception as the cause
+            callback_failure = ValueError("callback function failure")
+            logger_failure = ValueError("logging failure")
+            for error, failure, failed_logger, case in [
+                (7, None, None, "for an error alone"),
+                (7, callback_failure, None, "for an error of a failed callback"),
+                (7, None, logger_failure, "for an error and a failed logger"),
+                (0, None, logger_failure, "for a failed logger alone"),
+                (0, None, None, "without failure"),
+            ]:
+
+                def failing_callbacks():
+                    library_call.failure = failure
+                    library_call.logger_failure = failed_logger
+                    return error
+
+                raised = None
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always")
+                    try:
+                        library_call.run(failing_callbacks)
+                    except RuntimeError as e:
+                        raised = e
+                if error and (raised is None or "(code 7)" not in str(raised)):
+                    print(
+                        " test_library_call failed: Error not raised with its code "
+                        f"{case}."
+                    )
+                    test_passed = False
+                if raised is not None and raised.__cause__ is not failure:
+                    print(
+                        f" test_library_call failed: Error raised with wrong cause "
+                        f"{case}."
+                    )
+                    test_passed = False
+                if not error and raised is not None:
+                    print(f" test_library_call failed: Raised without error {case}.")
+                    test_passed = False
+                warned_causes = [
+                    w.message.__cause__
+                    for w in caught
+                    if issubclass(w.category, RuntimeWarning)
+                ]
+                if failed_logger is not None and warned_causes != [failed_logger]:
+                    print(
+                        " test_library_call failed: Failed logging function not "
+                        f"reported as a warning {case}."
+                    )
+                    test_passed = False
+                if failed_logger is None and caught:
+                    print(
+                        " test_library_call failed: Warned without failed logger "
+                        f"{case}."
+                    )
+                    test_passed = False
+                test_passed &= check_restored(case)
+
+            # an interruption is raised as it is, rather than as an error of the library
+            interruption = KeyboardInterrupt()
+
+            def interrupted_library():
+                library_call.interruption = interruption
+                return 7
+
+            raised = None
+            try:
+                library_call.run(interrupted_library)
+            except KeyboardInterrupt as e:
+                raised = e
+            if raised is not interruption:
+                print(" test_library_call failed: Interruption not raised as it is.")
+                test_passed = False
+            test_passed &= check_restored("after an interruption")
+
+            # an interruption that arrives while the handler is restored, which Python
+            # handles while it switches the handler, is raised when the call returns,
+            # after the handler is restored
+            real_signal = signal.signal
+
+            def signal_handling_pending(signum, handler):
+                if handler is signal.default_int_handler:
+                    signal.getsignal(signum)(signum, None)
+                return real_signal(signum, handler)
+
+            raised = None
+            with patch.object(signal, "signal", signal_handling_pending):
+                try:
+                    library_call.run(library)
+                except KeyboardInterrupt as e:
+                    raised = e
+            if raised is None:
+                print(
+                    " test_library_call failed: Interruption that arrives while the "
+                    "handler is restored not raised when the call returns."
+                )
+                test_passed = False
+            test_passed &= check_restored("after an interruption while it is restored")
+
+            # another handler is kept
+            def custom_handler(signum, frame):
+                pass
+
+            signal.signal(signal.SIGINT, custom_handler)
+            seen.clear()
+            library_call.run(library)
+            if seen[0][2] is not custom_handler:
+                print(" test_library_call failed: Other handler replaced.")
+                test_passed = False
+            if signal.getsignal(signal.SIGINT) is not custom_handler:
+                print(" test_library_call failed: Other handler not kept.")
+                test_passed = False
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
+            running_call.set(None)
+
+        self.assertTrue(test_passed, "test_library_call failed")
+        print(" test_library_call PASSED")
 
     def test_callback_interfaces(self):
         """
         this function tests that the interfaces to the Python callback functions,
         those of the settings reached through the C callback functions the settings
-        build, report an exception or an interruption as an error and keep it, also
-        one of the interface itself and a call before the number of parameters is
-        known, that they hand the callback functions their inputs read-only and mark
-        a callback function as innermost while it runs, that the convergence check
-        interfaces pass on the result and that the logging interface keeps its first
-        exception and records an interruption
+        build, report an exception or an interruption as an error and keep it with the
+        call whose library called them, also one of the interface itself and one
+        called outside a call into the library, also for an interface called by two
+        calls nested in one another, that they hand the callback functions their inputs
+        read-only and mark a callback function as innermost while it runs, that the
+        convergence check interfaces pass on the result, that the logging interface
+        keeps its first exception and an interruption and that the next callback
+        functions report a kept interruption without being called
         """
         test_passed = True
         n_param = 2
@@ -1274,66 +1467,58 @@ class PyInterfaceUnitTests(unittest.TestCase):
         output_ptr = output.ctypes.data_as(POINTER(c_real))
 
         # settings whose C callback functions are called below, kept alive until then,
-        # since these belong to the settings and a garbage collection frees them
-        # together with settings that nothing else refers to
+        # since these belong to the settings
         called_settings = []
 
-        def settings_callback(settings, name, func, interface_type, exception):
+        def settings_callback(settings, name, func, interface_type):
             """
-            this function assigns a callable to a callback function of settings,
-            hands them the number of parameters and the exception collector of a call
-            and returns their C callback function
+            this function assigns a callable to a callback function of settings and
+            returns their C callback function
             """
             setattr(settings, name, func)
-            settings.prepare_call(n_param, exception)
             called_settings.append(settings)
             return interface_type(getattr(settings.settings_c, name))
 
-        # every interface, called with a callback function and an exception collector,
-        # with the vector as its input and the output as its output
+        # every interface, called with a callback function, with the vector as its
+        # input and the output as its output
         interfaces = {
-            "objective function": lambda func, exc: ObjFuncInterface(
-                func, n_param, exc
-            )(vector_ptr, pointer(c_real()), None),
-            "Hessian linear transformation": lambda func, exc: HessXInterface(
-                func, n_param, exc
-            )(vector_ptr, output_ptr, None),
-            "orbital update": lambda func, exc: UpdateOrbsInterface(func, n_param, exc)(
+            "objective function": lambda func: ObjFuncInterface(func)(
+                vector_ptr, pointer(c_real()), None
+            ),
+            "Hessian linear transformation": lambda func: HessXInterface(func)(
+                vector_ptr, output_ptr, None
+            ),
+            "orbital update": lambda func: UpdateOrbsInterface(func)(
                 vector_ptr, pointer(c_real()), output_ptr, output_ptr, None, None
             ),
-            "preconditioner": lambda func, exc: settings_callback(
-                SolverSettings(), "precond", func, precond_interface_type, exc
+            "preconditioner": lambda func: settings_callback(
+                SolverSettings(), "precond", func, precond_interface_type
             )(vector_ptr, pointer(c_real(1.0)), output_ptr, None),
-            "positive-definite preconditioner": lambda func, exc: settings_callback(
-                SolverSettings(), "precond_pd", func, precond_pd_interface_type, exc
+            "positive-definite preconditioner": lambda func: settings_callback(
+                SolverSettings(), "precond_pd", func, precond_pd_interface_type
             )(vector_ptr, output_ptr, None),
-            "projection": lambda func, exc: settings_callback(
-                SolverSettings(), "project", func, project_interface_type, exc
+            "projection": lambda func: settings_callback(
+                SolverSettings(), "project", func, project_interface_type
             )(vector_ptr, None),
-            "extra trial vector function": lambda func, exc: settings_callback(
+            "extra trial vector function": lambda func: settings_callback(
                 SolverSettings(),
                 "get_extra_trial_vectors",
                 func,
                 get_extra_trial_vectors_interface_type,
-                exc,
             )(output_ptr, 1, None),
-            "convergence check": lambda func, exc: settings_callback(
-                SolverSettings(), "conv_check", func, conv_check_interface_type, exc
+            "convergence check": lambda func: settings_callback(
+                SolverSettings(), "conv_check", func, conv_check_interface_type
             )(pointer(c_bool()), None),
             "Hessian linear transformation of the stability check": (
-                lambda func, exc: settings_callback(
-                    SolverSettings(),
-                    "stability_hess_x",
-                    func,
-                    hess_x_interface_type,
-                    exc,
+                lambda func: settings_callback(
+                    SolverSettings(), "stability_hess_x", func, hess_x_interface_type
                 )(vector_ptr, output_ptr, None)
             ),
         }
 
         # every interface reports an exception or an interruption as an error and keeps
-        # it, and those whose callback function receives an input hand it over
-        # read-only
+        # it with the call, and those whose callback function receives an input hand it
+        # over read-only
         test_passed &= check_callback_interfaces(
             "test_callback_interfaces",
             interfaces,
@@ -1346,16 +1531,60 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "Hessian linear transformation of the stability check",
             ],
             vector,
+            n_param,
         )
 
-        # a callback function of settings called before the number of parameters of a
-        # call is known reports an error
+        # a callback function of settings called outside a call into the library,
+        # which leaves the number of parameters unknown, reports an error
         settings = SolverSettings()
         settings.project = lambda vector: None
         if project_interface_type(settings.settings_c.project)(vector_ptr, None) != 1:
             print(
-                " test_callback_interfaces failed: Callback function called before "
-                "the number of parameters is known does not report an error."
+                " test_callback_interfaces failed: Callback function called outside a "
+                "call into the library does not report an error."
+            )
+            test_passed = False
+
+        # an interface called by two calls nested in one another keeps what its
+        # callback function raises with the call that called it, and the callback
+        # function of the outer call runs with that call as the one it keeps what it
+        # raises with again once the nested call has returned
+        outer_call = LibraryCall("solver", n_param)
+        nested_call = LibraryCall("stability check", n_param)
+        outer_failure = ValueError("outer failure")
+        nested_failure = ValueError("nested failure")
+        callers = []
+
+        def nesting_precond(residual, mu, precond_residual):
+            if mu == 1.0:
+                call_from_library(
+                    nested_call,
+                    precond,
+                    vector_ptr,
+                    pointer(c_real(2.0)),
+                    output_ptr,
+                    None,
+                )
+                callers.append(calling_call.get())
+                raise outer_failure
+            raise nested_failure
+
+        precond = settings_callback(
+            SolverSettings(), "precond", nesting_precond, precond_interface_type
+        )
+        error = call_from_library(
+            outer_call, precond, vector_ptr, pointer(c_real(1.0)), output_ptr, None
+        )
+        if (
+            error != 1
+            or outer_call.failure is not outer_failure
+            or nested_call.failure is not nested_failure
+            or callers != [outer_call]
+            or calling_call.get() is not None
+        ):
+            print(
+                " test_callback_interfaces failed: Exceptions of an interface called "
+                "by nested calls not kept with the calls that called it."
             )
             test_passed = False
 
@@ -1371,18 +1600,25 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "with Hessian linear transformation that is not callable",
             ),
         ]:
-            exception = {}
+            library_call = LibraryCall("solver", n_param)
             hess_x_funptr = pointer(hess_x_interface_type())
-            error = UpdateOrbsInterface(
-                lambda kappa, grad, h_diag: (0.0, returned), n_param, exception
-            ).call(vector_ptr, pointer(c_real()), vector_ptr, vector_ptr, hess_x_funptr)
+            error = call_from_library(
+                library_call,
+                UpdateOrbsInterface(lambda kappa, grad, h_diag: (0.0, returned)),
+                vector_ptr,
+                pointer(c_real()),
+                vector_ptr,
+                vector_ptr,
+                hess_x_funptr,
+                None,
+            )
             if error != expected_error:
                 print(
                     f" test_callback_interfaces failed: Error reported wrong for "
                     f"orbital update {case}."
                 )
                 test_passed = False
-            if expected_error and not isinstance(exception.get("exc"), TypeError):
+            if expected_error and not isinstance(library_call.failure, TypeError):
                 print(
                     f" test_callback_interfaces failed: Exception not kept for "
                     f"orbital update {case}."
@@ -1396,18 +1632,26 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 test_passed = False
 
         # the Hessian linear transformation an orbital update returns reports an
-        # exception it raises as an error and keeps it with those of the orbital update
+        # exception it raises as an error and keeps it with the call of the orbital
+        # update
         def raising_hess_x(x, hess_x):
             raise ValueError("Hessian linear transformation failure")
 
-        exception = {}
+        library_call = LibraryCall("solver", n_param)
         hess_x_funptr = pointer(hess_x_interface_type())
-        UpdateOrbsInterface(
-            lambda kappa, grad, h_diag: (0.0, raising_hess_x), n_param, exception
-        ).call(vector_ptr, pointer(c_real()), vector_ptr, vector_ptr, hess_x_funptr)
-        if hess_x_funptr[0](vector_ptr, output_ptr, None) != 1 or not isinstance(
-            exception.get("exc"), ValueError
-        ):
+        call_from_library(
+            library_call,
+            UpdateOrbsInterface(lambda kappa, grad, h_diag: (0.0, raising_hess_x)),
+            vector_ptr,
+            pointer(c_real()),
+            vector_ptr,
+            vector_ptr,
+            hess_x_funptr,
+            None,
+        )
+        if call_from_library(
+            library_call, hess_x_funptr[0], vector_ptr, output_ptr, None
+        ) != 1 or not isinstance(library_call.failure, ValueError):
             print(
                 " test_callback_interfaces failed: Exception raised by Hessian linear "
                 "transformation returned by orbital update not reported."
@@ -1418,9 +1662,14 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # converged
         converged = c_bool(True)
         conv_check = settings_callback(
-            SolverSettings(), "conv_check", lambda: False, conv_check_interface_type, {}
+            SolverSettings(), "conv_check", lambda: False, conv_check_interface_type
         )
-        if conv_check(pointer(converged), None) != 0:
+        if (
+            call_from_library(
+                LibraryCall("solver", n_param), conv_check, pointer(converged), None
+            )
+            != 0
+        ):
             print(
                 " test_callback_interfaces failed: Error reported for convergence "
                 "check."
@@ -1439,13 +1688,13 @@ class PyInterfaceUnitTests(unittest.TestCase):
         def failing_logger(message):
             raise next(failures)
 
-        exception = {}
+        library_call = LibraryCall("solver", n_param)
         logger = settings_callback(
-            SolverSettings(), "logger", failing_logger, logger_interface_type, exception
+            SolverSettings(), "logger", failing_logger, logger_interface_type
         )
-        logger(b"test", None)
-        logger(b"test", None)
-        if str(exception.get("logger")) != "first":
+        call_from_library(library_call, logger, b"test", None)
+        call_from_library(library_call, logger, b"test", None)
+        if str(library_call.logger_failure) != "first":
             print(
                 " test_callback_interfaces failed: First exception raised by "
                 "logging function not kept."
@@ -1454,88 +1703,99 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         # an exception raised by an interface itself, as for a pointer it can not
         # write the result through, is reported as an error and kept
-        exception = {}
-        if ObjFuncInterface(lambda kappa: 0.0, n_param, exception)(
-            vector_ptr, None, None
-        ) != 1 or not isinstance(exception.get("exc"), TypeError):
+        library_call = LibraryCall("solver", n_param)
+        if call_from_library(
+            library_call, ObjFuncInterface(lambda kappa: 0.0), vector_ptr, None, None
+        ) != 1 or not isinstance(library_call.failure, TypeError):
             print(
                 " test_callback_interfaces failed: Exception raised by interface not "
                 "reported as error."
             )
             test_passed = False
 
-        # an interface marks a callback function as innermost while it runs and
+        # an interface marks a callback function as innermost while it runs, with the
+        # call whose library called it as the one it keeps what it raises with, and
         # unmarks it afterwards, also when it raises
         try:
             for error_type, case in [(None, "returns"), (ValueError, "raises")]:
-                interruption_state.stack = (False,)
+                library_call = LibraryCall("solver", n_param)
+                running_call.set(library_call)
                 marks = []
 
                 def marking(kappa):
-                    marks.append(interruption_state.stack)
+                    marks.append((running_call.get(), calling_call.get()))
                     if error_type is not None:
                         raise error_type("objective function failure")
                     return 0.0
 
-                ObjFuncInterface(marking, n_param, {})(
-                    vector_ptr, pointer(c_real()), None
-                )
-                if marks != [(False, True)] or interruption_state.stack != (False,):
+                ObjFuncInterface(marking)(vector_ptr, pointer(c_real()), None)
+                if (
+                    marks != [(None, library_call)]
+                    or running_call.get() is not library_call
+                    or calling_call.get() is not None
+                ):
                     print(
                         " test_callback_interfaces failed: Callback function not "
                         f"marked as innermost while it runs when it {case}."
                     )
                     test_passed = False
         finally:
-            interruption_state.stack = ()
+            running_call.set(None)
 
-        # the logging interface records an interruption, which the next callback
-        # function with an error code reports without being called
-        try:
-            interruption = KeyboardInterrupt()
+        # the logging interface keeps an interruption with the call, which the next
+        # callback functions report without being called, the logging function without
+        # an error code and the others as an error
+        interruption = KeyboardInterrupt()
 
-            def interrupted_logger(message):
-                raise interruption
+        def interrupted_logger(message):
+            raise interruption
 
-            exception = {}
+        library_call = LibraryCall("solver", n_param)
+        call_from_library(
+            library_call,
             settings_callback(
-                SolverSettings(),
-                "logger",
-                interrupted_logger,
-                logger_interface_type,
-                exception,
-            )(b"test", None)
-            settings_callback(
-                SolverSettings(),
-                "logger",
-                lambda message: None,
-                logger_interface_type,
-                exception,
-            )(b"test", None)
-            if interruption_state.pending is not interruption or "logger" in exception:
-                print(
-                    " test_callback_interfaces failed: Interruption of logging "
-                    "function not recorded."
-                )
-                test_passed = False
-            obj_func_calls = []
-            error = ObjFuncInterface(obj_func_calls.append, n_param, exception)(
-                vector_ptr, pointer(c_real()), None
+                SolverSettings(), "logger", interrupted_logger, logger_interface_type
+            ),
+            b"test",
+            None,
+        )
+        if (
+            library_call.interruption is not interruption
+            or library_call.logger_failure is not None
+        ):
+            print(
+                " test_callback_interfaces failed: Interruption of logging function "
+                "not kept."
             )
-            if error != 1 or exception.get("exc") is not interruption or obj_func_calls:
-                print(
-                    " test_callback_interfaces failed: Recorded interruption not "
-                    "reported as error by next callback function."
-                )
-                test_passed = False
-            if interruption_state.pending is not None:
-                print(
-                    " test_callback_interfaces failed: Recorded interruption kept "
-                    "after it was reported."
-                )
-                test_passed = False
-        finally:
-            interruption_state.pending = None
+            test_passed = False
+        calls = []
+        logger_result = call_from_library(
+            library_call,
+            settings_callback(
+                SolverSettings(), "logger", calls.append, logger_interface_type
+            ),
+            b"test",
+            None,
+        )
+        error = call_from_library(
+            library_call,
+            ObjFuncInterface(calls.append),
+            vector_ptr,
+            pointer(c_real()),
+            None,
+        )
+        if (
+            logger_result is not None
+            or error != 1
+            or calls
+            or library_call.interruption is not interruption
+            or library_call.failure is not None
+        ):
+            print(
+                " test_callback_interfaces failed: Kept interruption not reported by "
+                "next callback functions."
+            )
+            test_passed = False
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")
         print(" test_callback_interfaces PASSED")
@@ -1614,267 +1874,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
         self.assertTrue(test_passed, "test_write_back failed")
         print(" test_write_back PASSED")
-
-    def test_raise_on_failure(self):
-        """
-        this function tests that an error returned by the library is raised with its
-        code and the exception of a failed callback function as its cause, that a
-        failed logging function is reported as a warning with its exception as the
-        cause both with and without an error, that nothing is reported without either
-        and that an interruption of a callback function is raised as it is
-        """
-        test_passed = True
-        callback_failure = ValueError("callback function failure")
-        logger_failure = ValueError("logging failure")
-
-        for error, exception, case in [
-            (7, {}, "for an error alone"),
-            (
-                7,
-                {"exc": callback_failure},
-                "for an error of a failed callback function",
-            ),
-            (7, {"logger": logger_failure}, "for an error and a failed logger"),
-            (0, {"logger": logger_failure}, "for a failed logger alone"),
-            (0, {}, "without failure"),
-        ]:
-            raised = None
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                try:
-                    raise_on_failure(error, exception, "solver")
-                except RuntimeError as e:
-                    raised = e
-
-            # an error is raised with its code and the exception of a failed callback
-            # function as its cause, never the one of a failed logging function
-            if error and (raised is None or "(code 7)" not in str(raised)):
-                print(
-                    f" test_raise_on_failure failed: Error not raised with its code "
-                    f"{case}."
-                )
-                test_passed = False
-            if raised is not None and raised.__cause__ is not exception.get("exc"):
-                print(
-                    f" test_raise_on_failure failed: Error raised with wrong cause "
-                    f"{case}."
-                )
-                test_passed = False
-            if not error and raised is not None:
-                print(f" test_raise_on_failure failed: Raised without error {case}.")
-                test_passed = False
-
-            # a failed logging function is reported as a warning with its exception as
-            # the cause and nothing else is warned about
-            warned_causes = [
-                w.message.__cause__
-                for w in caught
-                if issubclass(w.category, RuntimeWarning)
-            ]
-            if "logger" in exception and warned_causes != [logger_failure]:
-                print(
-                    f" test_raise_on_failure failed: Failed logging function not "
-                    f"reported as a warning {case}."
-                )
-                test_passed = False
-            if "logger" not in exception and caught:
-                print(
-                    f" test_raise_on_failure failed: Warned without failed logger {case}."
-                )
-                test_passed = False
-
-        # an interruption of a callback function is raised as it is, rather than as an
-        # error of the library
-        interruption = KeyboardInterrupt()
-        raised = None
-        try:
-            raise_on_failure(7, {"exc": interruption}, "solver")
-        except BaseException as e:
-            raised = e
-        if raised is not interruption:
-            print(
-                " test_raise_on_failure failed: Interruption of callback function not "
-                "raised as it is."
-            )
-            test_passed = False
-
-        self.assertTrue(test_passed, "test_raise_on_failure failed")
-        print(" test_raise_on_failure PASSED")
-
-    def test_raise_callback_error(self):
-        """
-        this function tests that the error of a C function called from Python raises
-        a RuntimeError, with the exception of a failing Python callback function it
-        reached as its cause, while an interruption of such a function is raised as it
-        is and no error raises nothing
-        """
-        test_passed = True
-        failure = ValueError("callback function failure")
-        interruption = KeyboardInterrupt()
-        for error, exception, expected, case in [
-            (0, {"exc": failure}, None, "without error"),
-            (1, {"exc": failure}, failure, "with a failing callback function"),
-            (1, None, None, "without exception collector"),
-            (1, {"exc": interruption}, interruption, "with an interruption"),
-        ]:
-            raised = None
-            try:
-                raise_callback_error(error, exception, "C function raised error.")
-            except BaseException as e:
-                raised = e
-            if expected is interruption:
-                correct = raised is interruption
-            elif error:
-                correct = (
-                    isinstance(raised, RuntimeError) and raised.__cause__ is expected
-                )
-            else:
-                correct = raised is None
-            if not correct:
-                print(f" test_raise_callback_error failed: Wrong exception {case}.")
-                test_passed = False
-
-        self.assertTrue(test_passed, "test_raise_callback_error failed")
-        print(" test_raise_callback_error PASSED")
-
-    def test_call_library(self):
-        """
-        this function tests that a call into the library passes on the arguments and
-        the error code and marks the library as innermost, that it replaces Python's
-        default handler of SIGINT in the main thread only and restores it afterwards,
-        also when the call raises, and that it raises an interruption that arrived
-        during the call
-        """
-        test_passed = True
-        seen = []
-
-        def library(*args):
-            seen.append(
-                (args, interruption_state.stack, signal.getsignal(signal.SIGINT))
-            )
-            return 7
-
-        def check_restored(case):
-            if signal.getsignal(signal.SIGINT) is not signal.default_int_handler:
-                print(f" test_call_library failed: Handler not restored {case}.")
-                return False
-            if interruption_state.stack != ():
-                print(f" test_call_library failed: Marks not restored {case}.")
-                return False
-            return True
-
-        original_handler = signal.signal(signal.SIGINT, signal.default_int_handler)
-        try:
-            # the outermost call from the main thread defers interruptions
-            seen.clear()
-            if call_library(library, 1, "a") != 7 or seen != [
-                ((1, "a"), (False,), defer_interruption)
-            ]:
-                print(
-                    " test_call_library failed: Outermost call from the main thread "
-                    "not made correctly."
-                )
-                test_passed = False
-            test_passed &= check_restored("after the outermost call")
-
-            # a nested call keeps the handler and nests its mark
-            seen.clear()
-            call_library(lambda: call_library(library))
-            if seen != [((), (False, False), defer_interruption)]:
-                print(" test_call_library failed: Nested call not made correctly.")
-                test_passed = False
-            test_passed &= check_restored("after a nested call")
-
-            # a call from another thread neither replaces the handler nor marks the
-            # main thread
-            seen.clear()
-            thread = threading.Thread(target=call_library, args=(library,))
-            thread.start()
-            thread.join()
-            if seen != [((), (False,), signal.default_int_handler)]:
-                print(
-                    " test_call_library failed: Call from another thread not made "
-                    "correctly."
-                )
-                test_passed = False
-            test_passed &= check_restored("after a call from another thread")
-
-            # a call raises the exception of the library and restores the handler
-            def failing_library():
-                raise ValueError("library failure")
-
-            try:
-                call_library(failing_library)
-                print(" test_call_library failed: Exception of library not raised.")
-                test_passed = False
-            except ValueError:
-                pass
-            test_passed &= check_restored("after a call that raises")
-
-            # an interruption the library received is raised when the call returns
-            interruption = KeyboardInterrupt()
-
-            def interrupted_library():
-                interruption_state.pending = interruption
-                return 0
-
-            raised = None
-            try:
-                call_library(interrupted_library)
-            except KeyboardInterrupt as e:
-                raised = e
-            if raised is not interruption or interruption_state.pending is not None:
-                print(
-                    " test_call_library failed: Interruption received by the library "
-                    "not raised when the call returns."
-                )
-                test_passed = False
-            test_passed &= check_restored("after an interruption")
-
-            # an interruption that arrives while the handler is restored, which Python
-            # handles while it switches the handler, is raised when the call returns,
-            # after the handler is restored
-            real_signal = signal.signal
-
-            def signal_handling_pending(signum, handler):
-                if handler is signal.default_int_handler:
-                    signal.getsignal(signum)(signum, None)
-                return real_signal(signum, handler)
-
-            raised = None
-            with patch.object(signal, "signal", signal_handling_pending):
-                try:
-                    call_library(library)
-                except KeyboardInterrupt as e:
-                    raised = e
-            if raised is None or interruption_state.pending is not None:
-                print(
-                    " test_call_library failed: Interruption that arrives while the "
-                    "handler is restored not raised when the call returns."
-                )
-                test_passed = False
-            test_passed &= check_restored("after an interruption while it is restored")
-
-            # another handler is kept
-            def custom_handler(signum, frame):
-                pass
-
-            signal.signal(signal.SIGINT, custom_handler)
-            seen.clear()
-            call_library(library)
-            if seen[0][2] is not custom_handler:
-                print(" test_call_library failed: Other handler replaced.")
-                test_passed = False
-            if signal.getsignal(signal.SIGINT) is not custom_handler:
-                print(" test_call_library failed: Other handler not kept.")
-                test_passed = False
-        finally:
-            signal.signal(signal.SIGINT, original_handler)
-            interruption_state.stack = ()
-            interruption_state.pending = None
-
-        self.assertTrue(test_passed, "test_call_library failed")
-        print(" test_call_library PASSED")
 
     def test_check_struct_sizes(self):
         """
@@ -1963,9 +1962,13 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # after a factory wrote its context into the settings
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
-        settings.prepare_call(n_param, {})
-        error = precond_interface_type(c_funptr)(
-            vector_ptr, pointer(c_real(2.0)), vector_ptr, 12345
+        error = call_from_library(
+            LibraryCall("solver", n_param),
+            precond_interface_type(c_funptr),
+            vector_ptr,
+            pointer(c_real(2.0)),
+            vector_ptr,
+            12345,
         )
         if error != 0 or calls != [2.0]:
             print(
@@ -2122,7 +2125,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
 
             def c_function(*args, body=body, name=name):
                 received.append((name, args[-1]))
-                marks.append(interruption_state.stack)
+                marks.append(running_call.get())
                 body(*args[:-1])
                 return None if name == "logger" else error_code
 
@@ -2141,7 +2144,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
                     "called with the context of these settings."
                 )
                 test_passed = False
-            if marks != [(False,)]:
+            if len(marks) != 1 or not isinstance(marks[0], LibraryCall):
                 print(
                     f" test_solver_settings failed: Library not marked as innermost "
                     f"while the C function wired as {case} runs."
@@ -2172,38 +2175,6 @@ class PyInterfaceUnitTests(unittest.TestCase):
                     )
                     test_passed = False
             setattr(case_settings.settings_c, name, None)
-
-        # the number of parameters and the exception collector of a call are held for
-        # the calling thread, so that a call in another thread does not see them, and
-        # restoring the call another call interrupted hands back its number of
-        # parameters and exception collector, also to the nested stability check
-        # settings
-        interrupted_exception: dict = {}
-        settings.prepare_call(n_param, interrupted_exception)
-        seen_in_thread = []
-        thread = threading.Thread(
-            target=lambda: seen_in_thread.append(settings._n_param)
-        )
-        thread.start()
-        thread.join()
-        if seen_in_thread != [None]:
-            print(
-                " test_solver_settings failed: Number of parameters of a call seen in "
-                "another thread."
-            )
-            test_passed = False
-        settings.restore_call(settings.prepare_call(n_param + 1, {}))
-        if (
-            settings._n_param != n_param
-            or settings._exception is not interrupted_exception
-            or settings.stability_settings._n_param != n_param
-            or settings.stability_settings._exception is not interrupted_exception
-        ):
-            print(
-                " test_solver_settings failed: Call data of the interrupted call not "
-                "restored."
-            )
-            test_passed = False
 
         # a keyword given as bytes, as read from a C struct, is stored as well
         settings.subsystem_solver = b"davidson_ah"

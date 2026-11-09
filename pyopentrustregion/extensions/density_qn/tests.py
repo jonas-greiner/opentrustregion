@@ -22,6 +22,7 @@ from pyopentrustregion.python_interface import (
     c_int,
     SolverSettings,
     SolverState,
+    solver,
 )
 from pyopentrustregion.extensions.density_qn import (
     DensityQNSettings,
@@ -140,7 +141,6 @@ def setup_orbital_owner(solver_settings, n_particle, copy_back=None):
     owner = OrbitalOwner.__new__(OrbitalOwner)
     owner.n_ao = n_ao
     owner.n_particle = n_particle
-    owner.exception = {}
     owner.copy_back = copy_back
     solver_settings._extension_owner = owner
     return owner
@@ -208,13 +208,14 @@ class DensityQNPyInterfaceTests(unittest.TestCase):
         """
         this function tests that the interface to the density matrix evaluating
         function reports an exception or an interruption raised by the function as an
-        error and keeps it, and that the function receives the density matrix read-only
+        error and keeps it with the call whose library called it, and that the function
+        receives the density matrix read-only
         """
         dm_ao = np.full(2 * (n_ao,), 1.0)
         dm_ao_ptr = dm_ao.ctypes.data_as(POINTER(c_real))
         interfaces = {
-            "density matrix evaluating function": lambda func, exc: (
-                DensityQNEvaluateDMInterface(func, n_ao, 1, True, exc)(
+            "density matrix evaluating function": lambda func: (
+                DensityQNEvaluateDMInterface(func, n_ao, 1, True)(
                     dm_ao_ptr, (c_real * 1)(), None, None, None, None, None
                 )
             ),
@@ -294,19 +295,6 @@ class DensityQNPyInterfaceTests(unittest.TestCase):
                     " test_density_qn_factory_py_interface failed: Called logging "
                     "function "
                     "wrong."
-                )
-                test_passed = False
-
-            # the returned functions share the collector of the orbital basis factory,
-            # whose functions the object calls
-            if not (
-                update_orbs_density_qn._otr_exception is orbitals.exception
-                and obj_func_density_qn._otr_exception is orbitals.exception
-            ):
-                print(
-                    " test_density_qn_factory_py_interface failed: Collector of the "
-                    "orbital "
-                    "basis factory not shared."
                 )
                 test_passed = False
 
@@ -530,11 +518,22 @@ class DensityQNPyIntegrationTests(unittest.TestCase):
         """
         this function solves the toy model with density QN, built through the density
         QN factory on the objects of both orbital bases in the closed and the open
-        shell, compares with the minimum the exact Hessian of the orbital basis reaches
-        and checks that the density QN and the orbital basis object are released once
-        nothing keeps them alive
+        shell, compares with the minimum the exact Hessian of the orbital basis reaches,
+        checks that a failure of the response function of the orbital basis, which the
+        exact Hessian of the stability check reaches through the orbital basis object,
+        is in the causes of the error of a solve and that the density QN and the orbital
+        basis object are released once nothing keeps them alive
         """
         test_passed = True
+
+        def in_causes(failure, error):
+            """
+            this function returns whether a failure is among the causes of an error
+            """
+            cause = error.__cause__
+            while cause is not None and cause is not failure:
+                cause = cause.__cause__
+            return cause is failure
 
         for setup_basis_run, basis_name in (
             (setup_mo_toy_run, "MO-basis"),
@@ -581,7 +580,30 @@ class DensityQNPyIntegrationTests(unittest.TestCase):
                         f"one of the exact Hessian for the {case_name} case."
                     )
                     test_passed = False
-                del run, update_orbs, obj_func, update_orbs_basis, hess_x
+
+                # a failure of the response function of the orbital basis, which the
+                # exact Hessian of the stability check calls through a call of its own
+                # into the orbital basis object, is in the causes of the error the
+                # solver raises
+                failure = ValueError("response failure")
+                run.response_failure = failure
+                failure_reported = False
+                try:
+                    solver(update_orbs, obj_func, run.n_param, run.settings)
+                except RuntimeError as e:
+                    failure_reported = in_causes(failure, e)
+                if not failure_reported:
+                    print(
+                        " test_density_qn_factory_py failed: Failure of the response "
+                        "function of the orbital basis not in the causes of the error "
+                        f"of the solver for the {case_name} case."
+                    )
+                    test_passed = False
+
+                # the failure refers to the run through its traceback, so it is dropped
+                # before checking that the objects are released
+                run.response_failure = None
+                del run, update_orbs, obj_func, update_orbs_basis, hess_x, failure
                 test_passed &= check_released(
                     releases, "test_density_qn_factory_py", case_name
                 )

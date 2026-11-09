@@ -25,8 +25,7 @@ from pyopentrustregion.python_interface import (
     ObjFuncInterface,
     LoggerInterface,
     LoggerPyInterface,
-    adopt_collector,
-    raise_on_failure,
+    LibraryCall,
     Settings,
     SolverSettings,
     SolverSettingsC,
@@ -43,7 +42,7 @@ from pyopentrustregion.extensions.common.python_interface import (
 )
 
 if TYPE_CHECKING:
-    from typing import Tuple, Callable, Optional, Dict
+    from typing import Tuple, Callable, Optional
 
     TransportType = Callable[[np.ndarray, np.ndarray], None]
     InitHessType = Callable[[np.ndarray], None]
@@ -103,8 +102,6 @@ class TransportInterface(CallbackInterface):
     """
 
     transport: TransportType
-    n_param: int
-    exception: Dict[str, BaseException]
 
     def call(self, geodesic_ptr, tangent_vector_ptr) -> int:
         # convert matrix pointers to numpy arrays and make the geodesic read-only
@@ -128,8 +125,6 @@ class InitHessInterface(CallbackInterface):
     """
 
     init_hess: InitHessType
-    n_param: int
-    exception: Dict[str, BaseException]
 
     def call(self, vector_ptr) -> int:
         # convert matrix pointers to numpy arrays
@@ -160,11 +155,6 @@ def rotation_qn_factory(
     ],
     Callable[[np.ndarray], float],
 ]:
-    # collector for exceptions raised inside the wrapped user callbacks; adopted from
-    # update_orbs or obj_func when these are themselves factory-produced so a whole
-    # chain of factories shares one, and handed to solver through the returned objects
-    exception = adopt_collector(update_orbs, obj_func)
-
     # the C interface cannot check whether the orbital updating function and the
     # objective function belong to the solver settings
     check_wrapped_functions(update_orbs, obj_func, solver_settings)
@@ -173,22 +163,10 @@ def rotation_qn_factory(
     # check
     check_callback_arguments(transport, "transport", ("geodesic", "tangent_vector"))
     check_callback_arguments(init_hess, "init_hess", ("vector",))
-    update_orbs_interface = update_orbs_interface_type(
-        UpdateOrbsInterface(update_orbs, n_param, exception)
-    )
-    obj_func_interface = obj_func_interface_type(
-        ObjFuncInterface(obj_func, n_param, exception)
-    )
-    transport_interface = transport_interface_type(
-        TransportInterface(transport, n_param, exception)
-    )
-    init_hess_interface = init_hess_interface_type(
-        InitHessInterface(init_hess, n_param, exception)
-    )
-
-    # hand the logging function of the settings the exception collector of the call
-    if settings is not None:
-        settings.prepare_call(None, exception)
+    update_orbs_interface = update_orbs_interface_type(UpdateOrbsInterface(update_orbs))
+    obj_func_interface = obj_func_interface_type(ObjFuncInterface(obj_func))
+    transport_interface = transport_interface_type(TransportInterface(transport))
+    init_hess_interface = init_hess_interface_type(InitHessInterface(init_hess))
 
     # define result and argument types
     lib.rotation_qn_factory.restype = c_int
@@ -210,7 +188,8 @@ def rotation_qn_factory(
     update_orbs_rotation_qn_funptr = update_orbs_interface_type()
     obj_func_rotation_qn_funptr = obj_func_interface_type()
     extension = c_void_p()
-    error = lib.rotation_qn_factory(
+    LibraryCall("rotation QN factory", n_param).run(
+        lib.rotation_qn_factory,
         n_param,
         update_orbs_interface,
         obj_func_interface,
@@ -223,8 +202,6 @@ def rotation_qn_factory(
         byref(solver_state.state_c),
         None if settings is None else byref(settings.settings_c),
     )
-
-    raise_on_failure(error, exception, "rotation QN factory")
 
     # the owner of the rotation QN object, which the solver settings keep alive, keeps
     # alive what the object calls, and the returned functions are called with the
@@ -246,5 +223,4 @@ def rotation_qn_factory(
         update_orbs_rotation_qn_funptr,
         obj_func_rotation_qn_funptr,
         solver_settings,
-        exception,
     )
