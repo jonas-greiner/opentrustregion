@@ -2391,7 +2391,8 @@ class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
         """
         this function checks that every field of the Python settings structures,
         including the nested stability settings, is read back under its own name from
-        settings whose fields Fortran sets one by one to the reference values
+        settings whose fields Fortran sets one by one to the reference values, filled
+        with zero and then with one bytes before
         """
         test_passed = True
 
@@ -2426,7 +2427,7 @@ class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
         # can match bytes Fortran did not write
         for fill in (0, 1):
             settings_c = SolverSettings.c_struct()
-            memset(byref(settings_c), fill, sizeof(settings_c))
+            memset(addressof(settings_c), fill, sizeof(settings_c))
             lib.get_reference_solver_values(byref(settings_c), None)
             for struct, prefix in [
                 (settings_c, ""),
@@ -2443,7 +2444,7 @@ class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
                     if value != reference(prefix + name, field_type):
                         print(
                             f" test_settings_layout failed: Field {prefix + name} "
-                            f"misplaced in settings filled with {fill} bytes."
+                            "misplaced."
                         )
                         test_passed = False
         self.assertTrue(test_passed, "test_settings_layout failed")
@@ -2453,7 +2454,8 @@ class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
         """
         this function checks that every field of the Python state structures,
         including the nested stability check state, is read back under its own name
-        from a state whose fields Fortran sets one by one to the reference values
+        from a state whose fields Fortran sets one by one to the reference values,
+        filled with zero and then with one bytes before
         """
         test_passed = True
 
@@ -2462,7 +2464,7 @@ class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
         # match bytes Fortran did not write
         for fill in (0, 1):
             state_c = SolverState.c_struct()
-            memset(byref(state_c), fill, sizeof(state_c))
+            memset(addressof(state_c), fill, sizeof(state_c))
             lib.get_reference_solver_state_values(byref(state_c))
             for struct, prefix in [
                 (state_c, ""),
@@ -2475,7 +2477,7 @@ class PyIntegrationTests(Hartmann6DProblem, unittest.TestCase):
                     if value != reference_state(prefix + name, field_type):
                         print(
                             f" test_state_layout failed: Field {prefix + name} "
-                            f"misplaced in a state filled with {fill} bytes."
+                            "misplaced."
                         )
                         test_passed = False
         self.assertTrue(test_passed, "test_state_layout failed")

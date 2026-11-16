@@ -12,9 +12,9 @@ module otr_density_qn_test_reference
                               density_qn_settings_uninitialized_warning_msg
     use otr_common_test_reference, only: ref_orbital_settings
     use test_reference, only: is_close
-    use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, &
-                                           c_f_procpointer, c_associated, c_intptr_t, &
-                                           c_null_char, c_null_funptr, c_null_ptr
+    use, intrinsic :: iso_c_binding, only: &
+        c_bool, c_char, c_ptr, c_funptr, c_f_procpointer, c_associated, c_intptr_t, &
+        c_null_char, c_null_funptr, c_null_ptr, c_int8_t, c_sizeof
 
     implicit none
 
@@ -347,7 +347,7 @@ contains
         use otr_density_qn_c_interface, only: density_qn_settings_type_c
         use test_reference, only: ref_character_to_c
 
-        type(density_qn_settings_type_c), intent(out) :: values_out
+        type(density_qn_settings_type_c), intent(inout) :: values_out
 
         ! set logging function and host context to distinct addresses
         values_out%logger = transfer(1_c_intptr_t, c_null_funptr)
@@ -377,9 +377,12 @@ contains
 
         type(density_qn_settings_type_c) :: values
 
-        ! export reference values and select field by name
+        ! export reference values into settings filled with bytes that differ from
+        ! both fills of the layout tests, so that a field the export does not set
+        ! differs from what they read in both, and select field by name
         field_value = 0.0_c_rp
         keyword_c = c_null_char
+        values = transfer(spread(2_c_int8_t, 1, c_sizeof(values)), values)
         call get_reference_density_qn_values(values)
         select case (ref_character_from_c(name_c))
         case ("logger")

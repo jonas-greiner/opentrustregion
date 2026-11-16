@@ -422,7 +422,7 @@ def check_settings_layout(test_name, settings, export, lookup):
     test_passed = True
     for fill in (0, 1):
         settings_c = settings.c_struct()
-        memset(byref(settings_c), fill, sizeof(settings_c))
+        memset(addressof(settings_c), fill, sizeof(settings_c))
         export(byref(settings_c))
         for name, field_type in settings.c_struct._fields_:
             value = getattr(settings_c, name)
@@ -431,10 +431,7 @@ def check_settings_layout(test_name, settings, export, lookup):
             elif issubclass(field_type, Array):
                 value = value.decode()
             if value != extension_reference(lookup, name, field_type):
-                print(
-                    f" {test_name} failed: Field {name} misplaced in settings filled "
-                    f"with {fill} bytes."
-                )
+                print(f" {test_name} failed: Field {name} misplaced.")
                 test_passed = False
     return test_passed
 
