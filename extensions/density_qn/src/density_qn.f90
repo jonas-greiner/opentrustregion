@@ -34,8 +34,10 @@ module otr_density_qn
         "to default values"
 
     ! error origin of the density QN extension, with which its factory and object tag
-    ! the errors they detect themselves
-    integer(ip), parameter :: error_density_qn = 5300
+    ! the errors they detect themselves, and of its density matrix evaluating function,
+    ! with which its invoke routines tag the errors the function returns
+    integer(ip), parameter :: error_density_qn = 5300, &
+                              error_density_qn_evaluate_dm = 7300
 
     ! define setting options
     character(len=kw_len), parameter :: qn_methods(5) = &
@@ -436,12 +438,12 @@ contains
                                                 v_exchange, v_nonlinear)
         !
         ! this subroutine calls the closed-shell density matrix evaluating function of
-        ! density QN with the host context of its settings and passes on its error,
-        ! counts an energy that is not a number as infinite and returns an error of its
-        ! own with the origin of the object if the function returns a Fock matrix or a
-        ! potential that is not finite at a finite energy, while an infinite energy,
-        ! which rejects the point, leaves them unchecked, since the caller does not use
-        ! them then
+        ! density QN with the host context of its settings and tags its error with the
+        ! origin of the function, counts an energy that is not a number as infinite and
+        ! returns an error of its own with the origin of the object if the function
+        ! returns a Fock matrix or a potential that is not finite at a finite energy,
+        ! while an infinite energy, which rejects the point, leaves them unchecked,
+        ! since the caller does not use them then
         !
         use opentrustregion_core, only: settings_type, verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
@@ -461,6 +463,7 @@ contains
         ! call the density matrix evaluating function
         call evaluate_dm(dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, &
                          settings%context)
+        call add_error_origin(error, error_density_qn_evaluate_dm, settings)
         if (error /= 0) return
 
         ! check the result
@@ -485,12 +488,12 @@ contains
                                                 v_exchange, v_nonlinear)
         !
         ! this subroutine calls the open-shell density matrix evaluating function of
-        ! density QN with the host context of its settings and passes on its error,
-        ! counts an energy that is not a number as infinite and returns an error of its
-        ! own with the origin of the object if the function returns a Fock matrix or a
-        ! potential that is not finite at a finite energy, while an infinite energy,
-        ! which rejects the point, leaves them unchecked, since the caller does not use
-        ! them then
+        ! density QN with the host context of its settings and tags its error with the
+        ! origin of the function, counts an energy that is not a number as infinite and
+        ! returns an error of its own with the origin of the object if the function
+        ! returns a Fock matrix or a potential that is not finite at a finite energy,
+        ! while an infinite energy, which rejects the point, leaves them unchecked,
+        ! since the caller does not use them then
         !
         use opentrustregion_core, only: settings_type, verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
@@ -510,6 +513,7 @@ contains
         ! call the density matrix evaluating function
         call evaluate_dm(dm, energy, fock, v_coulomb, v_exchange, v_nonlinear, error, &
                          settings%context)
+        call add_error_origin(error, error_density_qn_evaluate_dm, settings)
         if (error /= 0) return
 
         ! check the result

@@ -8,7 +8,8 @@ module otr_common_c_interface_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr, solver_state_type
     use c_interface, only: c_rp, c_ip, solver_state_type_c
-    use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type
+    use otr_common_c_interface, only: evaluate_dm_c_type, get_response_c_type, &
+                                      obj_func_grad_c_type
     use test_reference, only: n_param, is_close
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_funptr, c_funloc, c_loc, &
                                            c_associated, c_null_ptr, c_null_funptr, &
@@ -34,6 +35,8 @@ module otr_common_c_interface_unit_tests
     procedure(get_response_c_type), pointer :: &
         mock_get_response_cs_ptr => mock_get_response_cs, &
         mock_get_response_os_ptr => mock_get_response_os
+    procedure(obj_func_grad_c_type), pointer :: mock_obj_func_grad_ptr => &
+        mock_obj_func_grad
 
 contains
 
@@ -150,6 +153,32 @@ contains
         error = host_context_error(context_c)
 
     end function mock_get_response_os
+
+    function mock_obj_func_grad(kappa_c, grad_c, func_c, context_c) result(error) &
+        bind(C)
+        !
+        ! this function is a mock function for the C objective function of the settings
+        ! of an extension learning from trial points, which returns the sum of the step
+        ! as the energy and twice the step as the gradient and the error code set in
+        ! the host context
+        !
+        use test_reference, only: check_host_context_c, host_context_error
+
+        real(c_rp), intent(in), target :: kappa_c(*)
+        real(c_rp), intent(out), target :: grad_c(*)
+        real(c_rp), intent(out) :: func_c
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        func_c = sum(kappa_c(:n_param))
+        grad_c(:n_param) = 2.0_c_rp * kappa_c(:n_param)
+
+        error = host_context_error(context_c)
+
+    end function mock_obj_func_grad
 
     function holder_level_context(holder, i_level) result(context_c)
         !
@@ -2033,5 +2062,69 @@ contains
         end if
 
     end function test_get_response_os_f_wrapper
+
+    logical(c_bool) function test_obj_func_grad_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the objective function of the
+        ! settings, which finds the C function in the bundle it receives as context and
+        ! copies the state into the host's record first
+        !
+        use otr_common, only: obj_func_grad_type
+        use otr_common_c_interface, only: obj_func_grad_c_callbacks_type, &
+                                          obj_func_grad_f_wrapper
+        use otr_common_test_reference, only: check_obj_func_grad_funptr
+        use test_reference, only: arm_host_context_c, arm_state_c, host_context, &
+                                  host_context_reached
+
+        type(obj_func_grad_c_callbacks_type), target :: callbacks
+        procedure(obj_func_grad_type), pointer :: obj_func_grad_funptr
+        class(*), pointer :: context
+        real(rp) :: kappa(n_param), grad(n_param), func
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_obj_func_grad_f_wrapper = .true.
+
+        ! inject mock C function into a bundle, which the wrapper receives as context
+        ! and which refers to a state and a host's record the state has to be copied
+        ! into
+        callbacks%obj_func_grad => mock_obj_func_grad
+        call arm_host_context_c(callbacks%host_context)
+        call arm_state_c(callbacks%c_callbacks_type)
+        context => callbacks
+
+        ! get pointer to function
+        obj_func_grad_funptr => obj_func_grad_f_wrapper
+
+        ! test objective function Fortran wrapper
+        if (.not. check_obj_func_grad_funptr(obj_func_grad_funptr, &
+                                             "obj_func_grad_f_wrapper", "", context)) &
+            test_obj_func_grad_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("obj_func_grad_f_wrapper")) &
+            test_obj_func_grad_f_wrapper = .false.
+
+        ! a C function that fails has to have its error returned
+        call arm_host_context_c(callbacks%host_context)
+        host_context%mock_error = 3
+        call random_number(kappa)
+        func = obj_func_grad_f_wrapper(kappa, grad, error, context)
+        if (error /= 3) then
+            write(stderr, *) "test_obj_func_grad_f_wrapper failed: Error of the C "// &
+                "function not returned."
+            test_obj_func_grad_f_wrapper = .false.
+        end if
+
+        ! a context that is no bundle has to produce an error
+        context => null()
+        func = obj_func_grad_f_wrapper(kappa, grad, error, context)
+        if (error /= 1) then
+            write(stderr, *) "test_obj_func_grad_f_wrapper failed: No error "// &
+                "produced without a bundle."
+            test_obj_func_grad_f_wrapper = .false.
+        end if
+
+    end function test_obj_func_grad_f_wrapper
 
 end module otr_common_c_interface_unit_tests

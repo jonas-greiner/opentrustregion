@@ -46,40 +46,23 @@ from pyopentrustregion.extensions.common.python_interface import (
     ExtensionOwner,
     extension_functions,
     check_wrapped_functions,
+    obj_func_grad_interface_type,
+    ObjFuncGradInterface,
+    ObjFuncGradPyInterface,
 )
 
 if TYPE_CHECKING:
     from typing import Tuple, Callable, Optional
+    from pyopentrustregion.extensions.common.python_interface import ObjFuncGradType
 
     TransportType = Callable[[np.ndarray, np.ndarray], None]
-    ObjFuncGradType = Callable[[np.ndarray, np.ndarray], float]
 
 
 # callback function ctypes specifications, ctypes can only deal with simple return
 # types so we interface to Fortran subroutines by creating pointers to the relevant
-# data
-obj_func_grad_interface_type = callback_type(
-    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
-)
+# data, while the common interface of the extensions holds that of the objective
+# function that also returns the gradient at the trial point
 transport_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
-
-
-class ObjFuncGradInterface(SettingsCallbackInterface):
-    """
-    this class provides the interface to the objective function of the rotation QN
-    settings, which also writes the gradient at the trial point to the memory provided
-    through a pointer
-    """
-
-    def call(self, kappa_ptr, grad_ptr, func_ptr) -> int:
-        # convert pointers to numpy arrays and make the step read-only
-        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
-        kappa.flags.writeable = False
-        grad = np.ctypeslib.as_array(grad_ptr, shape=(self.n_param,))
-
-        func_ptr[0] = self.func(kappa, grad)
-
-        return 0
 
 
 class TransportInterface(SettingsCallbackInterface):
@@ -99,26 +82,6 @@ class TransportInterface(SettingsCallbackInterface):
         self.func(geodesic, tangent_vector)
 
         return 0
-
-
-class ObjFuncGradPyInterface(CFunctionInterface):
-    """
-    this class provides the Python interface to an objective function C function that
-    also returns the gradient at the trial point
-    """
-
-    def __call__(self, kappa: np.ndarray, grad: np.ndarray) -> float:
-        func = c_real()
-        kappa_buffer, grad_buffer = c_buffer(kappa), c_buffer(grad)
-        LibraryCall("objective function", kappa_buffer.size).run(
-            self.funptr,
-            kappa_buffer.ctypes.data_as(POINTER(c_real)),
-            grad_buffer.ctypes.data_as(POINTER(c_real)),
-            byref(func),
-            self.context,
-        )
-        write_back(grad, grad_buffer)
-        return func.value
 
 
 class TransportPyInterface(CFunctionInterface):

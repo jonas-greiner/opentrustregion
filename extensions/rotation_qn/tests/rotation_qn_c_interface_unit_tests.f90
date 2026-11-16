@@ -17,31 +17,6 @@ module otr_rotation_qn_c_interface_unit_tests
 
 contains
 
-    function mock_obj_func_grad(kappa_c, grad_c, func_c, context_c) result(error) &
-        bind(C)
-        !
-        ! this function is a mock function for the C objective function of the
-        ! settings, which returns the sum of the step as the energy and twice the step
-        ! as the gradient and the error code set in the host context
-        !
-        use test_reference, only: check_host_context_c, host_context_error
-
-        real(c_rp), intent(in), target :: kappa_c(*)
-        real(c_rp), intent(out), target :: grad_c(*)
-        real(c_rp), intent(out) :: func_c
-        type(c_ptr), intent(in), value :: context_c
-        integer(c_ip) :: error
-
-        ! check host context
-        call check_host_context_c(context_c)
-
-        func_c = sum(kappa_c(:n_param))
-        grad_c(:n_param) = 2.0_c_rp * kappa_c(:n_param)
-
-        error = host_context_error(context_c)
-
-    end function mock_obj_func_grad
-
     function mock_transport(geodesic_c, tangent_vector_c, context_c) result(error) &
         bind(C)
         !
@@ -82,7 +57,8 @@ contains
             mock_rotation_qn_factory_defaults, &
             test_passed_mock_rotation_qn_factory => test_passed
         use otr_rotation_qn_test_reference, only: get_reference_rotation_qn_values
-        use otr_common_c_interface_unit_tests, only: check_c_factory_wiring
+        use otr_common_c_interface_unit_tests, only: check_c_factory_wiring, &
+                                                     mock_obj_func_grad
         use c_interface_unit_tests, only: mock_update_orbs, mock_obj_func, &
                                           mock_logger, mock_hess_x, mock_precond
         use test_reference, only: arm_host_context_c, host_context, host_context_reached
@@ -354,65 +330,6 @@ contains
 
     end function test_rotation_qn_factory_c_wrapper
 
-    logical(c_bool) function test_obj_func_grad_f_wrapper() bind(C)
-        !
-        ! this function tests the Fortran wrapper for the objective function of the
-        ! settings, which finds the C function in the bundle it receives as context
-        !
-        use otr_rotation_qn, only: obj_func_grad_type
-        use otr_rotation_qn_c_interface, only: rotation_qn_c_callbacks_type, &
-                                               obj_func_grad_f_wrapper
-        use otr_rotation_qn_test_reference, only: check_obj_func_grad_funptr
-        use test_reference, only: arm_host_context_c, host_context, host_context_reached
-
-        type(rotation_qn_c_callbacks_type), target :: callbacks
-        procedure(obj_func_grad_type), pointer :: obj_func_grad_funptr
-        class(*), pointer :: context
-        real(rp) :: kappa(n_param), grad(n_param), func
-        integer(ip) :: error
-
-        ! assume tests pass
-        test_obj_func_grad_f_wrapper = .true.
-
-        ! inject mock C function into a bundle, which the wrapper receives as context
-        callbacks%obj_func_grad => mock_obj_func_grad
-        call arm_host_context_c(callbacks%host_context)
-        context => callbacks
-
-        ! get pointer to function
-        obj_func_grad_funptr => obj_func_grad_f_wrapper
-
-        ! test objective function Fortran wrapper
-        if (.not. check_obj_func_grad_funptr(obj_func_grad_funptr, &
-                                             "obj_func_grad_f_wrapper", "", context)) &
-            test_obj_func_grad_f_wrapper = .false.
-
-        ! check that the wrapper handed the host context to the C function
-        if (.not. host_context_reached("obj_func_grad_f_wrapper")) &
-            test_obj_func_grad_f_wrapper = .false.
-
-        ! a C function that fails has to have its error returned
-        call arm_host_context_c(callbacks%host_context)
-        host_context%mock_error = 3
-        call random_number(kappa)
-        func = obj_func_grad_f_wrapper(kappa, grad, error, context)
-        if (error /= 3) then
-            write(stderr, *) "test_obj_func_grad_f_wrapper failed: Error of the C "// &
-                "function not returned."
-            test_obj_func_grad_f_wrapper = .false.
-        end if
-
-        ! a context that is no bundle has to produce an error
-        context => null()
-        func = obj_func_grad_f_wrapper(kappa, grad, error, context)
-        if (error /= 1) then
-            write(stderr, *) "test_obj_func_grad_f_wrapper failed: No error "// &
-                "produced without a bundle."
-            test_obj_func_grad_f_wrapper = .false.
-        end if
-
-    end function test_obj_func_grad_f_wrapper
-
     logical(c_bool) function test_transport_f_wrapper() bind(C)
         !
         ! this function tests the Fortran wrapper for the transport, which finds the C
@@ -519,9 +436,11 @@ contains
         ! this function tests that the function that converts rotation QN settings from
         ! C to Fortran correctly perform this conversion
         !
-        use otr_rotation_qn_c_interface, only: &
-            rotation_qn_settings_type_c, rotation_qn_c_callbacks_type, &
-            obj_func_grad_f_wrapper, transport_f_wrapper, assignment(=)
+        use otr_rotation_qn_c_interface, only: rotation_qn_settings_type_c, &
+                                               rotation_qn_c_callbacks_type, &
+                                               transport_f_wrapper, assignment(=)
+        use otr_common_c_interface, only: obj_func_grad_f_wrapper
+        use otr_common_c_interface_unit_tests, only: mock_obj_func_grad
         use c_interface, only: hess_x_f_wrapper, precond_f_wrapper
         use otr_rotation_qn, only: rotation_qn_settings_type, &
                                    default_rotation_qn_settings

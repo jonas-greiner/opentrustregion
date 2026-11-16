@@ -18,6 +18,8 @@ from pyopentrustregion.python_interface import (
     c_real,
     callback_type,
     CallbackInterface,
+    SettingsCallbackInterface,
+    CFunctionInterface,
     hess_x_interface_type,
     HessXPyInterface,
     c_buffer,
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
         [np.ndarray, Optional[np.ndarray], bool],
         Tuple[float, Optional[GetResponseType]],
     ]
+    ObjFuncGradType = Callable[[np.ndarray, np.ndarray], float]
 
 
 # callback function ctypes specifications, ctypes can only deal with simple return
@@ -45,6 +48,9 @@ evaluate_dm_interface_type = callback_type(
     POINTER(c_real),
     POINTER(c_real),
     POINTER(get_response_interface_type),
+)
+obj_func_grad_interface_type = callback_type(
+    c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
 
 
@@ -127,6 +133,44 @@ class EvaluateDMInterface(CallbackInterface):
             get_response_funptr[0] = self.get_response_funptr
 
         return 0
+
+
+class ObjFuncGradInterface(SettingsCallbackInterface):
+    """
+    this class provides the interface to the objective function of the settings of an
+    extension learning from trial points, which also writes the gradient at the trial
+    point to the memory provided through a pointer
+    """
+
+    def call(self, kappa_ptr, grad_ptr, func_ptr) -> int:
+        # convert pointers to numpy arrays and make the step read-only
+        kappa = np.ctypeslib.as_array(kappa_ptr, shape=(self.n_param,))
+        kappa.flags.writeable = False
+        grad = np.ctypeslib.as_array(grad_ptr, shape=(self.n_param,))
+
+        func_ptr[0] = self.func(kappa, grad)
+
+        return 0
+
+
+class ObjFuncGradPyInterface(CFunctionInterface):
+    """
+    this class provides the Python interface to an objective function C function that
+    also returns the gradient at the trial point
+    """
+
+    def __call__(self, kappa: np.ndarray, grad: np.ndarray) -> float:
+        func = c_real()
+        kappa_buffer, grad_buffer = c_buffer(kappa), c_buffer(grad)
+        LibraryCall("objective function", kappa_buffer.size).run(
+            self.funptr,
+            kappa_buffer.ctypes.data_as(POINTER(c_real)),
+            grad_buffer.ctypes.data_as(POINTER(c_real)),
+            byref(func),
+            self.context,
+        )
+        write_back(grad, grad_buffer)
+        return func.value
 
 
 @dataclass

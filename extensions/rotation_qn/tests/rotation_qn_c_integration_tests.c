@@ -274,24 +274,29 @@ bool test_rotation_qn_settings_layout(void) {
     return false;
   }
 
-  /* check that every field is read back under its own name */
+  /* check that every field is read back under its own name, from settings filled
+   * with zero and then with one bytes before, so that no reference value can match
+   * bytes the library did not write */
   bool ok = true;
-  rotation_qn_settings_type s = {0};
-  get_reference_rotation_qn_values(&s);
-  reference_field_fn *lookup = reference_rotation_qn_field;
-  const char *test_name = "test_rotation_qn_settings_layout";
-  ok &= check_settings_field(lookup, (uintptr_t)s.init_hess, "init_hess", test_name);
-  ok &= check_settings_field(lookup, (uintptr_t)s.init_precond, "init_precond",
-                             test_name);
-  ok &= check_settings_field(lookup, (uintptr_t)s.obj_func_grad, "obj_func_grad",
-                             test_name);
-  ok &= check_settings_field(lookup, (uintptr_t)s.transport, "transport", test_name);
-  ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
-  ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
-  ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
-  ok &= check_settings_field(lookup, s.max_points, "max_points", test_name);
-  ok &= check_settings_keyword(lookup, s.qn_method, "qn_method", test_name);
-  ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
+  for (int fill = 0; fill < 2; fill++) {
+    rotation_qn_settings_type s;
+    memset(&s, fill, sizeof(s));
+    get_reference_rotation_qn_values(&s);
+    reference_field_fn *lookup = reference_rotation_qn_field;
+    const char *test_name = "test_rotation_qn_settings_layout";
+    ok &= check_settings_field(lookup, (uintptr_t)s.init_hess, "init_hess", test_name);
+    ok &= check_settings_field(lookup, (uintptr_t)s.init_precond, "init_precond",
+                               test_name);
+    ok &= check_settings_field(lookup, (uintptr_t)s.obj_func_grad, "obj_func_grad",
+                               test_name);
+    ok &= check_settings_field(lookup, (uintptr_t)s.transport, "transport", test_name);
+    ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
+    ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
+    ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
+    ok &= check_settings_field(lookup, s.max_points, "max_points", test_name);
+    ok &= check_settings_keyword(lookup, s.qn_method, "qn_method", test_name);
+    ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
+  }
 
   return ok;
 }

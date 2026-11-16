@@ -522,8 +522,16 @@ The library uses structured integer return codes to indicate whether a function 
 | `53`               | Density QN extension                                                       |
 | `54`               | Rotation QN extension                                                      |
 | `55`               | S-GEK extension                                                            |
+| `71`               | `evaluate_dm` of the MO and OAO extensions                                 |
+| `72`               | `get_response` of the MO and OAO extensions                                |
+| `73`               | `evaluate_dm` of the density QN extension                                  |
+| `74`               | `init_hess` of the rotation QN and S-GEK extensions                        |
+| `75`               | `init_precond` of the rotation QN extension                                |
+| `76`               | `obj_func_grad` of the rotation QN and S-GEK extensions                    |
+| `77`               | `transport` of the rotation QN extension                                   |
+| `78`               | `change_reference` of the S-GEK extension                                  |
 
-The factory of an extension tags the errors it detects, in its arguments, in the solver settings it wires or, in C, a missing record of the state, with the origin of its extension, and its object the errors it detects itself while performing a role, such as a missing density matrix evaluating function or a failed eigendecomposition. An error in the numerics of the orbital basis object a density QN object builds on carries the origin of the orbital basis. Errors of your own callback functions keep the origin of the role, such as `1201` for an `evaluate_dm` that fails during the orbital update.
+The factory of an extension tags the errors it detects, in its arguments, in the solver settings it wires or, in C, a missing record of the state, with the origin of its extension, and its object the errors it detects itself while performing a role, such as a missing density matrix evaluating function or a failed eigendecomposition. An error in the numerics of the orbital basis object a density QN object builds on carries the origin of the orbital basis. Errors your callback functions return carry their own origin, such as `7101` for an `evaluate_dm` that returns 1, whether the solver or an extension calls them.
 
 ### Error Codes (`EE`)
 
@@ -540,11 +548,11 @@ Future versions may define more specific codes for other actionable failure mode
 
 ## Optional Extensions
 
-OpenTrustRegion (OTR) supports additional optional modules: **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **rotation quasi-Newton (rotation QN)**, **density quasi-Newton (density QN)**, and **subspace gradient-enhanced kriging (S-GEK)**. The Python package, the published wheels included, contains all of them, while a Fortran or C build enables each through its CMake option, and a source install of the Python package can leave one out with `-C cmake.define.ENABLE_<NAME>=OFF`.
+OpenTrustRegion (OTR) supports additional optional modules: **molecular orbitals (MO)**, **orthogonal atomic orbitals (OAO)**, **rotation quasi-Newton (rotation QN)**, **density quasi-Newton (density QN)**, and **subspace gradient-enhanced Kriging (S-GEK)**. The Python package, the published wheels included, contains all of them, while a Fortran or C build enables each through its CMake option, and a source install of the Python package can leave one out with `-C cmake.define.ENABLE_<NAME>=OFF`.
 
 The Python callback functions of the extensions follow the conventions of those of the solver: they receive NumPy arrays, which are only valid during the call, write array outputs in place, return any other outputs and signal errors by raising an exception instead of returning an error code.
 
-A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the rotation QN and S-GEK factories do on settings a factory wired, Fortran accepts only the returned functions themselves, C cannot tell a wrapper from your own function, and Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
+A host can wrap the functions a factory returns and the routines it wires into the solver settings, for example to count their calls. A Fortran or C wrapper passes the context it receives on to the wrapped function unchanged. Where a factory takes the functions another factory returned, as the rotation QN factory does on settings a factory wired, Fortran accepts only the returned functions themselves, C cannot tell a wrapper from your own function, and Python accepts a wrapper in their place only if it is made with `functools.wraps`, which marks the function it wraps:
 
 ```python
 import functools
@@ -1332,9 +1340,9 @@ The density QN factory can be fine-tuned using the following settings:
 - **`logger`** (subroutine): Accepts a log message of the density QN routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
 - **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `evaluate_dm` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
 
-### Subspace Gradient-Enhanced Kriging Extension
+### Subspace Gradient-Enhanced Kriging (S-GEK)
 
-This extension currently provides the subspace gradient-enhanced kriging method to approximate the Hessian.
+S-GEK is the optimizer of OpenMolcas (Lindh and co-workers) with the interface of the `solver`: at every step, it fits a gradient-enhanced Kriging (GEK) surrogate of the objective function to a window of recent points, in the subspace of their steps and gradient differences, and moves to the minimum of the surrogate within a variance threshold. It replaces the `solver` rather than wiring the solver settings, so it uses the Hessian linear transformation `update_orbs` returns only for the stability check.
 
 #### Installation
 
@@ -1346,37 +1354,24 @@ cmake -DENABLE_S_GEK=ON ..
 
 #### Usage
 
-This allows the solver to automatically update the Hessian by building and evaluating a surrogate model, so the Hessian linear transformation the host's `update_orbs` returns is never called. The routine `s_gek_factory` constructs and returns S-GEK versions of the orbital updating subroutine and the objective function and wires the solver settings with a new S-GEK object. This routine takes the following arguments:
+The routine `s_gek_solver` takes the arguments of the `solver`, with the chart transformation `change_reference` after `obj_func`, since the parameters of every point are expressed relative to the point itself, and the S-GEK settings as its last argument. Of the solver settings, it honours the convergence threshold or the convergence check, the number of macro iterations, each of which evaluates one point, the stability check with its settings and `stability_hess_x`, the projection `project`, the gradient noise, the random seed and the logging. The gradient noise, which OpenMolcas lacks and `grad_noise = false` switches off, perturbs the gradient of the surrogate as the `solver` perturbs that of its model and adds the perturbation's direction to the subspace, so that S-GEK leaves a symmetry subspace of the starting point as the `solver` does. It ends at the maximum number of macro iterations with the error code of the `solver`.
 
-#### Required Arguments
-
-- **`n_param`** (integer): Specifies the number of parameters to be optimized.
-- **`update_orbs`** (subroutine): Original orbital updating subroutine as defined for the `solver` subroutine. The `hess_x` subroutine it returns is not used. The returned orbital updating subroutine calls it with the host context of the solver settings.
-- **`obj_func`** (function): Original objective function as defined for the `solver` subroutine, which the returned objective function calls with the host context of the solver settings.
-- **`change_reference`** (subroutine): Expresses the parameters, local gradients and gradients of the `n_points` stored points in place relative to a new reference point and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context of the S-GEK settings as its last argument.
-- **`update_orbs_s_gek`** (subroutine): Returned S-GEK orbital updating subroutine as defined for the `solver` subroutine.
-- **`obj_func_s_gek`** (function): Returned objective function as defined for the `solver` subroutine.
-- **`extension`** (C only, `void **`): Returns the handle of the new S-GEK object, which `release_extension(extension)` frees once neither the returned functions nor the settings are used anymore, also not by an object wired on top of it. Fortran frees the object together with the settings, which own it, and Python once the settings and the returned functions are gone.
-- **`solver_settings`** (extension_solver_settings_type in Fortran, solver_settings_type in C and Python): Solver settings, which are replaced by the default settings with a warning if a C host did not initialize them. The factory wires them with the new S-GEK object, which replaces none of your callback functions, so these stay in effect and are called with your context, those of the nested stability settings with their own context if they have one. Call the `solver` with the returned functions and these settings. Their context then belongs to the object: Fortran and C hosts pass it when they call the returned functions themselves, and callback functions they set after the factory call receive it instead of their own context. A Fortran host copies settings before a factory wires them, never after: assigning wired settings duplicates their objects, but the copy's context still points at the original objects, so the copy runs those and breaks once the original settings are reset or go out of scope. Settings a factory wired can be passed to `s_gek_factory` again, which wires a new object on top of the earlier one, but only together with the functions the earlier factory returned in place of `update_orbs` and `obj_func`, in C and Python also wrappers of these, see [Optional Extensions](#optional-extensions), while settings no factory wired take your own. Fortran refuses any other function, also a wrapper, and Python any other than a wrapper made with `functools.wraps`, with an error; C cannot detect them, and your own functions would then be called with the context of the earlier object instead of yours. Since every call creates a new object, separate calculations, each with its own settings and state record, can run at the same time or be nested, see [Nested and Concurrent Calls](#nested-and-concurrent-calls).
-- **`solver_state`** (solver_state_type): Record of the solver state, through which the object has access to the state of the solve, so pass the same record to the `solver`. Fortran and C hosts keep it in place as long as the object is used, while Python keeps it alive with the object. The C and Python factories reset it to the default state, as the `solver` does, and in C, `NULL` is refused with an error.
-- **`error`** (integer): An integer code indicating the success or failure of the factory, which C returns and Python raises as an exception, see [Error Code Structure](#error-code-structure).
-- **`settings`** (s_gek_settings_type, optional): Settings object which controls optional arguments as described below. The factory only reads it. Without it, the default settings are used, which `NULL` in C and `None` in Python select.
+The default options depart from OpenMolcas, whose S-GEK is made to start close to convergence, so that S-GEK converges tightly from a guess; the options in the last column of the table below restore OpenMolcas's choices. Three details differ from OpenMolcas without an option: the BFGS step that S-GEK adds to the subspace skips the pairs without positive curvature, as rotation QN does, the subspace drops linearly dependent vectors at the threshold of the `solver`, and S-GEK stops at maximum precision once the predicted energy change of a step can not be resolved and the step does not lower the energy by a resolvable amount.
 
 ---
 
 The following Fortran snippet demonstrates how to use the S-GEK interface:
 
 ```fortran
-use opentrustregion, only: ip, solver_state_type, update_orbs_type, obj_func_type, &
-                           solver
-use otr_common, only: extension_solver_settings_type
-use otr_s_gek, only: s_gek_factory, s_gek_settings_type, change_reference_type
+use opentrustregion, only: ip, solver_settings_type, solver_state_type, &
+                           update_orbs_type, obj_func_type
+use otr_s_gek, only: s_gek_solver, s_gek_settings_type, change_reference_type
 
-type(extension_solver_settings_type), target :: settings
-type(solver_state_type), target :: state
+type(solver_settings_type) :: settings
+type(solver_state_type) :: state
 type(s_gek_settings_type) :: s_gek_settings
-procedure(update_orbs_type), pointer :: update_orbs_funptr, update_orbs_s_gek_funptr
-procedure(obj_func_type), pointer :: obj_func_funptr, obj_func_s_gek_funptr
+procedure(update_orbs_type), pointer :: update_orbs_funptr
+procedure(obj_func_type), pointer :: obj_func_funptr
 procedure(change_reference_type), pointer :: change_reference_funptr
 integer(ip) :: n_param, error
 
@@ -1384,19 +1379,11 @@ integer(ip) :: n_param, error
 update_orbs_funptr => update_orbs
 obj_func_funptr => obj_func
 change_reference_funptr => change_reference
+s_gek_settings%obj_func_grad => obj_func_grad
 
-! override default settings
-s_gek_settings%verbose = 1
-s_gek_settings%max_points = 30
-
-! get S-GEK routines and wire the settings with a new S-GEK object
-call s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                   change_reference_funptr, update_orbs_s_gek_funptr, &
-                   obj_func_s_gek_funptr, settings, state, error, s_gek_settings)
-
-! call solver
-call solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, error, &
-            settings, state)
+! run S-GEK
+call s_gek_solver(update_orbs_funptr, obj_func_funptr, change_reference_funptr, &
+                  n_param, error, settings, state, s_gek_settings)
 ```
 
 ---
@@ -1409,43 +1396,15 @@ The following C snippet demonstrates the equivalent usage through the C interfac
 
 c_int n_param;
 
-// set callback function pointers to existing implementations
-update_orbs_fp update_orbs_funptr = update_orbs;
-obj_func_fp obj_func_funptr = obj_func;
-change_reference_fp change_reference_funptr = change_reference;
-
-// initialize S-GEK settings
-s_gek_settings_type s_gek_settings = s_gek_settings_init();
-
-// override default settings
-s_gek_settings.verbose = 1;
-s_gek_settings.max_points = 30;
-
-// initialize settings
+// initialize settings and set the callback function of the S-GEK settings
 solver_settings_type settings = solver_settings_init();
+s_gek_settings_type s_gek_settings = s_gek_settings_init();
+s_gek_settings.obj_func_grad = obj_func_grad;
 
-// get S-GEK functions and wire the settings with a new S-GEK object
-update_orbs_fp update_orbs_s_gek_funptr;
-obj_func_fp obj_func_s_gek_funptr;
-void *extension;
+// run S-GEK
 solver_state_type state;
-c_int error = s_gek_factory(n_param,
-                            update_orbs_funptr,
-                            obj_func_funptr,
-                            change_reference_funptr,
-                            &update_orbs_s_gek_funptr,
-                            &obj_func_s_gek_funptr,
-                            &extension,
-                            &settings,
-                            &state,
-                            &s_gek_settings);
-
-// call solver
-error =
-    solver(update_orbs_s_gek_funptr, obj_func_s_gek_funptr, n_param, &settings, &state);
-
-// release the S-GEK object
-release_extension(extension);
+c_int error = s_gek_solver(update_orbs, obj_func, change_reference, n_param, &settings,
+                           &state, &s_gek_settings);
 ```
 
 ---
@@ -1453,46 +1412,44 @@ release_extension(extension);
 The following Python snippet demonstrates the equivalent usage through the Python interface:
 
 ```python
-from pyopentrustregion import SolverSettings, SolverState, solver
-from pyopentrustregion.extensions.s_gek import SGEKSettings, s_gek_factory
+from pyopentrustregion import SolverSettings, SolverState
+from pyopentrustregion.extensions.s_gek import SGEKSettings, s_gek_solver
 
-# initialize S-GEK settings
-s_gek_settings = SGEKSettings()
-
-# override default settings
-s_gek_settings.verbose = 1
-s_gek_settings.max_points = 30
-
-# initialize settings and state
+# initialize settings and set the callback function of the S-GEK settings
 settings = SolverSettings()
 state = SolverState()
+s_gek_settings = SGEKSettings()
+s_gek_settings.obj_func_grad = obj_func_grad
 
-# get S-GEK functions and wire the settings with a new S-GEK object
-update_orbs_s_gek, obj_func_s_gek = s_gek_factory(
-    n_param, update_orbs, obj_func, change_reference, settings, state, s_gek_settings
+# run S-GEK
+s_gek_solver(
+    update_orbs, obj_func, change_reference, n_param, settings, state, s_gek_settings
 )
-
-# call solver
-solver(update_orbs_s_gek, obj_func_s_gek, n_param, settings, state)
 ```
 
 ---
 
-- Callback functions (`update_orbs`, `obj_func`, `change_reference`) point to existing implementations elsewhere in the program.
-- `n_param` is assumed to be defined elsewhere.
-- S-GEK settings are initialized equivalently to the `solver` and `stability_check` settings; individual settings (here, `verbose` and `max_points`) can then be overridden.
-- S-GEK versions of the orbital updating function and the objective function are obtained by calling `s_gek_factory`, which also wires the solver settings with a new S-GEK object.
-- The `solver` is then called with the returned functions, the wired settings and the state record passed to the factory.
-- The S-GEK object is freed together with the settings in Fortran and once the settings and the returned functions are gone in Python, while a C host releases it with `release_extension`.
+- Callback functions (`update_orbs`, `obj_func`, `change_reference`, `obj_func_grad`) point to existing implementations elsewhere in the program.
+- **`change_reference`** (subroutine): Chart transformation, which receives the point `new_ref` the solver moved to, relative to the previous point, and the positions `kappa_list`, local gradients `local_grad_list` and gradients `grad_list` of the points of the history, relative to the previous point, which it re-expresses in place relative to `new_ref`: the positions, the local gradients, each in the chart of its own point, as far as the new chart changes it, and the gradients in the new chart, from the positions and the local gradients. S-GEK also calls it with a vanishing `new_ref` for a rejected trial point it keeps, to obtain its gradient in the current chart. In a flat chart, it subtracts `new_ref` from every position and copies the local gradients to the gradients. Fortran passes one point per column, C passes the number of points after `new_ref` and the arrays with one point after the other, and Python passes arrays with one point per row. Returns an integer error code (0 for success, positive integers < 100 for errors) and receives the host context of the S-GEK settings as its last argument.
+- The settings, the state and the S-GEK settings are optional as for the `solver`.
 
-#### Optional Settings
-The S-GEK factory function can be fine-tuned using the following settings:
+#### S-GEK Settings
 
-- **`use_subspace`** (boolean): Specifies whether the surrogate model is constructed in a subspace.
-- **`max_points`** (integer): Controls the number of points for the surrogate model and subspace construction, at least 1.
+- **`obj_func_grad`** (function): Objective function that also returns the gradient at a trial point, with the arguments of `obj_func_grad` of rotation QN, with which the trial acceptance keeps a rejected point in the history. Receives the host context of the S-GEK settings as its last argument.
+- **`init_hess`** (subroutine): Static Hessian, a Hessian linear transformation as `hess_x` of the `solver`, which replaces the floored Hessian diagonal `update_orbs` returns as the prior of the surrogate. Receives the host context of the S-GEK settings as its last argument.
+
+| Setting | Default | OpenMolcas | Description |
+|---|---|---|---|
+| **`inner_solver`** (string) | `"otr"` | `"rs-rfo"` | Minimizes the surrogate with the `solver`, which rejects points beyond the variance threshold, or with OpenMolcas's micro iterations of restricted-step rational function optimization. |
+| **`prior_update`** (string) | `"sr1"` | `"none"` | Updates the prior by the symmetric rank-one updates of the steps of the window, which align it with the curvature the surrogate meets, or by their BFGS updates (`"bfgs"`), which keep a positive definite prior positive definite. |
+| **`acceptance`** (string) | `"trial"` | `"none"` | Evaluates the minimum of the surrogate, with `obj_func_grad` if given and otherwise with `obj_func`, and moves there only if it lowers the objective function, rather than moving to every minimum. A rejected point that is not kept halves the variance threshold of the next step. |
+| **`excess_dispersion`** (boolean) | `true` | `false` | Measures the dispersion of the surrogate from its value at the current point, which the regularization of the surrogate keeps above zero. |
+
 - **`verbose`** (integer): Controls the verbosity of output of the S-GEK routines.
 - **`logger`** (subroutine): Accepts a log message of the S-GEK routines. Logging is otherwise routed to stdout, and error messages to stderr. Receives the host context as its last argument.
-- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference` and of the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. The object keeps it until the extension is released, so it has to stay valid that long. A Python host carries its data in closures instead.
+- **`context`** (unlimited polymorphic pointer in Fortran, `void *` in C, absent in Python): Opaque host data, handed back unchanged as the last argument of `change_reference`, `obj_func_grad`, `init_hess` and the logging function, as the `context` of the solver settings is to the callback functions of the `solver`. A Python host carries its data in closures instead.
+
+S-GEK reports the errors it detects itself, such as settings it refuses or a callback function returning values that are not finite, as `5501`, while the errors of the callback functions carry their own origins.
 
 ## AI Usage Disclosure
 

@@ -2346,21 +2346,30 @@ contains
 
     end subroutine get_stability_trial_space
 
-    subroutine orthogonalize_trial_vectors(red_space_basis, settings, error)
+    subroutine orthogonalize_trial_vectors(red_space_basis, settings, error, &
+                                           warn_lin_dep)
         !
         ! this subroutine orthogonalizes the trial vectors using Gram-Schmidt and
-        ! removes linearly dependent and vanishing vectors
+        ! removes linearly dependent and vanishing vectors, with a warning for every
+        ! linearly dependent one unless warn_lin_dep is false, for callers whose
+        ! vectors are routinely linearly dependent
         !
         real(rp), intent(inout), allocatable :: red_space_basis(:, :)
-        class(optimizer_settings_type), intent(in) :: settings
+        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
+        logical, intent(in), optional :: warn_lin_dep
 
         integer(ip) :: n_param, i, num_valid
         real(rp), allocatable :: tmp_red_space_basis(:, :)
+        logical :: warn
         real(rp), external :: dnrm2
 
         ! initialize error flag
         error = 0
+
+        ! warn about linearly dependent vectors unless asked not to
+        warn = .true.
+        if (present(warn_lin_dep)) warn = warn_lin_dep
 
         ! number of parameters
         n_param = size(red_space_basis, 1)
@@ -2375,7 +2384,8 @@ contains
             call gram_schmidt(red_space_basis(:, i), red_space_basis(:, :num_valid), &
                               settings, error)
             if (error == error_gram_schmidt_lin_dep) then
-                call settings%log(lin_dep_trial_vector_warning_msg, verbosity_warning)
+                if (warn) call settings%log(lin_dep_trial_vector_warning_msg, &
+                                            verbosity_warning)
                 error = 0
                 cycle
             end if
@@ -2397,14 +2407,15 @@ contains
         !
         ! this subroutine orthonormalizes a vector with respect to a vector space,
         ! which keeps a vector within the range of the projection if the vector and the
-        ! space lie within it, so that neither has to be projected again; this
-        ! subroutine can additionally also return a linear transformation of the
-        ! orthogonalized vector if the linear transformations of the vector and the
-        ! vector space are provided
+        ! space lie within it, so that neither has to be projected again, and returns a
+        ! vector linearly dependent on the space as error_gram_schmidt_lin_dep without
+        ! a message; this subroutine can additionally also return a linear
+        ! transformation of the orthogonalized vector if the linear transformations of
+        ! the vector and the vector space are provided
         !
         real(rp), intent(inout) :: vector(:)
         real(rp), intent(in) :: space(:, :)
-        class(optimizer_settings_type), intent(in) :: settings
+        class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
         real(rp), intent(inout), optional :: lin_trans_vector(:)
         real(rp), intent(in), optional :: lin_trans_space(:, :)
@@ -2431,11 +2442,13 @@ contains
                               "numerically zero.", verbosity_error, .true.)
             error = 1
             return
-        else if (n_vectors > n_param - 1) then
-            call settings%log("Number of vectors in Gram-Schmidt procedure larger "// &
-                              "than dimension of vector space.", verbosity_error, &
-                              .true.)
-            error = 1
+        end if
+
+        ! a space spanning the whole vector space leaves no direction to add, which the
+        ! projection below cannot reliably tell from its rounding errors for many
+        ! vectors
+        if (n_vectors >= n_param) then
+            error = error_gram_schmidt_lin_dep
             return
         end if
 
@@ -3015,7 +3028,7 @@ contains
             call split_string_by_space(message, max_length, substrings)
             if (associated(self%logger)) then
                 do i = 1, size(substrings)
-                    call self%logger(" "//substrings(i), self%context)
+                    call self%logger(" "//trim(substrings(i)), self%context)
                 end do
             else
                 if (.not. present(error)) then
@@ -3026,7 +3039,7 @@ contains
                     out_unit = stderr
                 end if
                 do i = 1, size(substrings)
-                    write(out_unit, '(A)') " "//substrings(i)
+                    write(out_unit, '(A)') " "//trim(substrings(i))
                 end do
             end if
             deallocate(substrings)

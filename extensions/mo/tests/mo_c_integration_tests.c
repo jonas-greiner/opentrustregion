@@ -79,16 +79,21 @@ bool test_mo_settings_layout(void) {
     return false;
   }
 
-  /* check that every field is read back under its own name */
+  /* check that every field is read back under its own name, from settings filled
+   * with zero and then with one bytes before, so that no reference value can match
+   * bytes the library did not write */
   bool ok = true;
-  mo_settings_type s = {0};
-  get_reference_mo_values(&s);
-  reference_field_fn *lookup = reference_mo_field;
-  const char *test_name = "test_mo_settings_layout";
-  ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
-  ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
-  ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
-  ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
+  for (int fill = 0; fill < 2; fill++) {
+    mo_settings_type s;
+    memset(&s, fill, sizeof(s));
+    get_reference_mo_values(&s);
+    reference_field_fn *lookup = reference_mo_field;
+    const char *test_name = "test_mo_settings_layout";
+    ok &= check_settings_field(lookup, (uintptr_t)s.logger, "logger", test_name);
+    ok &= check_settings_field(lookup, s.initialized, "initialized", test_name);
+    ok &= check_settings_field(lookup, s.verbose, "verbose", test_name);
+    ok &= check_settings_field(lookup, (uintptr_t)s.context, "context", test_name);
+  }
 
   return ok;
 }

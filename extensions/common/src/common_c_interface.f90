@@ -16,7 +16,7 @@ module otr_common_c_interface
                           hess_x_callback, precond_callback, precond_pd_callback, &
                           project_callback, get_extra_trial_vectors_callback, &
                           evaluate_dm_cs_type, evaluate_dm_os_type, &
-                          get_response_cs_type, get_response_os_type
+                          get_response_cs_type, get_response_os_type, obj_func_grad_type
     use, intrinsic :: iso_c_binding, only: c_bool, c_char, c_ptr, c_funptr, c_funloc, &
                                            c_loc, c_f_pointer, c_f_procpointer, &
                                            c_associated, c_null_funptr
@@ -51,12 +51,35 @@ module otr_common_c_interface
         end function get_response_c_type
     end interface
 
+    ! C-interoperable interface for the objective function that also returns the
+    ! gradient at a trial point, a callback of the settings of the extensions learning
+    ! from trial points
+    abstract interface
+        function obj_func_grad_c_type(kappa_c, grad_c, func_c, context_c) &
+            result(error_c) bind(C)
+            import :: c_rp, c_ip, c_ptr
+
+            real(c_rp), intent(in), target :: kappa_c(*)
+            real(c_rp), intent(out), target :: grad_c(*)
+            real(c_rp), intent(out) :: func_c
+            type(c_ptr), intent(in), value :: context_c
+            integer(c_ip) :: error_c
+        end function obj_func_grad_c_type
+    end interface
+
     ! bundle of the C callback functions of an orbital basis, which extends that of the
     ! core by the density matrix evaluating function and the response function it
     ! returned last
     type, extends(c_callbacks_type) :: orbital_c_callbacks_type
         procedure(evaluate_dm_c_type), pointer, nopass :: evaluate_dm => null()
         procedure(get_response_c_type), pointer, nopass :: get_response => null()
+    end type
+
+    ! bundle of the C callback functions of an extension whose settings carry the
+    ! objective function that also returns the gradient at a trial point, which extends
+    ! that of the core by that function and which the bundles of these extensions extend
+    type, extends(c_callbacks_type) :: obj_func_grad_c_callbacks_type
+        procedure(obj_func_grad_c_type), pointer, nopass :: obj_func_grad => null()
     end type
 
     ! one level of the holder of an extension object for C hosts, whose address is the
@@ -117,6 +140,8 @@ module otr_common_c_interface
         get_response_cs_f_wrapper
     procedure(get_response_os_type), pointer :: get_response_os_f_wrapper_ptr => &
         get_response_os_f_wrapper
+    procedure(obj_func_grad_type), pointer :: obj_func_grad_f_wrapper_ptr => &
+        obj_func_grad_f_wrapper
 
 contains
 
@@ -1013,5 +1038,41 @@ contains
         end select
 
     end subroutine get_response_os_f_wrapper
+
+    function obj_func_grad_f_wrapper(kappa, grad, error, context) result(func)
+        !
+        ! this function exposes the C objective function of the settings, which also
+        ! returns the gradient at the trial point, to Fortran, finding the C function
+        ! and the host context in the bundle it receives as context, which it copies
+        ! the state into first
+        !
+        use c_interface, only: copy_state_to_c
+
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out), target :: grad(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        integer(c_ip) :: error_c
+        real(c_rp) :: func_c
+
+        ! the bundle holds the C function
+        func = 0.0_rp
+        error = 1
+        if (.not. associated(context)) return
+        select type (callbacks => context)
+        class is (obj_func_grad_c_callbacks_type)
+            ! call objective C function
+            call copy_state_to_c(callbacks%c_callbacks_type)
+            error_c = &
+                callbacks%obj_func_grad(kappa, grad, func_c, callbacks%host_context)
+
+            ! convert function value and error code to Fortran kinds
+            func = real(func_c, kind=rp)
+            error = int(error_c, kind=ip)
+        end select
+
+    end function obj_func_grad_f_wrapper
 
 end module otr_common_c_interface

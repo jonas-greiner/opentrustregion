@@ -14,22 +14,6 @@ module otr_mo_unit_tests
 
 contains
 
-    function diagonal_matrix(values) result(matrix)
-        !
-        ! this function returns the diagonal matrix of the given values
-        !
-        real(rp), intent(in) :: values(:)
-        real(rp) :: matrix(size(values), size(values))
-
-        integer(ip) :: i
-
-        matrix = 0.0_rp
-        do i = 1, size(values, kind=ip)
-            matrix(i, i) = values(i)
-        end do
-
-    end function diagonal_matrix
-
     function masked_mo_channels(n_occ, n_mo, irreps) result(mo_channels)
         !
         ! this function returns the particle channels of the given occupations with the
@@ -1426,6 +1410,7 @@ contains
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type, error_mo
+        use otr_common, only: error_evaluate_dm
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_ao, n_occ, &
@@ -1543,10 +1528,10 @@ contains
                 test_obj_func_mo = .false.
 
             ! call routine with a density matrix evaluating function that fails and
-            ! determine if its error is returned unchanged
+            ! determine if its error is returned with its origin
             context%mock_error = 3
             energy = mo%obj_func(kappa, error, level_context(mo, 1_ip))
-            if (error /= 3) then
+            if (error /= error_evaluate_dm + 3) then
                 write(stderr, *) "test_obj_func_mo failed: Error of the density "// &
                     "matrix evaluating function not returned for the "//case_name// &
                     " case."
@@ -1629,7 +1614,7 @@ contains
         !
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type, error_mo
-        use otr_common, only: hess_x_callback
+        use otr_common, only: hess_x_callback, error_evaluate_dm
         use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_mo_test_reference, only: n_mo
@@ -1821,12 +1806,12 @@ contains
             end if
 
             ! call routine with the orbital rotation again, whose evaluation fails, and
-            ! determine if the error is passed on and the rotated orbitals are marked
-            ! as not evaluated
+            ! determine if the error is passed on with its origin and the rotated
+            ! orbitals are marked as not evaluated
             context%mock_error = 1
             call mo%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                 level_context(mo, 1_ip))
-            if (error /= 1) then
+            if (error /= error_evaluate_dm + 1) then
                 write(stderr, *) "test_update_orbs_mo failed: Error of the density "// &
                     "matrix evaluating function not passed on for the "//case_name// &
                     " case."
@@ -1925,6 +1910,7 @@ contains
         !
         use test_reference, only: arm_host_context, host_context_reached
         use otr_mo, only: mo_type, error_mo
+        use otr_common, only: error_get_response
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               generate_random_symm_matrix
         use otr_mo_test_reference, only: n_mo, n_cases, case_n_particle, case_n_occ, &
@@ -2007,10 +1993,10 @@ contains
                 test_hess_x_mo = .false.
 
             ! call routine with a response function that fails and determine if its
-            ! error is returned unchanged
+            ! error is returned with its origin
             context%mock_error = 3
             call mo%hess_x(x, hess_x, error, level_context(mo, 1_ip))
-            if (error /= 3) then
+            if (error /= error_get_response + 3) then
                 write(stderr, *) "test_hess_x_mo failed: Error of the response "// &
                     "function not returned for the "//case_name//" case."
                 test_hess_x_mo = .false.
@@ -2396,6 +2382,7 @@ contains
         ! occupied-occupied and virtual-virtual blocks of the Fock matrix per irrep, if
         ! it is stale
         !
+        use otr_common_unit_tests, only: diagonal_matrix
         use otr_mo, only: mo_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -2629,7 +2616,7 @@ contains
         ! the most negative eigenvalue pairs of the static part of the Hessian for the
         ! MO basis
         !
-        use otr_common_unit_tests, only: level_context
+        use otr_common_unit_tests, only: level_context, diagonal_matrix
         use otr_mo, only: mo_type
         use otr_mo_test_reference, only: n_mo
         use otr_common_test_reference, only: n_occ
@@ -3095,6 +3082,7 @@ contains
         ! this function tests the subroutine which diagonalizes a symmetric matrix
         ! between orbitals of given irreps separately for every irrep
         !
+        use otr_common_unit_tests, only: diagonal_matrix
         use otr_common, only: orbital_settings_type
         use otr_mo, only: diagonalize_per_irrep
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &

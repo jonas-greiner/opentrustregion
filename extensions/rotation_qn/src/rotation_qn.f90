@@ -8,24 +8,13 @@ module otr_rotation_qn
 
     use opentrustregion_core, only: rp, ip, kw_len, settings_type, update_orbs_type, &
                                     hess_x_type, precond_type, add_error_origin
-    use otr_common, only: extension_type, extension_level_type, provided_roles_type
+    use otr_common, only: extension_type, extension_level_type, provided_roles_type, &
+                          obj_func_grad_type, sr1_terms, bfgs_terms
 
     implicit none
 
-    ! interfaces for callback functions
-    abstract interface
-        function obj_func_grad_type(kappa, grad, error, context) result(func)
-            import :: rp, ip
-
-            real(rp), intent(in), target :: kappa(:)
-            real(rp), intent(out), target :: grad(:)
-            integer(ip), intent(out) :: error
-            class(*), intent(in), pointer :: context
-            real(rp) :: func
-
-        end function obj_func_grad_type
-    end interface
-
+    ! interface for the transport callback function, while otr_common holds that of the
+    ! objective function that also returns the gradient at a trial point
     abstract interface
         subroutine transport_type(geodesic, tangent_vector, error, context)
             import :: rp, ip
@@ -64,14 +53,11 @@ module otr_rotation_qn
         "set to default values"
 
     ! error origin of the rotation QN extension, with which its factory and object tag
-    ! the errors they detect themselves
-    integer(ip), parameter :: error_rotation_qn = 5400
-
-    ! relative thresholds below which the updating schemes skip a pair of the history:
-    ! the SR1 denominator s^T (y - B s) relative to |s| |y - B s| (Nocedal & Wright,
-    ! Numerical Optimization, Eq. 6.26) and the BFGS curvatures s^T y relative to
-    ! |s| |y| and s^T B s relative to |s| |B s|
-    real(rp), parameter :: sr1_skip_thresh = 1e-8_rp, bfgs_skip_thresh = 1e-8_rp
+    ! the errors they detect themselves, and of the preconditioner of the initial
+    ! Hessian and the transport function of its settings, with which their invoke
+    ! routines tag the errors these return
+    integer(ip), parameter :: error_rotation_qn = 5400, error_init_precond = 7500, &
+                              error_transport = 7700
 
     ! rotation QN object, holding the history of steps and gradient differences, the
     ! settings, the Hessian diagonal of the current point and the model the updating
@@ -94,26 +80,32 @@ module otr_rotation_qn
         procedure :: add_pair => add_pair_rotation_qn
         procedure :: model_x => model_x_rotation_qn
         procedure :: init_precond => init_precond_rotation_qn
-        procedure(build_model_interface), deferred :: build_model
+        procedure :: build_model => build_model_rotation_qn
+        procedure(build_terms_interface), deferred, nopass :: build_terms
     end type
 
     type, extends(updating_type) :: sr1_updating_type
     contains
-        procedure :: build_model => build_model_sr1
+        procedure, nopass :: build_terms => sr1_terms
     end type
 
     type, extends(updating_type) :: bfgs_updating_type
     contains
-        procedure :: build_model => build_model_bfgs
+        procedure, nopass :: build_terms => bfgs_terms
     end type
 
+    ! interface of the rank-1 terms of the updates of an updating scheme, those of
+    ! otr_common
     abstract interface
-        subroutine build_model_interface(self, error)
-            import updating_type, ip
+        subroutine build_terms_interface(steps, grad_diffs, init_steps, vectors, &
+                                         coeffs, n_terms, kept)
+            import rp, ip
 
-            class(updating_type), intent(inout) :: self
-            integer(ip), intent(out) :: error
-        end subroutine build_model_interface
+            real(rp), intent(in) :: steps(:, :), grad_diffs(:, :), init_steps(:, :)
+            real(rp), intent(out) :: vectors(:, :), coeffs(:)
+            integer(ip), intent(out) :: n_terms
+            logical, intent(out) :: kept(:)
+        end subroutine build_terms_interface
     end interface
 
 contains
@@ -243,44 +235,13 @@ contains
 
     end subroutine rotation_qn_sanity_check
 
-    subroutine invoke_init_hess(init_hess, x, init_hess_x, settings, error_origin, &
-                                error)
-        !
-        ! this subroutine applies the initial Hessian of the settings with their host
-        ! context and passes on its error, and returns an error of its own with the
-        ! origin of the object if it returns values that are not finite
-        !
-        use opentrustregion_core, only: verbosity_error
-        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-
-        procedure(hess_x_type), intent(in), pointer :: init_hess
-        real(rp), intent(in), target :: x(:)
-        real(rp), intent(out), target :: init_hess_x(:)
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(in) :: error_origin
-        integer(ip), intent(out) :: error
-
-        ! apply the initial Hessian
-        call init_hess(x, init_hess_x, error, settings%context)
-        if (error /= 0) return
-
-        ! check the result
-        if (.not. all(ieee_is_finite(init_hess_x))) then
-            call settings%log("Initial Hessian returned values that are not finite.", &
-                              verbosity_error, .true.)
-            error = 1
-            call add_error_origin(error, error_origin, settings)
-        end if
-
-    end subroutine invoke_init_hess
-
     subroutine invoke_init_precond(init_precond, x, mu, init_precond_x, settings, &
                                    error_origin, error)
         !
         ! this subroutine applies the preconditioner of the initial Hessian of the
-        ! settings, shifted by a level shift, with their host context and passes on its
-        ! error, and returns an error of its own with the origin of the object if it
-        ! returns values that are not finite
+        ! settings, shifted by a level shift, with their host context and tags its
+        ! error with the origin of the preconditioner, and returns an error of its own
+        ! with the origin of the object if it returns values that are not finite
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -295,6 +256,7 @@ contains
 
         ! apply the preconditioner of the initial Hessian
         call init_precond(x, mu, init_precond_x, error, settings%context)
+        call add_error_origin(error, error_init_precond, settings)
         if (error /= 0) return
 
         ! check the result
@@ -307,57 +269,16 @@ contains
 
     end subroutine invoke_init_precond
 
-    subroutine invoke_obj_func_grad(obj_func_grad, kappa, func, grad, settings, &
-                                    error_origin, error)
-        !
-        ! this subroutine calls the objective function of the settings, which also
-        ! returns the gradient at the trial point, with their host context and passes
-        ! on its error; an energy that is not a number counts as infinite and leaves
-        ! the gradient unchecked, as it does for an infinite energy, which rejects the
-        ! step, while it returns an error of its own with the origin of the object for
-        ! a finite energy whose gradient is not finite
-        !
-        use opentrustregion_core, only: verbosity_error
-        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
-                                                 ieee_value, ieee_positive_inf
-
-        procedure(obj_func_grad_type), intent(in), pointer :: obj_func_grad
-        real(rp), intent(in), target :: kappa(:)
-        real(rp), intent(out) :: func
-        real(rp), intent(out), target :: grad(:)
-        class(settings_type), intent(in) :: settings
-        integer(ip), intent(in) :: error_origin
-        integer(ip), intent(out) :: error
-
-        ! call the objective function
-        func = obj_func_grad(kappa, grad, error, settings%context)
-        if (error /= 0) return
-
-        ! an energy that is not a number counts as infinite, and the gradient of an
-        ! infinite energy is not used
-        if (ieee_is_nan(func)) func = ieee_value(func, ieee_positive_inf)
-        if (.not. ieee_is_finite(func)) return
-
-        ! check the gradient
-        if (.not. all(ieee_is_finite(grad))) then
-            call settings%log("Objective function returned a gradient that is not "// &
-                              "finite.", verbosity_error, .true.)
-            error = 1
-            call add_error_origin(error, error_origin, settings)
-        end if
-
-    end subroutine invoke_obj_func_grad
-
     subroutine invoke_transport(transport, geodesic, tangent_vector, settings, &
                                 error_origin, error)
         !
         ! this subroutine transports a tangent vector along a geodesic with the
-        ! transport function of the settings and their host context and passes on its
-        ! error, and returns an error of its own with the origin of the object if the
-        ! function returns values that are not finite, while without a transport
-        ! function it leaves the tangent vector unchanged, which transports it exactly
-        ! in a flat space and in the frame that moves with the geodesic on the
-        ! Grassmann manifold
+        ! transport function of the settings and their host context and tags its error
+        ! with the origin of the function, and returns an error of its own with the
+        ! origin of the object if it returns values that are not finite, while without
+        ! a transport function it leaves the tangent vector unchanged, which transports
+        ! it exactly in a flat space and in the frame that moves with the geodesic on
+        ! the Grassmann manifold
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -375,6 +296,7 @@ contains
 
         ! call the transport function
         call transport(geodesic, tangent_vector, error, settings%context)
+        call add_error_origin(error, error_transport, settings)
         if (error /= 0) return
 
         ! check the result
@@ -442,7 +364,7 @@ contains
         ! every evaluated trial step, also a rejected one, adds its pair, and otherwise
         ! evaluates the host's objective function with the host context of the level
         !
-        use otr_common, only: obj_func_extension
+        use otr_common, only: obj_func_extension, invoke_obj_func_grad
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
         class(updating_type), intent(inout) :: self
@@ -586,14 +508,13 @@ contains
         ! this subroutine applies the initial Hessian, updated by the first n_terms
         ! rank-1 terms of the model, to a vector
         !
+        use otr_common, only: invoke_init_hess, terms_x
+
         class(updating_type), intent(in) :: self
         real(rp), intent(in), target :: x(:)
         real(rp), intent(out), target :: model_x(:)
         integer(ip), intent(in) :: n_terms
         integer(ip), intent(out) :: error
-
-        real(rp) :: projections(n_terms)
-        external :: dgemv
 
         ! apply the initial Hessian of the settings or the Hessian diagonal
         if (associated(self%settings%init_hess)) then
@@ -604,14 +525,9 @@ contains
             error = 0
             model_x = self%h_diag * x
         end if
-        if (n_terms == 0) return
 
-        ! add coeffs(k) vectors(:, k) vectors(:, k)^T x for every term
-        call dgemv("T", self%n_param, n_terms, 1.0_rp, self%vectors, self%n_param, x, &
-                   1_ip, 0.0_rp, projections, 1_ip)
-        projections = self%coeffs(:n_terms) * projections
-        call dgemv("N", self%n_param, n_terms, 1.0_rp, self%vectors, self%n_param, &
-                   projections, 1_ip, 1.0_rp, model_x, 1_ip)
+        ! add the terms
+        model_x = model_x + terms_x(self%vectors, self%coeffs, n_terms, x)
 
     end subroutine model_x_rotation_qn
 
@@ -636,11 +552,12 @@ contains
         ! this subroutine applies the inverse of the level-shifted initial Hessian, the
         ! preconditioner of the settings or, without one, the level-shifted diagonal
         ! preconditioner of the Hessian diagonal the solver applies without one,
-        ! followed by the host's projection of the level it receives as context, and
-        ! returns an error with the origin of the object if the projection returns
-        ! values that are not finite
+        ! followed by the host's projection of the level it receives as context, whose
+        ! error it tags with the origin of the projection, and returns an error with
+        ! the origin of the object if the projection returns values that are not finite
         !
-        use opentrustregion_core, only: level_shifted_divisors, verbosity_error
+        use opentrustregion_core, only: level_shifted_divisors, verbosity_error, &
+                                        error_project
         use otr_common, only: extension_level
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
@@ -668,6 +585,7 @@ contains
         level => extension_level(context)
         if (associated(level%host%project)) then
             call level%host%project(init_precond_x, error, level%host%context)
+            call add_error_origin(error, error_project, self%settings)
             if (error /= 0) return
             if (.not. all(ieee_is_finite(init_precond_x))) then
                 call self%settings%log("Projection returned values that are not "// &
@@ -684,11 +602,12 @@ contains
         !
         ! this subroutine is the preconditioner of the rotation QN object, which
         ! applies the inverse of its level-shifted model by the
-        ! Sherman-Morrison-Woodbury formula,
-        ! (A + V C V^T)^-1 = A^-1 - A^-1 V (C^-1 + V^T A^-1 V)^-1 V^T A^-1, with the
-        ! inverse A^-1 of the level-shifted initial Hessian, or only that inverse where
-        ! the level shift makes the model singular
+        ! Sherman-Morrison-Woodbury formula with the inverse of the level-shifted
+        ! initial Hessian, or only that inverse where the level shift makes the model
+        ! singular
         !
+        use otr_common, only: woodbury_x
+
         class(updating_type), intent(inout) :: self
         real(rp), intent(in), target :: residual(:)
         real(rp), intent(in) :: mu
@@ -696,11 +615,8 @@ contains
         integer(ip), intent(out) :: error
         class(*), intent(in), pointer :: context
 
-        real(rp), allocatable :: init_precond_vectors(:, :), capacitance(:, :), &
-                                 projections(:)
-        integer(ip), allocatable :: pivots(:)
-        integer(ip) :: k, info
-        external :: dgemm, dgemv, dgesv
+        real(rp), allocatable :: init_precond_vectors(:, :)
+        integer(ip) :: k
 
         ! apply the inverse of the level-shifted initial Hessian to the residual
         call self%init_precond(residual, mu, precond_residual, error, context)
@@ -714,25 +630,9 @@ contains
             if (error /= 0) return
         end do
 
-        ! capacitance matrix C^-1 + V^T A^-1 V and projections V^T A^-1 r
-        allocate(capacitance(self%n_terms, self%n_terms), projections(self%n_terms), &
-                 pivots(self%n_terms))
-        call dgemm("T", "N", self%n_terms, self%n_terms, self%n_param, 1.0_rp, &
-                   self%vectors, self%n_param, init_precond_vectors, self%n_param, &
-                   0.0_rp, capacitance, self%n_terms)
-        do k = 1, self%n_terms
-            capacitance(k, k) = capacitance(k, k) + 1.0_rp / self%coeffs(k)
-        end do
-        call dgemv("T", self%n_param, self%n_terms, 1.0_rp, self%vectors, &
-                   self%n_param, precond_residual, 1_ip, 0.0_rp, projections, 1_ip)
-
-        ! subtract A^-1 V (C^-1 + V^T A^-1 V)^-1 V^T A^-1 r, unless the level shift
-        ! makes the model singular
-        call dgesv(self%n_terms, 1_ip, capacitance, self%n_terms, pivots, projections, &
-                   self%n_terms, info)
-        if (info /= 0) return
-        call dgemv("N", self%n_param, self%n_terms, -1.0_rp, init_precond_vectors, &
-                   self%n_param, projections, 1_ip, 1.0_rp, precond_residual, 1_ip)
+        ! inverse of the level-shifted model applied to the residual
+        call woodbury_x(self%vectors, self%coeffs, self%n_terms, init_precond_vectors, &
+                        precond_residual)
 
     end subroutine precond_rotation_qn
 
@@ -751,119 +651,40 @@ contains
 
     end subroutine keep_pair
 
-    subroutine build_model_sr1(self, error)
+    subroutine build_model_rotation_qn(self, error)
         !
-        ! this subroutine builds the model of the SR1 updating scheme by applying the
-        ! symmetric rank-1 update of every pair of the history, from the oldest to the
-        ! newest, to the initial Hessian, B_j = B_{j-1} + r r^T / (s^T r) with
-        ! r = y - B_{j-1} s, the recursive form of the limited-memory SR1 matrix of
-        ! Byrd, R.H., Nocedal, J. & Schnabel, R.B. Mathematical Programming 63,
-        ! 129–156 (1994), https://doi.org/10.1007/BF01582063, and drops every pair
-        ! whose denominator is too small
+        ! this subroutine builds the model of the updating scheme from the history, the
+        ! rank-1 terms of the updates of the initial Hessian over every pair, from the
+        ! oldest to the newest, and drops the pairs the scheme skips
         !
-        class(sr1_updating_type), intent(inout) :: self
+        class(updating_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
-        integer(ip) :: i, n_kept
-        real(rp) :: residual(self%n_param), denominator
+        real(rp), allocatable :: init_kappa_list(:, :)
         logical :: kept(self%n_points)
-        real(rp), external :: ddot, dnrm2
+        integer(ip) :: i, n_kept
 
-        ! initialize error flag
-        error = 0
-
+        ! the initial Hessian applied to the step of every pair
         self%n_terms = 0
-        kept = .false.
+        allocate(init_kappa_list(self%n_param, self%n_points))
         do i = 1, self%n_points
-            ! residual of the secant condition of the model so far
-            call self%model_x(self%kappa_list(:, i), residual, self%n_terms, error)
+            call self%model_x(self%kappa_list(:, i), init_kappa_list(:, i), 0_ip, error)
             if (error /= 0) return
-            residual = self%grad_diff_list(:, i) - residual
-
-            ! skip the pair if the denominator is too small
-            denominator = ddot(self%n_param, self%kappa_list(:, i), 1_ip, residual, &
-                               1_ip)
-            if (abs(denominator) <= &
-                sr1_skip_thresh * dnrm2(self%n_param, self%kappa_list(:, i), 1_ip) * &
-                dnrm2(self%n_param, residual, 1_ip)) cycle
-
-            ! add the term of the pair
-            kept(i) = .true.
-            self%n_terms = self%n_terms + 1
-            self%vectors(:, self%n_terms) = residual
-            self%coeffs(self%n_terms) = 1.0_rp / denominator
         end do
+
+        ! terms of the pairs the scheme keeps
+        call self%build_terms(self%kappa_list(:, :self%n_points), &
+                              self%grad_diff_list(:, :self%n_points), init_kappa_list, &
+                              self%vectors, self%coeffs, self%n_terms, kept)
 
         ! drop the skipped pairs from the history only now, so that an error leaves it
         ! whole
         n_kept = 0
-        do i = 1, size(kept)
-            if (kept(i)) call keep_pair(self, i, n_kept)
-        end do
-        self%n_points = n_kept
-
-    end subroutine build_model_sr1
-
-    subroutine build_model_bfgs(self, error)
-        !
-        ! this subroutine builds the model of the BFGS updating scheme by applying the
-        ! BFGS update of every pair of the history, from the oldest to the newest, to
-        ! the initial Hessian, B_j = B_{j-1} - B_{j-1} s s^T B_{j-1} / (s^T B_{j-1} s)
-        ! + y y^T / (s^T y), the recursive form of the limited-memory BFGS matrix of
-        ! Byrd, R.H., Nocedal, J. & Schnabel, R.B. Mathematical Programming 63,
-        ! 129–156 (1994), https://doi.org/10.1007/BF01582063, and drops every pair
-        ! whose curvature along its step, in the history or in the model so far, is
-        ! not sufficiently positive, which keeps the model positive definite if the
-        ! initial Hessian is
-        !
-        class(bfgs_updating_type), intent(inout) :: self
-        integer(ip), intent(out) :: error
-
-        integer(ip) :: i, n_kept
-        real(rp) :: model_kappa(self%n_param), kappa_grad_diff, kappa_model_kappa
-        logical :: kept(self%n_points)
-        real(rp), external :: ddot, dnrm2
-
-        ! initialize error flag
-        error = 0
-
-        self%n_terms = 0
-        kept = .false.
         do i = 1, self%n_points
-            ! skip the pair if its curvature is not sufficiently positive
-            kappa_grad_diff = ddot(self%n_param, self%kappa_list(:, i), 1_ip, &
-                                   self%grad_diff_list(:, i), 1_ip)
-            if (kappa_grad_diff <= &
-                bfgs_skip_thresh * dnrm2(self%n_param, self%kappa_list(:, i), 1_ip) * &
-                dnrm2(self%n_param, self%grad_diff_list(:, i), 1_ip)) cycle
-
-            ! skip the pair if the curvature of the model so far is not sufficiently
-            ! positive
-            call self%model_x(self%kappa_list(:, i), model_kappa, self%n_terms, error)
-            if (error /= 0) return
-            kappa_model_kappa = ddot(self%n_param, self%kappa_list(:, i), 1_ip, &
-                                     model_kappa, 1_ip)
-            if (kappa_model_kappa <= &
-                bfgs_skip_thresh * dnrm2(self%n_param, self%kappa_list(:, i), 1_ip) * &
-                dnrm2(self%n_param, model_kappa, 1_ip)) cycle
-
-            ! add the two terms of the pair
-            kept(i) = .true.
-            self%vectors(:, self%n_terms + 1) = model_kappa
-            self%coeffs(self%n_terms + 1) = -1.0_rp / kappa_model_kappa
-            self%vectors(:, self%n_terms + 2) = self%grad_diff_list(:, i)
-            self%coeffs(self%n_terms + 2) = 1.0_rp / kappa_grad_diff
-            self%n_terms = self%n_terms + 2
-        end do
-
-        ! drop the skipped pairs from the history only now, so that an error leaves it
-        ! whole
-        n_kept = 0
-        do i = 1, size(kept)
             if (kept(i)) call keep_pair(self, i, n_kept)
         end do
         self%n_points = n_kept
 
-    end subroutine build_model_bfgs
+    end subroutine build_model_rotation_qn
 
 end module otr_rotation_qn

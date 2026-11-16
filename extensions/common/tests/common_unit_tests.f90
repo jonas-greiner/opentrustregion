@@ -780,6 +780,22 @@ contains
 
     end function mock_get_hess_eigval_pairs
 
+    function diagonal_matrix(values) result(matrix)
+        !
+        ! this function returns the diagonal matrix of the given values
+        !
+        real(rp), intent(in) :: values(:)
+        real(rp) :: matrix(size(values), size(values))
+
+        integer(ip) :: i
+
+        matrix = 0.0_rp
+        do i = 1, size(values, kind=ip)
+            matrix(i, i) = values(i)
+        end do
+
+    end function diagonal_matrix
+
     function generate_random_orthogonal_matrix(n) result(matrix)
         !
         ! this function returns a random orthogonal matrix, obtained as the
@@ -996,6 +1012,65 @@ contains
 
     end subroutine setup_mock_orbital_basis
 
+    function ref_sr1_update(hess, steps, grad_diffs) result(updated)
+        !
+        ! this function returns the recursive SR1 updates of the symmetrized hess over
+        ! the pairs of steps and gradient differences, skipping those whose denominator
+        ! is too small
+
+        !
+        use otr_common, only: sr1_skip_thresh
+
+        real(rp), intent(in) :: hess(:, :), steps(:, :), grad_diffs(:, :)
+        real(rp) :: updated(size(hess, 1), size(hess, 2))
+
+        real(rp) :: residual(size(steps, 1)), denominator
+        integer(ip) :: n, j
+
+        n = size(steps, 1, kind=ip)
+        updated = 0.5_rp * (hess + transpose(hess))
+        do j = 1, size(steps, 2, kind=ip)
+            residual = grad_diffs(:, j) - matmul(updated, steps(:, j))
+            denominator = dot_product(steps(:, j), residual)
+            if (abs(denominator) <= &
+                sr1_skip_thresh * norm2(steps(:, j)) * norm2(residual)) cycle
+            updated = updated + &
+                      spread(residual, 2, n) * spread(residual, 1, n) / denominator
+        end do
+
+    end function ref_sr1_update
+
+    function ref_bfgs_update(hess, steps, grad_diffs) result(updated)
+        !
+        ! this function returns the recursive BFGS updates of the symmetrized hess over
+        ! the pairs of steps and gradient differences, skipping those without
+        ! sufficiently positive curvature in the pair or in the updated hess so far
+        !
+        use otr_common, only: bfgs_skip_thresh
+
+        real(rp), intent(in) :: hess(:, :), steps(:, :), grad_diffs(:, :)
+        real(rp) :: updated(size(hess, 1), size(hess, 2))
+
+        real(rp) :: model_step(size(steps, 1)), curvature, model_curvature
+        integer(ip) :: n, j
+
+        n = size(steps, 1, kind=ip)
+        updated = 0.5_rp * (hess + transpose(hess))
+        do j = 1, size(steps, 2, kind=ip)
+            curvature = dot_product(steps(:, j), grad_diffs(:, j))
+            if (curvature <= &
+                bfgs_skip_thresh * norm2(steps(:, j)) * norm2(grad_diffs(:, j))) cycle
+            model_step = matmul(updated, steps(:, j))
+            model_curvature = dot_product(steps(:, j), model_step)
+            if (model_curvature <= &
+                bfgs_skip_thresh * norm2(steps(:, j)) * norm2(model_step)) cycle
+            updated = updated - spread(model_step, 2, n) * spread(model_step, 1, n) / &
+                      model_curvature + spread(grad_diffs(:, j), 2, n) * &
+                      spread(grad_diffs(:, j), 1, n) / curvature
+        end do
+
+    end function ref_bfgs_update
+
     logical function check_forwarded(test_name, i_level, host_callback, contexts, &
                                      case_name)
         !
@@ -1145,7 +1220,7 @@ contains
         use otr_common, only: orbital_settings_type, evaluate_dm_cs_type, &
                               evaluate_dm_os_type, get_response_cs_type, &
                               get_response_os_type, invoke_evaluate_dm_cs, &
-                              invoke_evaluate_dm_os
+                              invoke_evaluate_dm_os, error_evaluate_dm
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common_test_reference, only: n_ao, shell_names
@@ -1208,12 +1283,12 @@ contains
         end if
         if (.not. host_context_reached(test_name, context)) test_passed = .false.
 
-        ! let the function fail and check that its error is passed on unchanged
+        ! let the function fail and check that its error is passed on with its origin
         context%mock_error = 3
         call evaluate()
-        if (error /= 3) then
+        if (error /= error_evaluate_dm + 3) then
             write(stderr, *) "test_"//test_name// &
-                " failed: Error of the function not passed on unchanged"//suffix
+                " failed: Error of the function not passed on with its origin"//suffix
             test_passed = .false.
         end if
         context%mock_error = 0
@@ -1283,7 +1358,7 @@ contains
         !
         use otr_common, only: orbital_settings_type, get_response_cs_type, &
                               get_response_os_type, invoke_get_response_cs, &
-                              invoke_get_response_os
+                              invoke_get_response_os, error_get_response
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
         use otr_common_test_reference, only: n_ao, shell_names
@@ -1325,12 +1400,12 @@ contains
         end if
         if (.not. host_context_reached(test_name, context)) test_passed = .false.
 
-        ! let the function fail and check that its error is passed on unchanged
+        ! let the function fail and check that its error is passed on with its origin
         context%mock_error = 3
         call respond()
-        if (error /= 3) then
+        if (error /= error_get_response + 3) then
             write(stderr, *) "test_"//test_name// &
-                " failed: Error of the function not passed on unchanged"//suffix
+                " failed: Error of the function not passed on with its origin"//suffix
             test_passed = .false.
         end if
         context%mock_error = 0
@@ -2949,6 +3024,379 @@ contains
 
     end function test_invoke_get_response_os
 
+    logical(c_bool) function test_invoke_init_hess() bind(C)
+        !
+        ! this function tests the subroutine which applies the initial Hessian of the
+        ! settings
+        !
+        use opentrustregion_core, only: hess_x_type
+        use otr_common, only: orbital_settings_type, invoke_init_hess, error_init_hess
+        use otr_common_mock, only: mock_init_hess, init_hess_diag
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use test_reference, only: n_param, arm_host_context, host_context_reached
+
+        integer(ip), parameter :: error_origin = 4200
+        type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(hess_x_type), pointer :: init_hess_funptr
+        real(rp) :: x(n_param), init_hess_x(n_param)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_invoke_init_hess = .true.
+
+        ! apply an initial Hessian, which applies a diagonal, to a random vector and
+        ! check that it receives the host context and that the result is returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        init_hess_funptr => mock_init_hess
+        call random_number(x)
+        call invoke_init_hess(init_hess_funptr, x, init_hess_x, settings, &
+                              error_origin, error)
+        if (error /= 0) then
+            write(stderr, *) "test_invoke_init_hess failed: Produced error."
+            test_invoke_init_hess = .false.
+        end if
+        if (.not. all(is_close(init_hess_x, init_hess_diag * x))) then
+            write(stderr, *) "test_invoke_init_hess failed: Result not returned."
+            test_invoke_init_hess = .false.
+        end if
+        if (.not. host_context_reached("invoke_init_hess", context)) &
+            test_invoke_init_hess = .false.
+
+        ! let the initial Hessian fail and check that its error is passed on with its
+        ! origin
+        context%mock_error = 3
+        call invoke_init_hess(init_hess_funptr, x, init_hess_x, settings, &
+                              error_origin, error)
+        if (error /= error_init_hess + 3) then
+            write(stderr, *) "test_invoke_init_hess failed: Error of the initial "// &
+                "Hessian not passed on with its origin."
+            test_invoke_init_hess = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the initial Hessian return a value that is not a number, which has to be
+        ! reported with the origin of the object and an error message
+        call setup_error_logging(settings, context)
+        context%nan_output = 1
+        call invoke_init_hess(init_hess_funptr, x, init_hess_x, settings, &
+                              error_origin, error)
+        context%nan_output = 0
+        if (error /= error_origin + 1) then
+            write(stderr, *) "test_invoke_init_hess failed: Result that is not "// &
+                "finite not reported with the origin of the object."
+            test_invoke_init_hess = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_invoke_init_hess failed: No error message "// &
+                "printed for a result that is not finite."
+            test_invoke_init_hess = .false.
+        end if
+
+    end function test_invoke_init_hess
+
+    logical(c_bool) function test_invoke_obj_func_grad() bind(C)
+        !
+        ! this function tests the subroutine which calls the objective function of the
+        ! settings, which also returns the gradient at the trial point
+        !
+        use otr_common, only: orbital_settings_type, obj_func_grad_type, &
+                              invoke_obj_func_grad, error_obj_func_grad
+        use otr_common_mock, only: mock_obj_func_grad
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              setup_error_logging
+        use test_reference, only: n_param, arm_host_context, host_context_reached
+        use, intrinsic :: ieee_arithmetic, only: ieee_class, ieee_positive_inf, &
+                                                 operator(==)
+
+        integer(ip), parameter :: error_origin = 4200
+        type(orbital_settings_type) :: settings
+        type(test_context_type), target :: context
+        procedure(obj_func_grad_type), pointer :: obj_func_grad_funptr
+        real(rp) :: kappa(n_param), grad(n_param), func
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_invoke_obj_func_grad = .true.
+
+        ! call an objective function, which returns the sum of the step as the energy
+        ! and twice the step as the gradient, with a random step and check that it
+        ! receives the host context and that both are returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        obj_func_grad_funptr => mock_obj_func_grad
+        call random_number(kappa)
+        call invoke_obj_func_grad(obj_func_grad_funptr, kappa, func, grad, settings, &
+                                  error_origin, error)
+        if (error /= 0) then
+            write(stderr, *) "test_invoke_obj_func_grad failed: Produced error."
+            test_invoke_obj_func_grad = .false.
+        end if
+        if (.not. is_close(func, sum(kappa)) .or. &
+            .not. all(is_close(grad, 2.0_rp * kappa))) then
+            write(stderr, *) "test_invoke_obj_func_grad failed: Energy or gradient "// &
+                "not returned."
+            test_invoke_obj_func_grad = .false.
+        end if
+        if (.not. host_context_reached("invoke_obj_func_grad", context)) &
+            test_invoke_obj_func_grad = .false.
+
+        ! let the function fail and check that its error is passed on with its origin
+        context%mock_error = 3
+        call invoke_obj_func_grad(obj_func_grad_funptr, kappa, func, grad, settings, &
+                                  error_origin, error)
+        if (error /= error_obj_func_grad + 3) then
+            write(stderr, *) "test_invoke_obj_func_grad failed: Error of the "// &
+                "function not passed on with its origin."
+            test_invoke_obj_func_grad = .false.
+        end if
+        context%mock_error = 0
+
+        ! let the function return an energy and a gradient that are not a number, the
+        ! energy has to count as infinite and the gradient of an infinite energy is not
+        ! checked
+        context%nan_output = -1
+        call invoke_obj_func_grad(obj_func_grad_funptr, kappa, func, grad, settings, &
+                                  error_origin, error)
+        context%nan_output = 0
+        if (error /= 0 .or. .not. ieee_class(func) == ieee_positive_inf) then
+            write(stderr, *) "test_invoke_obj_func_grad failed: Energy that is not "// &
+                "a number not returned as infinite without an error."
+            test_invoke_obj_func_grad = .false.
+        end if
+
+        ! let the function return a finite energy and a gradient that is not a number,
+        ! which has to be reported with the origin of the object and an error message
+        call setup_error_logging(settings, context)
+        context%nan_output = 2
+        call invoke_obj_func_grad(obj_func_grad_funptr, kappa, func, grad, settings, &
+                                  error_origin, error)
+        context%nan_output = 0
+        if (error /= error_origin + 1) then
+            write(stderr, *) "test_invoke_obj_func_grad failed: Gradient that is "// &
+                "not finite not reported with the origin of the object."
+            test_invoke_obj_func_grad = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_invoke_obj_func_grad failed: No error message "// &
+                "printed for a gradient that is not finite."
+            test_invoke_obj_func_grad = .false.
+        end if
+
+    end function test_invoke_obj_func_grad
+
+    logical(c_bool) function test_terms_x() bind(C)
+        !
+        ! this function tests the function which applies the first rank-1 terms of a
+        ! quasi-Newton model to a vector
+        !
+        use otr_common, only: terms_x
+        use test_reference, only: n_param
+
+        real(rp) :: vectors(n_param, 3), coeffs(3), x(n_param), expected(n_param)
+        integer(ip) :: k
+
+        ! assume tests pass
+        test_terms_x = .true.
+
+        ! the first two of three random terms
+        call random_number(vectors)
+        call random_number(coeffs)
+        call random_number(x)
+        expected = 0.0_rp
+        do k = 1, 2
+            expected = expected + &
+                       coeffs(k) * dot_product(vectors(:, k), x) * vectors(:, k)
+        end do
+        if (.not. all(is_close(terms_x(vectors, coeffs, 2_ip, x), expected))) then
+            write(stderr, *) "test_terms_x failed: Wrong sum of the first terms."
+            test_terms_x = .false.
+        end if
+
+        ! no terms
+        if (.not. all(is_close(terms_x(vectors, coeffs, 0_ip, x), 0.0_rp, 0.0_rp))) then
+            write(stderr, *) "test_terms_x failed: Terms applied although there "// &
+                "are none."
+            test_terms_x = .false.
+        end if
+
+    end function test_terms_x
+
+    logical(c_bool) function test_sr1_terms() bind(C)
+        !
+        ! this function tests the subroutine which returns the rank-1 terms of the SR1
+        ! updates of an initial Hessian, by comparing with the recursive SR1 update of
+        ! a dense matrix
+        !
+        use otr_common, only: sr1_terms
+        use opentrustregion_unit_tests, only: generate_random_symm_matrix
+        use test_reference, only: n_param
+
+        real(rp) :: init(n_param, n_param), steps(n_param, 3), grad_diffs(n_param, 3), &
+                    orthogonal(n_param), vectors(n_param, 3), coeffs(3), &
+                    model(n_param, n_param)
+        integer(ip) :: n_terms, k
+        logical :: kept(3)
+
+        ! assume tests pass
+        test_sr1_terms = .true.
+
+        ! three pairs, whose gradient differences, five times the steps plus noise,
+        ! keep the denominators well away from zero, of which the second has a residual
+        ! orthogonal to its step, so that it has to be skipped
+        init = generate_random_symm_matrix(n_param)
+        call random_number(steps)
+        call random_number(grad_diffs)
+        grad_diffs = 5.0_rp * steps + grad_diffs - 0.5_rp
+        call random_number(orthogonal)
+        orthogonal = orthogonal - dot_product(orthogonal, steps(:, 2)) / &
+                     dot_product(steps(:, 2), steps(:, 2)) * steps(:, 2)
+        grad_diffs(:, 2) = matmul(ref_sr1_update( &
+            init, steps(:, :1), grad_diffs(:, :1)), steps(:, 2)) + orthogonal
+        call sr1_terms(steps, grad_diffs, matmul(init, steps), vectors, coeffs, &
+                       n_terms, kept)
+        if (n_terms /= 2 .or. any(kept .neqv. [.true., .false., .true.])) then
+            write(stderr, *) "test_sr1_terms failed: Pair with a residual "// &
+                "orthogonal to its step not skipped."
+            test_sr1_terms = .false.
+        end if
+        model = init
+        do k = 1, n_terms
+            model = model + coeffs(k) * spread(vectors(:, k), 2, n_param) * &
+                    spread(vectors(:, k), 1, n_param)
+        end do
+        if (.not. all(is_close(model, ref_sr1_update(init, steps, grad_diffs)))) then
+            write(stderr, *) "test_sr1_terms failed: Model differs from the "// &
+                "recursive SR1 update."
+            test_sr1_terms = .false.
+        end if
+        if (.not. all(is_close(matmul(model, steps(:, 3)), grad_diffs(:, 3)))) then
+            write(stderr, *) "test_sr1_terms failed: Model does not satisfy the "// &
+                "secant condition of the last pair."
+            test_sr1_terms = .false.
+        end if
+
+    end function test_sr1_terms
+
+    logical(c_bool) function test_bfgs_terms() bind(C)
+        !
+        ! this function tests the subroutine which returns the rank-1 terms of the BFGS
+        ! updates of an initial Hessian, by comparing with the recursive BFGS update of
+        ! a dense matrix
+        !
+        use otr_common, only: bfgs_terms
+        use test_reference, only: n_param
+
+        real(rp) :: init(n_param, n_param), steps(n_param, 4), grad_diffs(n_param, 4), &
+                    vectors(n_param, 8), coeffs(8), model(n_param, n_param)
+        integer(ip) :: n_terms, k
+        logical :: kept(4)
+
+        ! assume tests pass
+        test_bfgs_terms = .true.
+
+        ! four pairs for an initial Hessian negative along the last axis: the first
+        ! with positive curvature and a step orthogonal to the last axis, the second
+        ! with negative curvature, the third with positive curvature along the last
+        ! axis, along which the model so far is still negative, and the fourth with
+        ! positive curvature and a step mostly within the first two axes, so that the
+        ! second and the third have to be skipped
+        init = diagonal_matrix([2.0_rp, 3.0_rp, -1.0_rp])
+        call random_number(steps)
+        steps = steps + 0.5_rp
+        steps(n_param, 1) = 0.0_rp
+        grad_diffs(:, 1) = [4.0_rp, 5.0_rp, 6.0_rp] * steps(:, 1)
+        grad_diffs(:, 2) = -steps(:, 2)
+        steps(:, 3) = [0.0_rp, 0.0_rp, 1.0_rp]
+        grad_diffs(:, 3) = 2.0_rp * steps(:, 3)
+        steps(n_param, 4) = 0.1_rp * steps(n_param, 4)
+        call random_number(grad_diffs(:, 4))
+        grad_diffs(:, 4) = [4.0_rp, 5.0_rp, 6.0_rp] * steps(:, 4) + &
+                           0.1_rp * grad_diffs(:, 4)
+        call bfgs_terms(steps, grad_diffs, matmul(init, steps), vectors, coeffs, &
+                        n_terms, kept)
+        if (n_terms /= 4 .or. any(kept .neqv. [.true., .false., .false., .true.])) then
+            write(stderr, *) "test_bfgs_terms failed: Pairs without positive "// &
+                "curvature in the pair or the model not skipped."
+            test_bfgs_terms = .false.
+        end if
+        model = init
+        do k = 1, n_terms
+            model = model + coeffs(k) * spread(vectors(:, k), 2, n_param) * &
+                    spread(vectors(:, k), 1, n_param)
+        end do
+        if (.not. all(is_close(model, ref_bfgs_update(init, steps, grad_diffs)))) then
+            write(stderr, *) "test_bfgs_terms failed: Model differs from the "// &
+                "recursive BFGS update."
+            test_bfgs_terms = .false.
+        end if
+        if (.not. all(is_close(matmul(model, steps(:, 4)), grad_diffs(:, 4)))) then
+            write(stderr, *) "test_bfgs_terms failed: Model does not satisfy the "// &
+                "secant condition of the last pair."
+            test_bfgs_terms = .false.
+        end if
+
+    end function test_bfgs_terms
+
+    logical(c_bool) function test_woodbury_x() bind(C)
+        !
+        ! this function tests the subroutine which applies the inverse of a
+        ! quasi-Newton model by the Sherman-Morrison-Woodbury formula
+        !
+        use otr_common, only: woodbury_x
+        use test_reference, only: n_param
+
+        real(rp) :: diag(n_param), vectors(n_param, 3), coeffs(3), x(n_param), &
+                    inv_x(n_param), model(n_param, n_param)
+        integer(ip) :: k
+
+        ! assume tests pass
+        test_woodbury_x = .true.
+
+        ! the first two of three terms, one of either sign, added to a positive
+        ! diagonal, whose inverse applied to a vector solves the model's equation
+        call random_number(diag)
+        diag = diag + 1.0_rp
+        call random_number(vectors)
+        coeffs = [1.0_rp, -0.1_rp, 1e3_rp]
+        call random_number(x)
+        inv_x = x / diag
+        call woodbury_x(vectors, coeffs, 2_ip, vectors / spread(diag, 2, 3), inv_x)
+        model = diagonal_matrix(diag)
+        do k = 1, 2
+            model = model + coeffs(k) * spread(vectors(:, k), 2, n_param) * &
+                    spread(vectors(:, k), 1, n_param)
+        end do
+        if (.not. all(is_close(matmul(model, inv_x), x))) then
+            write(stderr, *) "test_woodbury_x failed: Inverse of the model wrong."
+            test_woodbury_x = .false.
+        end if
+
+        ! a term that makes the identity singular, I - v v^T / |v|^2, exactly in
+        ! floating point, leaves the inverse of the identity
+        vectors(:, 1) = [1.0_rp, 1.0_rp, 0.0_rp]
+        coeffs(1) = -0.5_rp
+        inv_x = x
+        call woodbury_x(vectors, coeffs, 1_ip, vectors, inv_x)
+        if (.not. all(is_close(inv_x, x, 0.0_rp))) then
+            write(stderr, *) "test_woodbury_x failed: Singular model did not leave "// &
+                "the inverse of the initial matrix."
+            test_woodbury_x = .false.
+        end if
+
+        ! no terms leave the inverse of the initial matrix
+        inv_x = x
+        call woodbury_x(vectors, coeffs, 0_ip, vectors, inv_x)
+        if (.not. all(is_close(inv_x, x, 0.0_rp))) then
+            write(stderr, *) "test_woodbury_x failed: Model without terms did not "// &
+                "leave the inverse of the initial matrix."
+            test_woodbury_x = .false.
+        end if
+
+    end function test_woodbury_x
+
     logical(c_bool) function test_check_evaluate_dm_orbital_basis() bind(C)
         !
         ! this function tests the subroutine which produces an error for an orbital
@@ -3012,6 +3460,7 @@ contains
         ! this function tests the subroutine which rebuilds the response callbacks at
         ! the currently stored density matrix of an orbital basis
         !
+        use otr_common, only: error_evaluate_dm
         use opentrustregion_unit_tests, only: test_context_type, setup_settings
         use otr_common_test_reference, only: n_ao, n_particle, n_occ, shell_names
         use test_reference, only: arm_host_context, host_context_reached
@@ -3101,13 +3550,13 @@ contains
             test_refresh_response_orbital_basis = .false.
 
         ! call routine with a failing density matrix evaluating function and determine
-        ! if the error is passed on and the response stays marked stale
+        ! if the error is passed on with its origin and the response stays marked stale
         context%mock_error = 1
         basis%response_stale = .true.
         call basis%refresh_response(error)
-        if (error /= 1) then
+        if (error /= error_evaluate_dm + 1) then
             write(stderr, *) "test_refresh_response_orbital_basis failed: Error of "// &
-                "the density matrix evaluating function not passed on."
+                "the density matrix evaluating function not passed on with its origin."
             test_refresh_response_orbital_basis = .false.
         end if
         if (.not. basis%response_stale) then

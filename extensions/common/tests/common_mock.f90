@@ -9,6 +9,8 @@ module otr_common_mock
     use opentrustregion_core, only: rp, ip, obj_func_type, update_orbs_type, &
                                     hess_x_type, precond_type, precond_pd_type, &
                                     get_extra_trial_vectors_type
+    use otr_common, only: obj_func_grad_type
+    use test_reference, only: n_param
 
     implicit none
 
@@ -20,6 +22,14 @@ module otr_common_mock
     procedure(precond_pd_type), pointer :: mock_precond_pd_ptr => mock_precond_pd
     procedure(get_extra_trial_vectors_type), pointer :: &
         mock_get_extra_trial_vectors_ptr => mock_get_extra_trial_vectors
+    procedure(hess_x_type), pointer :: mock_init_hess_ptr => mock_init_hess
+    procedure(obj_func_grad_type), pointer :: mock_obj_func_grad_ptr => &
+        mock_obj_func_grad
+
+    ! diagonal the mock of the initial Hessian applies, indefinite so that the BFGS
+    ! scheme of rotation QN meets a step along which the model so far has no positive
+    ! curvature
+    real(rp), parameter :: init_hess_diag(n_param) = [2.0_rp, 3.0_rp, -1.0_rp]
 
     ! name of the mock host callback function called last, so that tests can check to
     ! which host callback function a callback function forwarded
@@ -192,5 +202,45 @@ contains
         error = record_host_call("get_extra_trial_vectors", context)
 
     end subroutine mock_get_extra_trial_vectors
+
+    subroutine mock_init_hess(x, hess_x, error, context)
+        !
+        ! this subroutine is a mock of the initial Hessian of the settings of an
+        ! extension learning from trial points, which applies the diagonal
+        ! init_hess_diag, records its call, checks the host context and returns the
+        ! error code set in it or a value that is not a number
+        !
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: hess_x(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        error = record_host_call("init_hess", context)
+        hess_x = init_hess_diag * x
+        call inject_host_nan(context, 1_ip, hess_x(1))
+
+    end subroutine mock_init_hess
+
+    function mock_obj_func_grad(kappa, grad, error, context) result(func)
+        !
+        ! this function is a mock of the objective function of the settings of an
+        ! extension learning from trial points, which returns the sum of the step as
+        ! the energy and twice the step as the gradient, records its call, checks the
+        ! host context and returns the error code set in it or a value that is not a
+        ! number as the energy (position 1) or in the gradient (position 2)
+        !
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out), target :: grad(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+        real(rp) :: func
+
+        error = record_host_call("obj_func_grad", context)
+        func = sum(kappa)
+        grad = 2.0_rp * kappa
+        call inject_host_nan(context, 1_ip, func)
+        call inject_host_nan(context, 2_ip, grad(1))
+
+    end function mock_obj_func_grad
 
 end module otr_common_mock

@@ -100,11 +100,29 @@ module otr_common
     ! or density QN object may contain
     real(rp), parameter :: max_orbital_rotation = atan(1.0_rp)
 
+    ! relative threshold below which the SR1 updates of rotation QN and S-GEK skip a
+    ! pair, of the denominator s^T (y - B s) relative to |s| |y - B s| (Nocedal &
+    ! Wright, Numerical Optimization, Eq. 6.26)
+
+    real(rp), parameter :: sr1_skip_thresh = 1e-8_rp
+
+    ! relative threshold below which the BFGS updates of rotation QN and S-GEK skip a
+    ! pair, of the curvatures s^T y relative to |s| |y| and s^T B s relative to
+    ! |s| |B s|
+    real(rp), parameter :: bfgs_skip_thresh = 1e-8_rp
+
     ! warning for orbital bases set up without a density matrix evaluating function
     character(len=*), parameter :: evaluate_dm_missing_warning_msg = &
         "No density matrix evaluating function was given, so the orbital updating "// &
         "function, objective function and Hessian linear transformation of the "// &
         "orbital basis are not available and return an error when called."
+
+    ! error origins of the host's callback functions several extensions share: the
+    ! density matrix evaluating and response functions of the orbital bases, the
+    ! initial Hessian and the objective function that also returns the gradient at a
+    ! trial point
+    integer(ip), parameter :: error_evaluate_dm = 7100, error_get_response = 7200, &
+                              error_init_hess = 7400, error_obj_func_grad = 7600
 
     ! create function pointers to ensure that routines comply with interface
     procedure(update_orbs_type), pointer :: update_orbs_callback_ptr => &
@@ -177,6 +195,21 @@ module otr_common
             integer(ip), intent(out) :: error
             class(*), intent(in), pointer :: context
         end subroutine evaluate_dm_os_type
+    end interface
+
+    ! objective function that also returns the gradient at a trial point, a callback of
+    ! the settings of the extensions learning from trial points
+    abstract interface
+        function obj_func_grad_type(kappa, grad, error, context) result(func)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: kappa(:)
+            real(rp), intent(out), target :: grad(:)
+            integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
+            real(rp) :: func
+
+        end function obj_func_grad_type
     end interface
 
     ! orbital basis in which the orbital rotations are parameterized, an extension
@@ -864,12 +897,12 @@ contains
                                      error, fock, get_response_funptr)
         !
         ! this subroutine calls the closed-shell density matrix evaluating function of
-        ! an orbital basis with the host context of its settings and passes on its
-        ! error, counts an energy that is not a number as infinite and returns an error
-        ! of its own with the origin of the object if the function returns a Fock
-        ! matrix that is not finite at a finite energy, while an infinite energy, which
-        ! rejects the point, leaves the Fock matrix unchecked, since the caller does
-        ! not use it then
+        ! an orbital basis with the host context of its settings and tags its error
+        ! with the origin of the function, counts an energy that is not a number as
+        ! infinite and returns an error of its own with the origin of the object if the
+        ! function returns a Fock matrix that is not finite at a finite energy, while
+        ! an infinite energy, which rejects the point, leaves the Fock matrix
+        ! unchecked, since the caller does not use it then
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
@@ -887,6 +920,7 @@ contains
 
         ! call the density matrix evaluating function
         call evaluate_dm(dm, energy, fock, get_response_funptr, error, settings%context)
+        call add_error_origin(error, error_evaluate_dm, settings)
         if (error /= 0) return
 
         ! check the result
@@ -905,11 +939,12 @@ contains
                                      error, fock, get_response_funptr)
         !
         ! this subroutine calls the open-shell density matrix evaluating function of an
-        ! orbital basis with the host context of its settings and passes on its error,
-        ! counts an energy that is not a number as infinite and returns an error of its
-        ! own with the origin of the object if the function returns a Fock matrix that
-        ! is not finite at a finite energy, while an infinite energy, which rejects the
-        ! point, leaves the Fock matrix unchecked, since the caller does not use it then
+        ! orbital basis with the host context of its settings and tags its error with
+        ! the origin of the function, counts an energy that is not a number as infinite
+        ! and returns an error of its own with the origin of the object if the function
+        ! returns a Fock matrix that is not finite at a finite energy, while an
+        ! infinite energy, which rejects the point, leaves the Fock matrix unchecked,
+        ! since the caller does not use it then
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
@@ -927,6 +962,7 @@ contains
 
         ! call the density matrix evaluating function
         call evaluate_dm(dm, energy, fock, get_response_funptr, error, settings%context)
+        call add_error_origin(error, error_evaluate_dm, settings)
         if (error /= 0) return
 
         ! check the result
@@ -945,9 +981,9 @@ contains
                                       error_origin, error)
         !
         ! this subroutine calls the closed-shell response function of an orbital basis
-        ! with the host context of its settings and passes on its error, and returns an
-        ! error of its own with the origin of the object if the function returns values
-        ! that are not finite
+        ! with the host context of its settings and tags its error with the origin of
+        ! the function, and returns an error of its own with the origin of the object
+        ! if the function returns values that are not finite
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -961,6 +997,7 @@ contains
 
         ! call the response function
         call get_response(dm, response, error, settings%context)
+        call add_error_origin(error, error_get_response, settings)
         if (error /= 0) return
 
         ! check the result
@@ -977,9 +1014,9 @@ contains
                                       error_origin, error)
         !
         ! this subroutine calls the open-shell response function of an orbital basis
-        ! with the host context of its settings and passes on its error, and returns an
-        ! error of its own with the origin of the object if the function returns values
-        ! that are not finite
+        ! with the host context of its settings and tags its error with the origin of
+        ! the function, and returns an error of its own with the origin of the object
+        ! if the function returns values that are not finite
         !
         use opentrustregion_core, only: verbosity_error
         use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -993,6 +1030,7 @@ contains
 
         ! call the response function
         call get_response(dm, response, error, settings%context)
+        call add_error_origin(error, error_get_response, settings)
         if (error /= 0) return
 
         ! check the result
@@ -1004,6 +1042,239 @@ contains
         end if
 
     end subroutine invoke_get_response_os
+
+    subroutine invoke_init_hess(init_hess, x, init_hess_x, settings, error_origin, &
+                                error)
+        !
+        ! this subroutine applies the initial Hessian of the settings with their host
+        ! context and tags its error with the origin of the initial Hessian, and
+        ! returns an error of its own with the origin of the object if it returns
+        ! values that are not finite
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        procedure(hess_x_type), intent(in), pointer :: init_hess
+        real(rp), intent(in), target :: x(:)
+        real(rp), intent(out), target :: init_hess_x(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! apply the initial Hessian
+        call init_hess(x, init_hess_x, error, settings%context)
+        call add_error_origin(error, error_init_hess, settings)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. all(ieee_is_finite(init_hess_x))) then
+            call settings%log("Initial Hessian returned values that are not finite.", &
+                              verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_init_hess
+
+    subroutine invoke_obj_func_grad(obj_func_grad, kappa, func, grad, settings, &
+                                    error_origin, error)
+        !
+        ! this subroutine calls the objective function of the settings, which also
+        ! returns the gradient at the trial point, with their host context and tags its
+        ! error with the origin of the function; an energy that is not a number counts
+        ! as infinite and leaves the gradient unchecked, as it does for an infinite
+        ! energy, which rejects the step, while it returns an error of its own with the
+        ! origin of the object for a finite energy whose gradient is not finite
+        !
+        use opentrustregion_core, only: verbosity_error
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, &
+                                                 ieee_value, ieee_positive_inf
+
+        procedure(obj_func_grad_type), intent(in), pointer :: obj_func_grad
+        real(rp), intent(in), target :: kappa(:)
+        real(rp), intent(out) :: func
+        real(rp), intent(out), target :: grad(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(in) :: error_origin
+        integer(ip), intent(out) :: error
+
+        ! call the objective function
+        func = obj_func_grad(kappa, grad, error, settings%context)
+        call add_error_origin(error, error_obj_func_grad, settings)
+        if (error /= 0) return
+
+        ! an energy that is not a number counts as infinite, and the gradient of an
+        ! infinite energy is not used
+        if (ieee_is_nan(func)) func = ieee_value(func, ieee_positive_inf)
+        if (.not. ieee_is_finite(func)) return
+
+        ! check the gradient
+        if (.not. all(ieee_is_finite(grad))) then
+            call settings%log("Objective function returned a gradient that is not "// &
+                              "finite.", verbosity_error, .true.)
+            error = 1
+            call add_error_origin(error, error_origin, settings)
+        end if
+
+    end subroutine invoke_obj_func_grad
+
+    function terms_x(vectors, coeffs, n_terms, x) result(applied)
+        !
+        ! this function applies the sum of the first n_terms rank-1 terms
+        ! coeffs(k) vectors(:, k) vectors(:, k)^T of a quasi-Newton model to a vector
+        !
+        real(rp), intent(in) :: vectors(:, :), coeffs(:), x(:)
+        integer(ip), intent(in) :: n_terms
+        real(rp) :: applied(size(x))
+
+        real(rp) :: projections(n_terms)
+        external :: dgemv
+
+        ! no terms apply nothing
+        applied = 0.0_rp
+        if (n_terms == 0) return
+
+        ! the vectors of the terms combined with the projections of the vector onto
+        ! them, scaled by their coefficients
+        call dgemv("T", size(x, kind=ip), n_terms, 1.0_rp, vectors, &
+                   size(vectors, 1, kind=ip), x, 1_ip, 0.0_rp, projections, 1_ip)
+        projections = coeffs(:n_terms) * projections
+        call dgemv("N", size(x, kind=ip), n_terms, 1.0_rp, vectors, &
+                   size(vectors, 1, kind=ip), projections, 1_ip, 0.0_rp, applied, 1_ip)
+
+    end function terms_x
+
+    subroutine sr1_terms(steps, grad_diffs, init_steps, vectors, coeffs, n_terms, kept)
+        !
+        ! this subroutine returns the rank-1 terms coeffs(k) vectors(:, k)
+        ! vectors(:, k)^T of the symmetric rank-1 updates of an initial Hessian B_0
+        ! over the pairs of steps s and gradient differences y, from the first to the
+        ! last, B_j = B_{j-1} + r r^T / (s^T r) with r = y - B_{j-1} s, the recursive
+        ! form of the limited-memory SR1 matrix of Byrd, R.H., Nocedal, J. & Schnabel,
+        ! R.B. Mathematical Programming 63, 129–156 (1994),
+        ! https://doi.org/10.1007/BF01582063, given B_0 applied to every step, and
+        ! which pairs they keep, skipping those whose denominator is too small
+        !
+        real(rp), intent(in) :: steps(:, :), grad_diffs(:, :), init_steps(:, :)
+        real(rp), intent(out) :: vectors(:, :), coeffs(:)
+        integer(ip), intent(out) :: n_terms
+        logical, intent(out) :: kept(:)
+
+        real(rp) :: residual(size(steps, 1)), denominator
+        integer(ip) :: n, j
+        real(rp), external :: ddot, dnrm2
+
+        n = size(steps, 1, kind=ip)
+        n_terms = 0
+        kept = .false.
+        do j = 1, size(steps, 2, kind=ip)
+            ! residual of the secant condition of the updated Hessian so far
+            residual = grad_diffs(:, j) - init_steps(:, j) - &
+                       terms_x(vectors, coeffs, n_terms, steps(:, j))
+
+            ! skip the pair if the denominator is too small
+            denominator = ddot(n, steps(:, j), 1_ip, residual, 1_ip)
+            if (abs(denominator) <= sr1_skip_thresh * dnrm2(n, steps(:, j), 1_ip) * &
+                dnrm2(n, residual, 1_ip)) cycle
+
+            ! add the term of the pair
+            kept(j) = .true.
+            n_terms = n_terms + 1
+            vectors(:, n_terms) = residual
+            coeffs(n_terms) = 1.0_rp / denominator
+        end do
+
+    end subroutine sr1_terms
+
+    subroutine bfgs_terms(steps, grad_diffs, init_steps, vectors, coeffs, n_terms, kept)
+        !
+        ! this subroutine returns the rank-1 terms coeffs(k) vectors(:, k)
+        ! vectors(:, k)^T of the BFGS updates of an initial Hessian B_0 over the pairs
+        ! of steps s and gradient differences y, from the first to the last,
+        ! B_j = B_{j-1} - B_{j-1} s s^T B_{j-1} / (s^T B_{j-1} s) + y y^T / (s^T y),
+        ! the recursive form of the limited-memory BFGS matrix of Byrd, R.H., Nocedal,
+        ! J. & Schnabel, R.B. Mathematical Programming 63, 129–156 (1994),
+        ! https://doi.org/10.1007/BF01582063, given B_0 applied to every step, and
+        ! which pairs they keep, skipping those whose curvature along their step, in
+        ! the pair or in the updated Hessian so far, is not sufficiently positive,
+        ! which keeps the updated Hessian positive definite if B_0 is
+        !
+        real(rp), intent(in) :: steps(:, :), grad_diffs(:, :), init_steps(:, :)
+        real(rp), intent(out) :: vectors(:, :), coeffs(:)
+        integer(ip), intent(out) :: n_terms
+        logical, intent(out) :: kept(:)
+
+        real(rp) :: model_step(size(steps, 1)), curvature, model_curvature
+        integer(ip) :: n, j
+        real(rp), external :: ddot, dnrm2
+
+        n = size(steps, 1, kind=ip)
+        n_terms = 0
+        kept = .false.
+        do j = 1, size(steps, 2, kind=ip)
+            ! skip the pair if its curvature is not sufficiently positive
+            curvature = ddot(n, steps(:, j), 1_ip, grad_diffs(:, j), 1_ip)
+            if (curvature <= bfgs_skip_thresh * dnrm2(n, steps(:, j), 1_ip) * &
+                dnrm2(n, grad_diffs(:, j), 1_ip)) cycle
+
+            ! skip the pair if the curvature of the updated Hessian so far is not
+            ! sufficiently positive
+            model_step = init_steps(:, j) + &
+                         terms_x(vectors, coeffs, n_terms, steps(:, j))
+            model_curvature = ddot(n, steps(:, j), 1_ip, model_step, 1_ip)
+            if (model_curvature <= bfgs_skip_thresh * dnrm2(n, steps(:, j), 1_ip) * &
+                dnrm2(n, model_step, 1_ip)) cycle
+
+            ! add the two terms of the pair
+            kept(j) = .true.
+            vectors(:, n_terms + 1) = model_step
+            coeffs(n_terms + 1) = -1.0_rp / model_curvature
+            vectors(:, n_terms + 2) = grad_diffs(:, j)
+            coeffs(n_terms + 2) = 1.0_rp / curvature
+            n_terms = n_terms + 2
+        end do
+
+    end subroutine bfgs_terms
+
+    subroutine woodbury_x(vectors, coeffs, n_terms, init_inv_vectors, init_inv_x)
+        !
+        ! this subroutine turns A^-1 x into the inverse of a quasi-Newton model
+        ! A + V C V^T, the first n_terms rank-1 terms coeffs(k) vectors(:, k)
+        ! vectors(:, k)^T added to A, applied to x by the Sherman-Morrison-Woodbury
+        ! formula, (A + V C V^T)^-1 = A^-1 - A^-1 V (C^-1 + V^T A^-1 V)^-1 V^T A^-1,
+        ! given A^-1 applied to the vectors, and leaves A^-1 x where the model is
+        ! singular
+        !
+        real(rp), intent(in) :: vectors(:, :), coeffs(:), init_inv_vectors(:, :)
+        integer(ip), intent(in) :: n_terms
+        real(rp), intent(inout) :: init_inv_x(:)
+
+        real(rp) :: capacitance(n_terms, n_terms), projections(n_terms)
+        integer(ip) :: n, k, info, pivots(n_terms)
+        external :: dgemm, dgemv, dgesv
+
+        if (n_terms == 0) return
+
+        ! capacitance matrix C^-1 + V^T A^-1 V and projections V^T A^-1 x
+        n = size(init_inv_x, kind=ip)
+        call dgemm("T", "N", n_terms, n_terms, n, 1.0_rp, vectors, &
+                   size(vectors, 1, kind=ip), init_inv_vectors, &
+                   size(init_inv_vectors, 1, kind=ip), 0.0_rp, capacitance, n_terms)
+        do k = 1, n_terms
+            capacitance(k, k) = capacitance(k, k) + 1.0_rp / coeffs(k)
+        end do
+        call dgemv("T", n, n_terms, 1.0_rp, vectors, size(vectors, 1, kind=ip), &
+                   init_inv_x, 1_ip, 0.0_rp, projections, 1_ip)
+
+        ! subtract A^-1 V (C^-1 + V^T A^-1 V)^-1 V^T A^-1 x, unless the model is
+        ! singular
+        call dgesv(n_terms, 1_ip, capacitance, n_terms, pivots, projections, n_terms, &
+                   info)
+        if (info /= 0) return
+        call dgemv("N", n, n_terms, -1.0_rp, init_inv_vectors, size( &
+            init_inv_vectors, 1, kind=ip), projections, 1_ip, 1.0_rp, init_inv_x, 1_ip)
+
+    end subroutine woodbury_x
 
     subroutine check_evaluate_dm_orbital_basis(self, error)
         !

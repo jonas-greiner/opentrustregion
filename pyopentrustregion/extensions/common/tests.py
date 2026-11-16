@@ -17,6 +17,9 @@ from ctypes import (
     c_char,
     c_void_p,
     cast,
+    memset,
+    pointer,
+    sizeof,
     string_at,
 )
 from types import SimpleNamespace
@@ -49,6 +52,7 @@ from pyopentrustregion.python_interface import (
 from pyopentrustregion.extensions.common.python_interface import (
     EvaluateDMInterface,
     GetResponseInterface,
+    ObjFuncGradInterface,
     ExtensionOwner,
     ObjFuncPyInterface,
     UpdateOrbsPyInterface,
@@ -60,6 +64,7 @@ from pyopentrustregion.extensions.common.python_interface import (
 fortran_tests = {
     "common_tests": [
         "approx_hess_x_callback",
+        "bfgs_terms",
         "channel_rows",
         "check_evaluate_dm_orbital_basis",
         "compute_sqrt_and_inv_sqrt",
@@ -74,6 +79,8 @@ fortran_tests = {
         "invoke_evaluate_dm_os",
         "invoke_get_response_cs",
         "invoke_get_response_os",
+        "invoke_init_hess",
+        "invoke_obj_func_grad",
         "logger_callback",
         "matrix_exponential",
         "obj_func_callback",
@@ -88,11 +95,14 @@ fortran_tests = {
         "project_callback",
         "project_extension",
         "refresh_response_orbital_basis",
+        "sr1_terms",
         "stability_hess_x_callback",
+        "terms_x",
         "update_orbs_callback",
         "update_orbs_extension",
         "wire_extension_solver_settings",
         "wire_solver_settings_extension",
+        "woodbury_x",
     ],
     "common_c_interface_tests": [
         "approx_hess_x_c_wrapper",
@@ -110,6 +120,7 @@ fortran_tests = {
         "holder_level",
         "logger_c_wrapper",
         "obj_func_c_wrapper",
+        "obj_func_grad_f_wrapper",
         "precond_c_wrapper",
         "precond_pd_c_wrapper",
         "project_c_wrapper",
@@ -405,20 +416,26 @@ def check_settings_layout(test_name, settings, export, lookup):
     an extension is read back under its own name from C settings whose fields Fortran
     sets one by one to the reference values, compared against the value the lookup
     function returns for the field's name, so that a stray field is caught as well as
-    a misplaced one
+    a misplaced one, with the settings filled with zero and then with one bytes
+    before, so that no reference value can match bytes Fortran did not write
     """
-    settings_c = settings.c_struct()
-    export(byref(settings_c))
     test_passed = True
-    for name, field_type in settings.c_struct._fields_:
-        value = getattr(settings_c, name)
-        if field_type == c_void_p:
-            value = value or 0
-        elif issubclass(field_type, Array):
-            value = value.decode()
-        if value != extension_reference(lookup, name, field_type):
-            print(f" {test_name} failed: Field {name} misplaced.")
-            test_passed = False
+    for fill in (0, 1):
+        settings_c = settings.c_struct()
+        memset(byref(settings_c), fill, sizeof(settings_c))
+        export(byref(settings_c))
+        for name, field_type in settings.c_struct._fields_:
+            value = getattr(settings_c, name)
+            if field_type == c_void_p:
+                value = value or 0
+            elif issubclass(field_type, Array):
+                value = value.decode()
+            if value != extension_reference(lookup, name, field_type):
+                print(
+                    f" {test_name} failed: Field {name} misplaced in settings filled "
+                    f"with {fill} bytes."
+                )
+                test_passed = False
     return test_passed
 
 
@@ -1192,3 +1209,33 @@ class CommonPyInterfaceTests(unittest.TestCase):
 
         self.assertTrue(test_passed, "test_extension_owner failed")
         print(" test_extension_owner PASSED")
+
+    def test_obj_func_grad_py_interface(self):
+        """
+        this function tests that the interface to the objective function that also
+        returns the gradient at a trial point reports an exception or an interruption
+        raised by the function as an error and keeps it with the call whose library
+        called it, and that it receives the step read-only
+        """
+        kappa = np.zeros(n_param)
+        grad = np.zeros(n_param)
+        interfaces = {
+            "objective function": lambda func: ObjFuncGradInterface(
+                {"obj_func_grad": func}, "obj_func_grad"
+            )(
+                kappa.ctypes.data_as(POINTER(c_real)),
+                grad.ctypes.data_as(POINTER(c_real)),
+                pointer(c_real()),
+                None,
+            ),
+        }
+        test_passed = check_callback_interfaces(
+            "test_obj_func_grad_py_interface",
+            interfaces,
+            list(interfaces),
+            kappa,
+            n_param,
+        )
+
+        self.assertTrue(test_passed, "test_obj_func_grad_py_interface failed")
+        print(" test_obj_func_grad_py_interface PASSED")

@@ -696,7 +696,7 @@ contains
                 test_context => context
                 if (.not. allocated(test_context%log_message)) &
                     test_context%log_message = ""
-                test_context%log_message = test_context%log_message//trim(message)
+                test_context%log_message = test_context%log_message//message
             end select
         end if
 
@@ -7325,6 +7325,30 @@ contains
         end if
         deallocate(red_space_basis)
 
+        ! a linearly dependent vector is removed without a warning if asked not to warn
+        allocate(red_space_basis(n_param, 2))
+        red_space_basis(:, 1) = vectors(:, 1)
+        red_space_basis(:, 2) = 2.0_rp * vectors(:, 1)
+        context%log_message = ""
+        call orthogonalize_trial_vectors(red_space_basis, settings, error, &
+                                         warn_lin_dep=.false.)
+        if (error /= 0) then
+            write(stderr, *) "test_orthogonalize_trial_vectors failed: Produced "// &
+                "error without warning."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (size(red_space_basis, 2) /= 1) then
+            write(stderr, *) "test_orthogonalize_trial_vectors failed: Linearly "// &
+                "dependent vector was not removed without warning."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        if (len(context%log_message) /= 0) then
+            write(stderr, *) "test_orthogonalize_trial_vectors failed: Warning "// &
+                "printed although asked not to warn."
+            test_orthogonalize_trial_vectors = .false.
+        end if
+        deallocate(red_space_basis)
+
         ! a block whose vectors all vanish leaves no vector space behind, which is a
         ! legitimate outcome for a caller that has no direction to contribute
         allocate(red_space_basis(n_param, 2))
@@ -7499,18 +7523,18 @@ contains
         space_small = identity_matrix(2_ip)
 
         ! perform Gram-Schmidt orthogonalization and determine if function correctly
-        ! returns an error and prints an error message
+        ! returns the linear dependence on a space spanning the whole vector space
+        ! without printing an error message
         call setup_error_logging(settings, context)
         call gram_schmidt(vector_small, space_small, settings, error)
-        if (error /= 1) then
-            write(stderr, *) "test_gram_schmidt failed: No error returned during "// &
-                "orthogonalization when number of vectors is larger than dimension "// &
-                "of vector space."
+        if (error /= error_gram_schmidt_lin_dep) then
+            write(stderr, *) "test_gram_schmidt failed: Linear dependence not "// &
+                "returned for a space spanning the whole vector space."
             test_gram_schmidt = .false.
         end if
-        if (len_trim(context%log_message) == 0) then
-            write(stderr, *) "test_gram_schmidt failed: No error message printed "// &
-                "when number of vectors is larger than dimension of vector space."
+        if (len_trim(context%log_message) /= 0) then
+            write(stderr, *) "test_gram_schmidt failed: Error message printed for "// &
+                "a space spanning the whole vector space."
             test_gram_schmidt = .false.
         end if
 
@@ -8640,8 +8664,9 @@ contains
         end if
 
         ! check that a message longer than a line is split into several lines which
-        ! together reproduce the message, each line is logged with a leading space,
-        ! the logging function counts its calls in the host context
+        ! together reproduce the message, each line is logged with a leading space and
+        ! without trailing blanks, the logging function counts its calls in the host
+        ! context
         context%log_message = ""
         context%n_calls = 0
         call print_message(settings, repeat("This is a long test message. ", 8), &

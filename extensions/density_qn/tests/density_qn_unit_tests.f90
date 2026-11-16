@@ -638,7 +638,7 @@ contains
         use otr_density_qn, only: &
             density_qn_settings_type, density_qn_evaluate_dm_cs_type, &
             density_qn_evaluate_dm_os_type, invoke_density_qn_evaluate_dm_cs, &
-            invoke_density_qn_evaluate_dm_os
+            invoke_density_qn_evaluate_dm_os, error_density_qn_evaluate_dm
         use otr_common_unit_tests, only: mock_requests, mock_fock_factor
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               setup_error_logging
@@ -697,12 +697,12 @@ contains
         end if
         if (.not. host_context_reached(test_name, context)) test_passed = .false.
 
-        ! let the function fail and check that its error is passed on unchanged
+        ! let the function fail and check that its error is passed on with its origin
         context%mock_error = 3
         call evaluate()
-        if (error /= 3) then
+        if (error /= error_density_qn_evaluate_dm + 3) then
             write(stderr, *) "test_"//test_name// &
-                " failed: Error of the function not passed on unchanged"//suffix
+                " failed: Error of the function not passed on with its origin"//suffix
             test_passed = .false.
         end if
         context%mock_error = 0
@@ -1907,7 +1907,8 @@ contains
             ! history
             !
             use test_reference, only: arm_host_context, host_context_reached
-            use otr_density_qn, only: density_qn_type, error_density_qn
+            use otr_density_qn, only: density_qn_type, error_density_qn, &
+                                      error_density_qn_evaluate_dm
             use otr_oao, only: oao_type
             use otr_common_test_reference, only: n_ao
             use otr_common_unit_tests, only: level_context, mock_requests
@@ -2042,11 +2043,11 @@ contains
             end if
 
             ! call routine at another point whose evaluation fails and determine if the
-            ! error is passed on without adding the point to the history
+            ! error is passed on with its origin without adding the point to the history
             context%mock_error = 1
             energy = density_qn%obj_func(2.0_rp * kappa, error, &
                                          level_context(density_qn, 1_ip))
-            if (error /= 1) then
+            if (error /= error_density_qn_evaluate_dm + 1) then
                 write(stderr, *) test_name//" failed: Error of the density matrix "// &
                     "evaluating function not passed on."
                 passed = .false.
@@ -2157,7 +2158,8 @@ contains
             use test_reference, only: arm_host_context, host_context_reached
             use opentrustregion_core, only: hess_x_type, solver_state_type
             use otr_common, only: hess_x_callback
-            use otr_density_qn, only: density_qn_type, error_density_qn
+            use otr_density_qn, only: density_qn_type, error_density_qn, &
+                                      error_density_qn_evaluate_dm
             use otr_oao, only: oao_type
             use otr_common_test_reference, only: n_ao
             use otr_common_unit_tests, only: level_context, mock_requests, &
@@ -2394,13 +2396,13 @@ contains
                 end if
 
                 ! call routine with an orbital rotation whose evaluation fails and
-                ! determine if the error is passed on and the rotated density is marked
-                ! as not evaluated, so that a following call without an orbital
-                ! rotation evaluates it without adding it to the history
+                ! determine if the error is passed on with its origin and the rotated
+                ! density is marked as not evaluated, so that a following call without
+                ! an orbital rotation evaluates it without adding it to the history
                 context%mock_error = 1
                 call density_qn%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, &
                                             error, level_context(density_qn, 1_ip))
-                if (error /= 1) then
+                if (error /= error_density_qn_evaluate_dm + 1) then
                     write(stderr, *) test_name//" failed: Error of the density "// &
                         "matrix evaluating function not passed on."
                     passed = .false.

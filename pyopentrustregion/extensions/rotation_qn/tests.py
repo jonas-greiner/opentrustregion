@@ -5,7 +5,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import unittest
-from ctypes import POINTER, c_bool, c_void_p, pointer
+from ctypes import POINTER, c_bool, c_void_p
 from unittest.mock import patch
 
 import numpy as np
@@ -28,9 +28,10 @@ from pyopentrustregion.python_interface import (
 )
 from pyopentrustregion.extensions.rotation_qn.python_interface import (
     TransportInterface,
-    ObjFuncGradInterface,
-    obj_func_grad_interface_type,
     transport_interface_type,
+)
+from pyopentrustregion.extensions.common.python_interface import (
+    obj_func_grad_interface_type,
 )
 from pyopentrustregion.extensions.rotation_qn import (
     RotationQNSettings,
@@ -58,21 +59,17 @@ fortran_tests = {
         "assign_rotation_qn_c_f",
         "assign_rotation_qn_f_c",
         "init_rotation_qn_settings_c",
-        "obj_func_grad_f_wrapper",
         "rotation_qn_factory_c_wrapper",
         "transport_f_wrapper",
     ],
     "rotation_qn_tests": [
         "add_pair_rotation_qn",
         "add_rotation_qn",
-        "build_model_bfgs",
-        "build_model_sr1",
+        "build_model_rotation_qn",
         "hess_x_rotation_qn",
         "init_precond_rotation_qn",
         "init_rotation_qn",
-        "invoke_init_hess",
         "invoke_init_precond",
-        "invoke_obj_func_grad",
         "invoke_transport",
         "keep_pair",
         "model_x_rotation_qn",
@@ -154,33 +151,22 @@ class RotationQNPyInterfaceTests(unittest.TestCase):
 
     def test_callback_interfaces(self):
         """
-        this function tests that the interfaces to the objective function and the
-        transport function of the settings report an exception or an interruption
-        raised by the function as an error and keep it with the call whose library
-        called them, and that they receive the step and the geodesic read-only
+        this function tests that the interface to the transport function of the
+        settings reports an exception or an interruption raised by the function as an
+        error and keeps it with the call whose library called it, and that it receives
+        the geodesic read-only
         """
         vector = np.zeros(n_param)
         vector_ptr = vector.ctypes.data_as(POINTER(c_real))
         output = np.zeros(n_param)
         output_ptr = output.ctypes.data_as(POINTER(c_real))
-        func_ptr = pointer(c_real())
         interfaces = {
-            "objective function of the settings": lambda func: ObjFuncGradInterface(
-                {"obj_func_grad": func}, "obj_func_grad"
-            )(vector_ptr, output_ptr, func_ptr, None),
             "transport function of the settings": lambda func: TransportInterface(
                 {"transport": func}, "transport"
             )(vector_ptr, output_ptr, None),
         }
         test_passed = check_callback_interfaces(
-            "test_callback_interfaces",
-            interfaces,
-            [
-                "objective function of the settings",
-                "transport function of the settings",
-            ],
-            vector,
-            n_param,
+            "test_callback_interfaces", interfaces, list(interfaces), vector, n_param
         )
 
         self.assertTrue(test_passed, "test_callback_interfaces failed")

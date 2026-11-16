@@ -6,5 +6,5 @@
 
 from .python_interface import (
     SGEKSettings,
-    s_gek_factory,
+    s_gek_solver,
 )

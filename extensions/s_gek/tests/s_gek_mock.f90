@@ -6,130 +6,138 @@
 
 module otr_s_gek_mock
 
-    use opentrustregion_core, only: ip, stderr
-    use otr_s_gek, only: s_gek_factory
-    use otr_s_gek_test_reference, only: ref_s_gek_settings, operator(/=)
+    use opentrustregion_core, only: ip, stderr, solver_settings_type
+    use c_interface, only: c_callbacks_type
+    use otr_s_gek, only: s_gek_solver, s_gek_settings_type
+    use otr_s_gek_c_interface, only: s_gek_c_callbacks_type
 
     implicit none
 
     logical :: test_passed
 
-    ! error the mock factory returns
-    integer(ip) :: mock_s_gek_factory_error = 0
+    ! settings and callback bundles the mock S-GEK solver received, those of the solver
+    ! settings and of the S-GEK settings, so that a test can check what the C wrapper
+    ! handed over
+    type(solver_settings_type) :: received_solver_settings
+    type(s_gek_settings_type) :: received_s_gek_settings
+    type(c_callbacks_type) :: received_callbacks
+    type(s_gek_c_callbacks_type) :: received_s_gek_callbacks
 
-    ! whether the mock factory expects the default settings without a logging function,
-    ! which the C wrapper hands it for C settings that were not initialized and without
-    ! any, instead of the reference settings
-    logical :: mock_s_gek_factory_defaults = .false.
+    ! whether the callback bundles of the solver settings and of the S-GEK settings the
+    ! mock S-GEK solver received refer to the state record it was given, so that a test
+    ! can check that the C wrapper copies this record into the host's before every
+    ! callback function of either settings
+    logical :: solver_state_bundled, s_gek_state_bundled
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(s_gek_factory), pointer :: mock_s_gek_factory_ptr => mock_s_gek_factory
+    procedure(s_gek_solver), pointer :: mock_s_gek_solver_ptr => mock_s_gek_solver
 
 contains
 
-    subroutine mock_s_gek_factory(n_param, update_orbs_funptr, obj_func_funptr, &
-                                  change_reference_funptr, update_orbs_s_gek_funptr, &
-                                  obj_func_s_gek_funptr, solver_settings, &
-                                  solver_state, error, settings)
+    subroutine mock_s_gek_solver(update_orbs_funptr, obj_func_funptr, &
+                                 change_reference_funptr, n_param, error, settings, &
+                                 state, s_gek_settings)
         !
-        ! this function is a test function for the function which returns a modified
-        ! orbital updating function and objective function and wires the solver
-        ! settings, which returns the error it is set to and otherwise creates an S-GEK
-        ! object reading the given state, points the context of the solver settings at
-        ! its level of the solver and lets the settings own it, as the factory does
+        ! this subroutine is a mock routine for the S-GEK solver to test the C
+        ! interface, which returns the error code of the mock solver and writes its
+        ! state
         !
         use opentrustregion_core, only: update_orbs_type, obj_func_type, &
                                         solver_state_type
-        use otr_common, only: extension_type, extension_solver_settings_type
-        use otr_s_gek, only: change_reference_type, s_gek_settings_type, s_gek_type, &
-                             default_s_gek_settings
+        use opentrustregion_mock, only: mock_error, mock_solver_state
         use test_reference, only: check_update_orbs_funptr, check_obj_func_funptr, &
-                                  n_param_ref => n_param
+                                  check_hess_x_funptr, n_param_ref => n_param
+        use otr_common_test_reference, only: check_obj_func_grad_funptr
+        use otr_s_gek, only: change_reference_type
         use otr_s_gek_test_reference, only: check_change_reference_funptr
-        use otr_common_mock, only: mock_update_orbs, mock_obj_func
-        use otr_common_unit_tests, only: check_mock_factory_logger, &
-                                         setup_owning_solver_settings
 
-        integer(ip), intent(in) :: n_param
         procedure(update_orbs_type), intent(in), pointer :: update_orbs_funptr
         procedure(obj_func_type), intent(in), pointer :: obj_func_funptr
         procedure(change_reference_type), intent(in), pointer :: change_reference_funptr
-        procedure(update_orbs_type), intent(out), pointer :: update_orbs_s_gek_funptr
-        procedure(obj_func_type), intent(out), pointer :: obj_func_s_gek_funptr
-        type(extension_solver_settings_type), intent(inout), target :: solver_settings
-        type(solver_state_type), intent(inout), target :: solver_state
+        integer(ip), intent(in) :: n_param
         integer(ip), intent(out) :: error
-        type(s_gek_settings_type), intent(in), optional :: settings
+        class(solver_settings_type), intent(in), optional :: settings
+        type(solver_state_type), intent(out), target, optional :: state
+        type(s_gek_settings_type), intent(in), optional :: s_gek_settings
 
-        class(extension_type), allocatable, target :: object
-
-        ! initialize logical
+        ! assume tests pass
         test_passed = .true.
 
-        ! check number of parameters
-        if (n_param /= n_param_ref) then
+        ! set error code and check that the C wrapper passes the settings it converted
+        error = mock_error
+        if (.not. (present(settings) .and. present(s_gek_settings))) then
+            write(stderr, *) "test_s_gek_solver_c_wrapper failed: Settings not passed."
             test_passed = .false.
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Passed number "// &
-                "of parameters wrong."
-        end if
-
-        ! test passed orbital update and objective function, which call the host's C
-        ! functions through the C wrappers of the core, so they find them with the host
-        ! context in the callback bundle the converted solver settings point to, as the
-        ! object does through the host record of its level of the solver
-        if (.not. check_update_orbs_funptr( &
-            update_orbs_funptr, "s_gek_factory_c_wrapper", " by given orbital "// &
-            "updating function", solver_settings%context)) test_passed = .false.
-        if (.not. check_obj_func_funptr(obj_func_funptr, "s_gek_factory_c_wrapper", &
-                                        " by given objective function", &
-                                        solver_settings%context)) test_passed = .false.
-
-        ! the C wrapper always passes settings, since their context points at the bundle
-        ! of the host's callback functions, which the checks below read
-        if (.not. present(settings)) then
-            test_passed = .false.
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Settings not passed."
-            error = 1
-            update_orbs_s_gek_funptr => null()
-            obj_func_s_gek_funptr => null()
             return
         end if
 
-        ! test passed change reference function
+        ! test passed orbital update subroutine and objective function, which find the
+        ! C functions in the bundle of the solver settings
+        if (.not. check_update_orbs_funptr( &
+            update_orbs_funptr, "s_gek_solver_c_wrapper", " by given orbital "// &
+            "updating subroutine", settings%context)) test_passed = .false.
+        if (.not. check_obj_func_funptr(obj_func_funptr, "s_gek_solver_c_wrapper", &
+                                        " by given objective function", &
+                                        settings%context)) test_passed = .false.
+
+        ! test passed chart transformation, which finds the C function in the bundle of
+        ! the S-GEK settings
         if (.not. check_change_reference_funptr( &
-            change_reference_funptr, "s_gek_factory_c_wrapper", " by given change "// &
-            "reference function", settings%context)) test_passed = .false.
+            change_reference_funptr, "s_gek_solver_c_wrapper", " by given chart "// &
+            "transformation", s_gek_settings%context)) test_passed = .false.
 
-        ! check if optional logging function is correctly passed
-        if (.not. check_mock_factory_logger(settings, mock_s_gek_factory_defaults, &
-                                            "test_s_gek_factory_c_wrapper")) &
+        ! check number of parameters
+        if (n_param /= n_param_ref) then
+            write(stderr, *) "test_s_gek_solver_c_wrapper failed: Passed number of "// &
+                "parameters wrong."
             test_passed = .false.
-
-        ! check if optional settings are correctly passed
-        if (mock_s_gek_factory_defaults) then
-            if (settings /= default_s_gek_settings) then
-                test_passed = .false.
-                write(stderr, *) "test_s_gek_factory_c_wrapper failed: Settings "// &
-                    "that were not initialized not initialized to the default values."
-            end if
-        else if (settings /= ref_s_gek_settings) then
-            test_passed = .false.
-            write(stderr, *) "test_s_gek_factory_c_wrapper failed: Passed optional "// &
-                "settings associated with wrong values."
         end if
 
-        ! set output quantities
-        error = mock_s_gek_factory_error
-        update_orbs_s_gek_funptr => null()
-        obj_func_s_gek_funptr => null()
-        if (error /= 0) return
-        allocate(s_gek_type :: object)
-        object%n_param = n_param
-        object%state => solver_state
-        call setup_owning_solver_settings(solver_settings, object)
-        update_orbs_s_gek_funptr => mock_update_orbs
-        obj_func_s_gek_funptr => mock_obj_func
+        ! check the callback functions of the S-GEK settings that were passed, which
+        ! find the C functions in the bundle of the S-GEK settings, which of them are
+        ! passed the test checks
+        if (associated(s_gek_settings%obj_func_grad)) then
+            if (.not. check_obj_func_grad_funptr( &
+                s_gek_settings%obj_func_grad, "s_gek_solver_c_wrapper", &
+                " by the objective function of the S-GEK settings", &
+                s_gek_settings%context)) test_passed = .false.
+        end if
+        if (associated(s_gek_settings%init_hess)) then
+            if (.not. check_hess_x_funptr( &
+                s_gek_settings%init_hess, "s_gek_solver_c_wrapper", &
+                " by the initial Hessian of the S-GEK settings", &
+                s_gek_settings%context)) test_passed = .false.
+        end if
+        if (associated(s_gek_settings%logger)) &
+            call s_gek_settings%logger("test", s_gek_settings%context)
 
-    end subroutine mock_s_gek_factory
+        ! record the settings and the callback bundles of the solver settings and of
+        ! the S-GEK settings
+        received_solver_settings = settings
+        received_s_gek_settings = s_gek_settings
+        received_callbacks = c_callbacks_type()
+        select type (callbacks => settings%context)
+        type is (c_callbacks_type)
+            received_callbacks = callbacks
+        end select
+        received_s_gek_callbacks = s_gek_c_callbacks_type()
+        select type (callbacks => s_gek_settings%context)
+        type is (s_gek_c_callbacks_type)
+            received_s_gek_callbacks = callbacks
+        end select
+
+        ! record whether both callback bundles refer to the state record
+        solver_state_bundled = .false.
+        s_gek_state_bundled = .false.
+        if (present(state)) then
+            solver_state_bundled = associated(received_callbacks%solver_state, state)
+            s_gek_state_bundled = &
+                associated(received_s_gek_callbacks%solver_state, state)
+        end if
+
+        ! set state
+        if (present(state)) state = mock_solver_state
+
+    end subroutine mock_s_gek_solver
 
 end module otr_s_gek_mock

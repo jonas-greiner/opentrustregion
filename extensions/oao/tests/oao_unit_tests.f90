@@ -975,6 +975,7 @@ contains
             level_context, generate_random_density_matrix, mock_requests, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type, error_oao
+        use otr_common, only: error_evaluate_dm
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix
@@ -1107,10 +1108,10 @@ contains
                 test_obj_func_oao = .false.
 
             ! call routine with a density matrix evaluating function that fails and
-            ! determine if its error is returned unchanged
+            ! determine if its error is returned with its origin
             context%mock_error = 3
             energy = oao%obj_func(kappa, error, level_context(oao, 1_ip))
-            if (error /= 3) then
+            if (error /= error_evaluate_dm + 3) then
                 write(stderr, *) "test_obj_func_oao failed: Error of the density "// &
                     "matrix evaluating function not returned for the "//case_name// &
                     " case."
@@ -1196,7 +1197,7 @@ contains
             mock_requests, mock_get_response_cs, mock_get_response_os, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type, error_oao
-        use otr_common, only: hess_x_callback
+        use otr_common, only: hess_x_callback, error_evaluate_dm
         use opentrustregion_core, only: hess_x_type
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
@@ -1409,12 +1410,12 @@ contains
             end if
 
             ! call routine with the orbital rotation again, whose evaluation fails, and
-            ! determine if the error is passed on and the rotated density is marked as
-            ! not evaluated
+            ! determine if the error is passed on with its origin and the rotated
+            ! density is marked as not evaluated
             context%mock_error = 1
             call oao%update_orbs(kappa, func, grad, h_diag, hess_x_funptr, error, &
                                  level_context(oao, 1_ip))
-            if (error /= 1) then
+            if (error /= error_evaluate_dm + 1) then
                 write(stderr, *) "test_update_orbs_oao failed: Error of the "// &
                     "density matrix evaluating function not passed on for the "// &
                     case_name//" case."
@@ -1519,6 +1520,7 @@ contains
             mock_get_stale_response_os, model_response_cs, model_response_os, &
             mock_evaluate_dm_cs, mock_evaluate_dm_os
         use otr_oao, only: oao_type, error_oao
+        use otr_common, only: error_get_response
         use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
                                               identity_matrix, &
                                               generate_random_symm_matrix
@@ -1607,10 +1609,10 @@ contains
             end if
 
             ! call routine with a response function that fails and determine if its
-            ! error is returned unchanged
+            ! error is returned with its origin
             context%mock_error = 3
             call oao%hess_x(x, hess_x, error, level_context(oao, 1_ip))
-            if (error /= 3) then
+            if (error /= error_get_response + 3) then
                 write(stderr, *) "test_hess_x_oao failed: Error of the response "// &
                     "function not returned for the "//case_name//" case."
                 test_hess_x_oao = .false.

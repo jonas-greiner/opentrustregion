@@ -7,29 +7,19 @@
 module otr_rotation_qn_c_interface
 
     use opentrustregion_core, only: ip, rp, kw_len, update_orbs_type, obj_func_type
-    use c_interface, only: c_ip, c_rp, c_callbacks_type
-    use otr_rotation_qn, only: obj_func_grad_type, transport_type, &
+    use c_interface, only: c_ip, c_rp
+    use otr_rotation_qn, only: transport_type, &
                                standard_rotation_qn_factory => rotation_qn_factory
+    use otr_common_c_interface, only: obj_func_grad_c_callbacks_type
     use, intrinsic :: iso_c_binding, only: c_size_t, c_sizeof, c_bool, c_ptr, c_char, &
                                            c_funptr, c_f_procpointer, c_associated, &
                                            c_null_funptr, c_null_ptr
 
     implicit none
 
-    ! C-interoperable interfaces for the callback functions
-    abstract interface
-        function obj_func_grad_c_type(kappa_c, grad_c, func_c, context_c) &
-            result(error_c) bind(C)
-            import :: c_rp, c_ip, c_ptr
-
-            real(c_rp), intent(in), target :: kappa_c(*)
-            real(c_rp), intent(out), target :: grad_c(*)
-            real(c_rp), intent(out) :: func_c
-            type(c_ptr), intent(in), value :: context_c
-            integer(c_ip) :: error_c
-        end function obj_func_grad_c_type
-    end interface
-
+    ! C-interoperable interface for the transport callback function, while
+    ! otr_common_c_interface holds that of the objective function that also returns the
+    ! gradient at a trial point
     abstract interface
         function transport_c_type(geodesic_c, tangent_vector_c, context_c) &
             result(error_c) bind(C)
@@ -45,11 +35,10 @@ module otr_rotation_qn_c_interface
     ! bundle of the C callback functions of rotation QN, which holds the initial
     ! Hessian and its preconditioner of the settings in the slots of the core's Hessian
     ! linear transformation and preconditioner, whose Fortran wrappers the converted
-    ! settings use, and extends that of the core by the objective and transport
-    ! functions of the settings, held by the holder of the object, since the settings
-    ! outlive the factory call, and reached through the context of the settings
-    type, extends(c_callbacks_type) :: rotation_qn_c_callbacks_type
-        procedure(obj_func_grad_c_type), pointer, nopass :: obj_func_grad => null()
+    ! settings use, and extends the shared bundle with the objective function of the
+    ! settings by their transport function, held by the holder of the object, since the
+    ! settings outlive the factory call, and reached through the context of the settings
+    type, extends(obj_func_grad_c_callbacks_type) :: rotation_qn_c_callbacks_type
         procedure(transport_c_type), pointer, nopass :: transport => null()
     end type
 
@@ -66,8 +55,6 @@ module otr_rotation_qn_c_interface
         standard_rotation_qn_factory
 
     ! create function pointers to ensure that routines comply with interface
-    procedure(obj_func_grad_type), pointer :: obj_func_grad_f_wrapper_ptr => &
-        obj_func_grad_f_wrapper
     procedure(transport_type), pointer :: transport_f_wrapper_ptr => transport_f_wrapper
 
     ! interfaces for converting C settings to Fortran settings
@@ -203,38 +190,6 @@ contains
 
     end function rotation_qn_factory_c_wrapper
 
-    function obj_func_grad_f_wrapper(kappa, grad, error, context) result(func)
-        !
-        ! this function exposes the C objective function of the settings, which also
-        ! returns the gradient at the trial point, to Fortran, finding the C function
-        ! and the host context in the bundle it receives as context
-        !
-        real(rp), intent(in), target :: kappa(:)
-        real(rp), intent(out), target :: grad(:)
-        integer(ip), intent(out) :: error
-        class(*), intent(in), pointer :: context
-        real(rp) :: func
-
-        integer(c_ip) :: error_c
-        real(c_rp) :: func_c
-
-        ! the bundle holds the C function
-        func = 0.0_rp
-        error = 1
-        if (.not. associated(context)) return
-        select type (callbacks => context)
-        type is (rotation_qn_c_callbacks_type)
-            ! call objective C function
-            error_c = &
-                callbacks%obj_func_grad(kappa, grad, func_c, callbacks%host_context)
-
-            ! convert function value and error code to Fortran kinds
-            func = real(func_c, kind=rp)
-            error = int(error_c, kind=ip)
-        end select
-
-    end function obj_func_grad_f_wrapper
-
     subroutine transport_f_wrapper(geodesic, tangent_vector, error, context)
         !
         ! this subroutine exposes the transport C function to Fortran, finding the C
@@ -295,6 +250,7 @@ contains
                                    default_rotation_qn_settings
         use c_interface, only: character_from_c, logger_f_wrapper, hess_x_f_wrapper, &
                                precond_f_wrapper
+        use otr_common_c_interface, only: obj_func_grad_f_wrapper
 
         type(rotation_qn_settings_type), intent(out) :: settings
         type(rotation_qn_settings_type_c), intent(in) :: settings_c

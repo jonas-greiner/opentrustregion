@@ -28,6 +28,16 @@ typedef c_int evaluate_dm_fn(const c_real *dm_ao_c, c_real *energy_c, c_real *fo
 typedef evaluate_dm_fn *evaluate_dm_fp;
 
 /* ------------------------------------------------------------------
+ * Function pointer types shared by the extensions learning from
+ * trial points
+ * ------------------------------------------------------------------ */
+
+/* Objective function callback that also returns the gradient at the trial point */
+typedef c_int obj_func_grad_fn(const c_real *kappa_c, c_real *grad_c, c_real *func_c,
+                               void *context);
+typedef obj_func_grad_fn *obj_func_grad_fp;
+
+/* ------------------------------------------------------------------
  * Functions shared by every extension
  * ------------------------------------------------------------------ */
 
