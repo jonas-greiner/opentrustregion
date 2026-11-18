@@ -646,10 +646,12 @@ contains
         class(oao_type), intent(inout) :: self
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n_ao, n_particle, i, lwork, info
+        integer(ip) :: n_ao, n_particle, i, lwork, liwork, info, iwork_query(1)
+        real(rp) :: work_query(1)
         real(rp), allocatable :: a(:, :), work(:)
+        integer(ip), allocatable :: iwork(:)
         character(len=300) :: msg
-        external :: dsyev
+        external :: dsyevd
 
         ! initialize error flag
         error = 0
@@ -667,27 +669,27 @@ contains
 
         allocate(a(n_ao, n_ao))
         do i = 1, n_particle
-            ! form the static part for this particle channel, dsyev overwrites it
+            ! form the static part for this particle channel, dsyevd overwrites it
             a = self%fock_vv(:, :, i) - self%fock_oo(:, :, i)
 
-            ! query optimal workspace size
-            lwork = -1
-            allocate(work(1))
-            call dsyev("V", "U", n_ao, a, n_ao, self%hess_eigvals(:, i), work, lwork, &
-                       info)
-            lwork = int(work(1))
-            deallocate(work)
-            allocate(work(lwork))
+            ! query optimal workspace sizes of LAPACK's divide-and-conquer solver,
+            ! whose eigenvector computation, unlike that of the QR algorithm, is built
+            ! on threaded level 3 BLAS
+            call dsyevd("V", "U", n_ao, a, n_ao, self%hess_eigvals(:, i), work_query, &
+                        -1_ip, iwork_query, -1_ip, info)
+            lwork = int(work_query(1), kind=ip)
+            liwork = iwork_query(1)
+            allocate(work(lwork), iwork(liwork))
 
             ! perform eigendecomposition
-            call dsyev("V", "U", n_ao, a, n_ao, self%hess_eigvals(:, i), work, lwork, &
-                       info)
-            deallocate(work)
+            call dsyevd("V", "U", n_ao, a, n_ao, self%hess_eigvals(:, i), work, lwork, &
+                        iwork, liwork, info)
+            deallocate(work, iwork)
 
             ! check for successful execution
             if (info /= 0) then
                 write(msg, '(A, I0)') "Eigendecomposition of static Hessian part "// &
-                    "failed: Error in DSYEV, info = ", info
+                    "failed: Error in DSYEVD, info = ", info
                 call self%settings%log(msg, verbosity_error, .true.)
                 error = 1
                 call add_error_origin(error, self%error_origin, self%settings)

@@ -3768,6 +3768,74 @@ contains
 
     end function test_compute_sqrt_and_inv_sqrt
 
+    logical(c_bool) function test_compute_inv_sqrt_near_identity() bind(C)
+        !
+        ! this function tests the subroutine which calculates the inverse square root
+        ! of a matrix that is the identity up to a perturbation, from the series for a
+        ! small perturbation and from the eigendecomposition for a larger one
+        !
+        use otr_common, only: compute_inv_sqrt_near_identity
+        use opentrustregion_core, only: solver_settings_type
+        use opentrustregion_unit_tests, only: test_context_type, setup_settings, &
+                                              identity_matrix
+
+        type(test_context_type), target :: context
+        integer(ip), parameter :: n = 3
+        character(len=*), parameter :: cases(2) = &
+            ["small perturbation", "large perturbation"]
+
+        real(rp) :: a(n, n), e(n, n)
+        real(rp), allocatable :: inv_sqrt_a(:, :)
+        type(solver_settings_type) :: settings
+        integer(ip) :: error, icase
+
+        ! assume tests pass
+        test_compute_inv_sqrt_near_identity = .true.
+
+        ! set up the settings the routine logs through
+        call setup_settings(settings, context)
+
+        do icase = 1, size(cases)
+            ! perturb the identity by a random symmetric matrix of Frobenius norm 1e-7,
+            ! for which the series applies, or by a random symmetric positive definite
+            ! matrix, for which the eigendecomposition applies
+            call random_number(e)
+            if (icase == 1) then
+                e = e + transpose(e)
+                e = 1e-7_rp * e / norm2(e)
+            else
+                e = matmul(e, transpose(e)) + real(n, kind=rp) * identity_matrix(n)
+            end if
+            a = identity_matrix(n) + e
+
+            ! call routine and determine if the result is symmetric and turns the
+            ! matrix into the identity, X A X = I, which the symmetric inverse square
+            ! root alone does
+            call compute_inv_sqrt_near_identity(a, inv_sqrt_a, settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_compute_inv_sqrt_near_identity failed: "// &
+                    "Produced error for "//cases(icase)//"."
+                test_compute_inv_sqrt_near_identity = .false.
+                cycle
+            end if
+            if (.not. is_at_most(norm2(matmul(inv_sqrt_a, matmul(a, inv_sqrt_a)) - &
+                                       identity_matrix(n)), tol)) then
+                write(stderr, *) "test_compute_inv_sqrt_near_identity failed: "// &
+                    "Inverse square root X does not give X A X = I for "// &
+                    cases(icase)//"."
+                test_compute_inv_sqrt_near_identity = .false.
+            end if
+            if (.not. is_at_most(norm2(inv_sqrt_a - transpose(inv_sqrt_a)), tol)) then
+                write(stderr, *) "test_compute_inv_sqrt_near_identity failed: "// &
+                    "Returned inverse square root is not symmetric for "// &
+                    cases(icase)//"."
+                test_compute_inv_sqrt_near_identity = .false.
+            end if
+            deallocate(inv_sqrt_a)
+        end do
+
+    end function test_compute_inv_sqrt_near_identity
+
     logical(c_bool) function test_matrix_exponential() bind(C)
         !
         ! this function tests the function which calculates the matrix exponential of a

@@ -893,7 +893,7 @@ contains
         ! that rounding errors do not accumulate over iterations, and returns them
         ! together with the resulting density matrix in the AO basis
         !
-        use otr_common, only: matrix_exponential, compute_sqrt_and_inv_sqrt
+        use otr_common, only: matrix_exponential, compute_inv_sqrt_near_identity
 
         real(rp), intent(in) :: kappa(:), mo_coeff(:, :, :), ao_overlap(:, :)
         type(mo_channel_type), intent(in) :: mo_channels(:)
@@ -905,7 +905,7 @@ contains
         integer(ip), allocatable :: rows(:, :)
         real(rp), allocatable :: kappa_full(:, :), u(:, :), rotated(:, :), &
                                  overlap_rotated(:, :), metric(:, :), &
-                                 metric_sqrt(:, :), metric_inv_sqrt(:, :)
+                                 metric_inv_sqrt(:, :)
         external :: dgemm
 
         ! initialize error flag
@@ -941,13 +941,13 @@ contains
                        n_mo, 0.0_rp, rotated, n_ao)
 
             ! reorthonormalize the rotated orbitals with the inverse square root of
-            ! their overlap matrix
+            ! their overlap matrix, which is the identity up to rounding
             call dgemm("N", "N", n_ao, n_mo, n_ao, 1.0_rp, ao_overlap, n_ao, rotated, &
                        n_ao, 0.0_rp, overlap_rotated, n_ao)
             call dgemm("T", "N", n_mo, n_mo, n_ao, 1.0_rp, rotated, n_ao, &
                        overlap_rotated, n_ao, 0.0_rp, metric, n_mo)
-            call compute_sqrt_and_inv_sqrt(metric, metric_sqrt, metric_inv_sqrt, &
-                                           settings, error)
+            call compute_inv_sqrt_near_identity(metric, metric_inv_sqrt, settings, &
+                                                error)
             if (error /= 0) return
             call dgemm("N", "N", n_ao, n_mo, n_mo, 1.0_rp, rotated, n_ao, &
                        metric_inv_sqrt, n_mo, 0.0_rp, rot_mo_coeff(:, :, i), n_ao)

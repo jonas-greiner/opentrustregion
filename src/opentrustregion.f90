@@ -1637,17 +1637,21 @@ contains
 
     subroutine symm_mat_diag(symm_matrix, eigvals, eigvecs, settings, error)
         !
-        ! this subroutine returns eigenvalues and eigenvectors of a symmetric matrix
+        ! this subroutine returns eigenvalues and eigenvectors of a symmetric matrix,
+        ! with LAPACK's divide-and-conquer solver, whose eigenvector computation,
+        ! unlike that of the QR algorithm, is built on threaded level 3 BLAS
         !
         real(rp), intent(in) :: symm_matrix(:, :)
         class(settings_type), intent(in) :: settings
         real(rp), intent(out) :: eigvals(:), eigvecs(:, :)
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n, lwork, info
+        integer(ip) :: n, lwork, liwork, info, iwork_query(1)
+        real(rp) :: work_query(1)
         real(rp), allocatable :: work(:)
+        integer(ip), allocatable :: iwork(:)
         character(len=300) :: msg
-        external :: dsyev
+        external :: dsyevd
 
         ! initialize error flag
         error = 0
@@ -1658,23 +1662,22 @@ contains
         ! copy matrix
         eigvecs = symm_matrix
 
-        ! query optimal workspace size
-        lwork = -1
-        allocate(work(1))
-        call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
-        lwork = int(work(1), kind=ip)
-        deallocate(work)
-        allocate(work(lwork))
+        ! query optimal workspace sizes
+        call dsyevd("V", "U", n, eigvecs, n, eigvals, work_query, -1_ip, iwork_query, &
+                    -1_ip, info)
+        lwork = int(work_query(1), kind=ip)
+        liwork = iwork_query(1)
+        allocate(work(lwork), iwork(liwork))
 
         ! perform eigendecomposition
-        call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
+        call dsyevd("V", "U", n, eigvecs, n, eigvals, work, lwork, iwork, liwork, info)
 
-        ! deallocate work array
-        deallocate(work)
+        ! deallocate work arrays
+        deallocate(work, iwork)
 
         ! check for successful execution
         if (info /= 0) then
-            write(msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEV, "// &
+            write(msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEVD, "// &
                 "info = ", info
             call settings%log(msg, verbosity_error, .true.)
             error = 1

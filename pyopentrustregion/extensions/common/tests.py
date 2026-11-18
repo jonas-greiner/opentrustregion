@@ -67,6 +67,7 @@ fortran_tests = {
         "bfgs_terms",
         "channel_rows",
         "check_evaluate_dm_orbital_basis",
+        "compute_inv_sqrt_near_identity",
         "compute_sqrt_and_inv_sqrt",
         "conv_check_callback",
         "extension_level",

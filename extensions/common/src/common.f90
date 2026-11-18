@@ -1440,7 +1440,9 @@ contains
     subroutine compute_sqrt_and_inv_sqrt(A, sqrtA, inv_sqrtA, settings, error)
         !
         ! this subroutine calculates the square root and inverse square root of a
-        ! symmetric positive definite matrix
+        ! symmetric positive definite matrix from its eigendecomposition, with
+        ! LAPACK's divide-and-conquer solver, whose eigenvector computation, unlike
+        ! that of the QR algorithm, is built on threaded level 3 BLAS
         !
         use opentrustregion_core, only: verbosity_error
 
@@ -1449,10 +1451,12 @@ contains
         class(settings_type), intent(in) :: settings
         integer(ip), intent(out) :: error
 
-        integer(ip) :: n, lwork, info, i
-        real(rp), allocatable :: eigvecs(:, :), eigvals(:), work(:)
+        integer(ip) :: n, lwork, liwork, info, iwork_query(1), i
+        real(rp) :: work_query(1)
+        real(rp), allocatable :: eigvecs(:, :), eigvals(:), scaled(:, :), work(:)
+        integer(ip), allocatable :: iwork(:)
         character(len=300) :: msg
-        external :: dsyev, dgemm
+        external :: dsyevd, dgemm
 
         ! initialize error flag
         error = 0
@@ -1463,26 +1467,25 @@ contains
         ! allocate eigenvector and eigenvalue arrays
         allocate(eigvecs(n, n), eigvals(n))
 
-        ! copy input because dsyev overwrites it
+        ! copy input because dsyevd overwrites it
         eigvecs = A
 
-        ! query optimal workspace size
-        lwork = -1
-        allocate(work(1))
-        call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
-        lwork = int(work(1))
-        deallocate(work)
-        allocate(work(lwork))
+        ! query optimal workspace sizes
+        call dsyevd("V", "U", n, eigvecs, n, eigvals, work_query, -1_ip, iwork_query, &
+                    -1_ip, info)
+        lwork = int(work_query(1), kind=ip)
+        liwork = iwork_query(1)
+        allocate(work(lwork), iwork(liwork))
 
         ! perform eigendecomposition
-        call dsyev("V", "U", n, eigvecs, n, eigvals, work, lwork, info)
+        call dsyevd("V", "U", n, eigvecs, n, eigvals, work, lwork, iwork, liwork, info)
 
-        ! deallocate work array
-        deallocate(work)
+        ! deallocate work arrays
+        deallocate(work, iwork)
 
         ! check for successful execution
         if (info /= 0) then
-            write(msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEV, "// &
+            write(msg, '(A, I0)') "Eigendecomposition failed: Error in DSYEVD, "// &
                 "info = ", info
             call settings%log(msg, verbosity_error, .true.)
             error = 1
@@ -1492,22 +1495,71 @@ contains
         ! get square roots of eigenvalues
         eigvals = sqrt(eigvals)
 
-        ! allocate and initialize output matrices
-        allocate(sqrtA(n, n), inv_sqrtA(n, n))
-        sqrtA = 0.0_rp
-        inv_sqrtA = 0.0_rp
-
-        ! construct the square root and inverse square root of A
+        ! construct the square root V diag(sqrt(lambda)) V^T and the inverse square
+        ! root V diag(1 / sqrt(lambda)) V^T of A from the scaled eigenvectors
+        allocate(sqrtA(n, n), inv_sqrtA(n, n), scaled(n, n))
         do i = 1, n
-            call dgemm("N", "T", n, n, 1_ip, eigvals(i), eigvecs(:, i), n, &
-                       eigvecs(:, i), n, 1.0_rp, sqrtA, n)
-            call dgemm("N", "T", n, n, 1_ip, 1.0_rp / eigvals(i), eigvecs(:, i), n, &
-                       eigvecs(:, i), n, 1.0_rp, inv_sqrtA, n)
+            scaled(:, i) = eigvals(i) * eigvecs(:, i)
         end do
+        call dgemm("N", "T", n, n, n, 1.0_rp, scaled, n, eigvecs, n, 0.0_rp, sqrtA, n)
+        do i = 1, n
+            scaled(:, i) = eigvecs(:, i) / eigvals(i)
+        end do
+        call dgemm("N", "T", n, n, n, 1.0_rp, scaled, n, eigvecs, n, 0.0_rp, &
+                   inv_sqrtA, n)
 
-        deallocate(eigvecs, eigvals)
+        deallocate(eigvecs, eigvals, scaled)
 
     end subroutine compute_sqrt_and_inv_sqrt
+
+    subroutine compute_inv_sqrt_near_identity(A, inv_sqrtA, settings, error)
+        !
+        ! this subroutine calculates the inverse square root of a symmetric positive
+        ! definite matrix that is the identity up to a perturbation E = A - I, such as
+        ! the overlap matrix of orthonormal orbitals after a rotation, from the series
+        ! I - E / 2 + 3 E^2 / 8, whose remainder is bounded by 5 ||E||^3 / 16 and thus
+        ! below rounding for the Frobenius norms the series is used for, and from the
+        ! eigendecomposition of A otherwise
+        !
+        real(rp), intent(in) :: A(:, :)
+        real(rp), allocatable, intent(out) :: inv_sqrtA(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        ! largest Frobenius norm of the perturbation for which the series is used
+        real(rp), parameter :: series_max_norm = 1e-5_rp
+
+        integer(ip) :: n, i
+        real(rp), allocatable :: e(:, :), sqrtA(:, :)
+        real(rp), external :: dnrm2
+        external :: dgemm
+
+        ! initialize error flag
+        error = 0
+
+        ! get matrix dimension
+        n = size(A, 1)
+
+        ! perturbation from the identity
+        e = A
+        do i = 1, n
+            e(i, i) = e(i, i) - 1.0_rp
+        end do
+
+        ! fall back to the eigendecomposition for a larger perturbation
+        if (.not. dnrm2(n * n, e, 1_ip) <= series_max_norm) then
+            call compute_sqrt_and_inv_sqrt(A, sqrtA, inv_sqrtA, settings, error)
+            return
+        end if
+
+        ! sum the series I - E / 2 + 3 E^2 / 8
+        inv_sqrtA = -0.5_rp * e
+        call dgemm("N", "N", n, n, n, 0.375_rp, e, n, e, n, 1.0_rp, inv_sqrtA, n)
+        do i = 1, n
+            inv_sqrtA(i, i) = inv_sqrtA(i, i) + 1.0_rp
+        end do
+
+    end subroutine compute_inv_sqrt_near_identity
 
     function matrix_exponential(A, settings, error) result(expA)
         !
