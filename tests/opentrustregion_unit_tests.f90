@@ -111,11 +111,13 @@ module opentrustregion_unit_tests
     integer(ip), parameter :: fault_update_orbs = 1, fault_obj_func = 2, &
                               fault_hess_x = 3, fault_precond = 4, fault_project = 5, &
                               fault_conv_check = 6, fault_get_extra_trial_vectors = 7, &
-                              fault_stability_conv_check = 8, n_fault_callbacks = 8
+                              fault_stability_conv_check = 8, &
+                              fault_precond_factor = 9, n_fault_callbacks = 9
     character(len=*), parameter :: fault_callback_names(n_fault_callbacks) = &
-        [character(len=33) :: "orbital update", "objective function", "Hessian "// &
-         "linear transformation", "preconditioner", "projection", "convergence check", &
-         "extra trial vector function", "stability check convergence check"]
+        [character(len=33) :: "orbital update", "objective function", &
+         "Hessian linear transformation", "preconditioner", "projection", &
+         "convergence check", "extra trial vector function", &
+         "stability check convergence check", "preconditioner factor function"]
 
     ! kinds of fault, an error code or a value in an output that is not a number or
     ! infinite, with their names for failure messages
@@ -134,10 +136,10 @@ module opentrustregion_unit_tests
 
     ! define type for the host context handed to the mock callback functions of a
     ! quadratic model of any dimension, which holds its gradient and Hessian, the
-    ! index of the next unit vector a preconditioner returns and the level shift a
-    ! preconditioner was last called with
+    ! factor of a preconditioner, the index of the next unit vector a preconditioner
+    ! returns and the level shift a preconditioner was last called with
     type, extends(test_context_type) :: quadratic_context_type
-        real(rp), allocatable :: grad(:), hess(:, :)
+        real(rp), allocatable :: grad(:), hess(:, :), factor(:, :)
         integer(ip) :: next_unit_vector = 0
         real(rp) :: recorded_mu = 0.0_rp
     end type
@@ -316,6 +318,28 @@ contains
         error = 0
 
     end subroutine identity_precond
+
+    subroutine identity_precond_factor(vector, transpose, factor_vector, error, context)
+        !
+        ! this subroutine describes the identity as the factor of a preconditioner,
+        ! which is its own transpose and needs no test context
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: vector(:)
+        logical, intent(in) :: transpose
+        real(rp), intent(out), target :: factor_vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! check host context
+        call check_host_context(context)
+
+        factor_vector = vector + merge(0.0_rp, 0.0_rp, transpose)
+
+        error = 0
+
+    end subroutine identity_precond_factor
 
     subroutine mock_precond_first_unit_vector(residual, mu, precond_residual, error, &
                                               context)
@@ -1146,6 +1170,26 @@ contains
 
     end subroutine faulty_precond
 
+    subroutine faulty_precond_factor(vector, transpose, factor_vector, error, context)
+        !
+        ! this subroutine describes the identity as the factor of a preconditioner
+        ! into which a fault can be injected
+        !
+        real(rp), intent(in), target :: vector(:)
+        logical, intent(in) :: transpose
+        real(rp), intent(out), target :: factor_vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        ! apply factor
+        call identity_precond_factor(vector, transpose, factor_vector, error, context)
+        if (error /= 0) return
+
+        ! inject fault
+        call inject_fault(context, fault_precond_factor, error, factor_vector(1))
+
+    end subroutine faulty_precond_factor
+
     subroutine faulty_project(vector, error, context)
         !
         ! this subroutine describes the identity projection into which a fault can be
@@ -1377,6 +1421,39 @@ contains
         precond_residual(state%next_unit_vector) = 1.0_rp
 
     end subroutine mock_precond_next_unit_vector
+
+    subroutine quadratic_precond_factor(vector, transpose, factor_vector, error, &
+                                        context)
+        !
+        ! this subroutine applies the factor of a preconditioner held by the quadratic
+        ! model context, or its transpose
+        !
+        use test_reference, only: check_host_context
+
+        real(rp), intent(in), target :: vector(:)
+        logical, intent(in) :: transpose
+        real(rp), intent(out), target :: factor_vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        class(quadratic_context_type), pointer :: state
+
+        ! check host context
+        call check_host_context(context)
+
+        ! get quadratic model state
+        state => resolve_quadratic_context(context, error)
+        if (error /= 0) return
+
+        ! the product of the vector with the factor from the left is that of the
+        ! transposed factor with the vector
+        if (transpose) then
+            factor_vector = matmul(vector, state%factor)
+        else
+            factor_vector = matmul(state%factor, vector)
+        end if
+
+    end subroutine quadratic_precond_factor
 
     ! double well function definition
 
@@ -2046,6 +2123,39 @@ contains
 
     end subroutine ref_general_mat_diag
 
+    logical function ref_stability_certified(lowest_eigval, highest_eigval, n_steps, &
+                                             n_param_ref, failure_probability, &
+                                             max_steps)
+        !
+        ! this function reimplements the certificate of stability of the Lanczos
+        ! method: Tropp's bound 4 sqrt(n) exp(-sqrt(eps) (2 k - 1)) on the probability
+        ! that an extreme Ritz value in a Krylov space of dimension k = n_steps misses
+        ! its eigenvalue by the relative error eps, measured in the spectral width,
+        ! reaches failure_probability / (2 max_steps) for both extreme Ritz values,
+        ! whose difference over 1 - 2 eps then bounds the width, which bounds the
+        ! lowest eigenvalue from below by the lowest Ritz value minus eps times it
+        !
+        real(rp), intent(in) :: lowest_eigval, highest_eigval, failure_probability
+        integer(ip), intent(in) :: n_steps, n_param_ref, max_steps
+
+        real(rp) :: eps
+
+        ! relative error at which a bound reaches its failure probability
+        eps = (log(4.0_rp * sqrt(real(n_param_ref, kind=rp)) / &
+                   (failure_probability / real(2 * max_steps, kind=rp))) / &
+               real(2 * n_steps - 1, kind=rp))**2
+
+        ! no bound on the width before the relative error drops below one half
+        ref_stability_certified = eps < 0.5_rp
+        if (.not. ref_stability_certified) return
+
+        ! the lower bound on the lowest eigenvalue has to be positive
+        ref_stability_certified = &
+            lowest_eigval - eps * (highest_eigval - lowest_eigval) / &
+            (1.0_rp - 2.0_rp * eps) > 0.0_rp
+
+    end function ref_stability_certified
+
     function ref_hartmann6d_ratio(context, step) result(ratio)
         !
         ! this function reimplements the ratio of the actual to the predicted change of
@@ -2199,18 +2309,18 @@ contains
             default_settings => default_solver_settings, error_solver_max_iter, &
             error_update_orbs, error_conv_check, error_obj_func, error_hess_x, &
             error_solver, error_precond, error_project, error_get_extra_trial_vectors, &
-            subsystem_solver_options, error_stability_check
+            subsystem_solver_options, error_stability_check, error_precond_factor
 
         real(rp), parameter :: var_thres = 1e-4_rp
         integer(ip) :: error, i_solver, i_case, callback, i_call, &
                        n_calls(n_fault_callbacks), fault_kind
-        logical :: grad_noise, reported
+        logical :: grad_noise, reported, expected_calls(n_fault_callbacks)
         integer(ip), parameter :: fault_origins(n_fault_callbacks) = &
             [error_update_orbs, error_obj_func, error_hess_x, error_precond, &
              error_project, error_conv_check, error_get_extra_trial_vectors, &
-             error_conv_check]
+             error_conv_check, error_precond_factor]
         logical, parameter :: value_faults(n_fault_callbacks) = &
-            [.true., .true., .true., .true., .true., .false., .true., .false.]
+            [.true., .true., .true., .true., .true., .false., .true., .false., .true.]
         character(len=20) :: call_number
         character(len=100) :: fault_name
         type(hartmann6d_fault_context_type), target :: fault_context
@@ -2915,8 +3025,10 @@ contains
         ! calls of every callback function and then letting every one of these calls
         ! fail in turn, by returning an error and, where the callback function returns
         ! values, a value that is not a number, for every subsystem solver without and
-        ! with a perturbed gradient, whose perturbation is projected, and check that
-        ! the unfaulted run reaches every callback function, that an error is reported
+        ! with a perturbed gradient, whose perturbation is projected, the latter with
+        ! the Lanczos method for the internal stability check, which alone reaches the
+        ! preconditioner factor function, and check that the unfaulted run reaches
+        ! every callback function the case uses, that an error is reported
         ! with the origin of the failing callback function, a value that is not a
         ! number as an error of the solver or of its internal stability check, which a
         ! mock can not tell apart, unless it is an objective function value, which
@@ -2927,7 +3039,8 @@ contains
                 grad_noise = i_case == 2
                 case_name = trim(subsystem_solver_options(i_solver))// &
                             " subsystem solver"
-                if (grad_noise) case_name = trim(case_name)//" and perturbed gradient"
+                if (grad_noise) case_name = trim(case_name)//" with perturbed "// &
+                                            "gradient and Lanczos stability check"
                 call run_with_fault(0_ip, 0_ip, error_fault)
                 if (error /= 0) then
                     write(stderr, *) "test_solver failed: Produced error without "// &
@@ -2936,11 +3049,21 @@ contains
                     cycle
                 end if
                 n_calls = fault_context%n_callback_calls
+
+                ! only the Lanczos method of the internal stability check calls the
+                ! preconditioner factor function, while it calls no extra trial vector
+                ! function, which truncated conjugate gradient does not call either
+                expected_calls = .true.
+                expected_calls(fault_precond_factor) = grad_noise
+                if (grad_noise .and. subsystem_solver_options(i_solver) == "tcg") &
+                    expected_calls(fault_get_extra_trial_vectors) = .false.
                 do callback = 1, n_fault_callbacks
-                    if (n_calls(callback) == 0) then
-                        write(stderr, *) "test_solver failed: Unfaulted run did "// &
-                            "not call "//trim(fault_callback_names(callback))// &
-                            " with "//trim(case_name)//"."
+                    if ((n_calls(callback) > 0) .neqv. expected_calls(callback)) then
+                        write(stderr, *) "test_solver failed: Unfaulted run "// &
+                            trim(merge("did not call", "called      ", &
+                                       expected_calls(callback)))//" "// &
+                            trim(fault_callback_names(callback))//" with "// &
+                            trim(case_name)//"."
                         test_solver = .false.
                     end if
                     do i_call = 1, n_calls(callback)
@@ -3033,6 +3156,8 @@ contains
             settings%stability_settings%conv_check => faulty_stability_conv_check
             settings%stability_settings%get_extra_trial_vectors => &
                 faulty_get_extra_trial_vectors
+            settings%stability_settings%precond_factor => faulty_precond_factor
+            if (grad_noise) settings%stability_settings%diag_solver = "lanczos"
 
             ! run solver
             faulty_update_orbs_funptr => faulty_update_orbs
@@ -3052,27 +3177,29 @@ contains
             hess_x_type, stability_settings_type, stability_check, &
             error_stability_check, error_stability_check_max_iter, verbosity_warning, &
             error_hess_x, error_precond, error_project, error_conv_check, &
-            error_get_extra_trial_vectors, diag_solver_options, unstable_warning_msg, &
-            default_stability_settings
+            error_get_extra_trial_vectors, error_precond_factor, diag_solver_options, &
+            unstable_warning_msg, default_stability_settings
         use test_reference, only: arm_host_context, host_context_reached, &
                                   n_extra_trial_vectors
         use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
 
         real(rp), parameter :: points(n_param, 2) = &
             reshape([minimum1, saddle_point], [n_param, 2_ip])
-        character(len=*), parameter :: point_names(2) = &
-            [character(len=12) :: "minimum", "saddle point"]
+        character(len=*), parameter :: &
+            point_names(2) = [character(len=12) :: "minimum", "saddle point"], &
+            method_names(2) = [character(len=8) :: "davidson", "lanczos"]
         integer(ip), parameter :: &
-            fault_callbacks(5) = [fault_hess_x, fault_precond, fault_project, &
+            fault_callbacks(6) = [fault_hess_x, fault_precond, fault_project, &
                                   fault_get_extra_trial_vectors, &
-                                  fault_stability_conv_check], &
-            fault_origins(5) = [error_hess_x, error_precond, error_project, &
-                                error_get_extra_trial_vectors, error_conv_check]
+                                  fault_stability_conv_check, fault_precond_factor], &
+            fault_origins(6) = [error_hess_x, error_precond, error_project, &
+                                error_get_extra_trial_vectors, error_conv_check, &
+                                error_precond_factor]
         real(rp) :: h_diag(n_param), direction(n_param), hess_eigvals(n_param), &
                     hess_eigvecs(n_param, n_param)
         procedure(hess_x_type), pointer :: hess_x_funptr
         logical :: stable, expected_calls(n_fault_callbacks)
-        integer(ip) :: error, i, i_point, i_solver, callback, i_call, &
+        integer(ip) :: error, i, i_point, i_solver, i_method, callback, i_call, &
                        n_calls(n_fault_callbacks), fault_kind
         character(len=300) :: msg
         character(len=20) :: call_number
@@ -3086,59 +3213,76 @@ contains
         ! assume tests pass
         test_stability_check = .true.
 
-        ! run the stability check at the minimum and at the saddle point and check that
-        ! it classifies the point correctly and returns the lowest Hessian eigenvalue
-        ! and its eigenvector, which are determined independently, at the minimum as
-        ! well, that the state holds the iteration, this eigenvalue and its converged
-        ! residual and that the reported number of Hessian linear transformations
-        ! agrees with the calls, the state record is reused so that the counter must
-        ! not include the previous calls
+        ! run the stability check with the Davidson and with the Lanczos method at the
+        ! minimum and at the saddle point and check that it classifies the point
+        ! correctly, that the state holds the iteration and that the reported number
+        ! of Hessian linear transformations agrees with the calls, the state record is
+        ! reused so that the counter must not include the previous calls; the Davidson
+        ! method returns the lowest Hessian eigenvalue and its eigenvector, which are
+        ! determined independently, which the state holds with its converged residual,
+        ! while the Lanczos method returns a unit vector whose Rayleigh quotient the
+        ! state holds
         hess_x_funptr => hess_x_fun
-        settings = stability_settings_type()
-        settings%context => context
-        do i_point = 1, size(points, 2)
-            context%hess = hartmann6d_hessian(points(:, i_point))
-            call ref_symm_mat_diag(context%hess, hess_eigvals, hess_eigvecs)
-            h_diag = [(context%hess(i, i), i=1, size(h_diag))]
-            case_name = point_names(i_point)
-            context%n_hess_x_calls = 0
-            call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
-                                 state, direction)
-            if (error /= 0) then
-                write(stderr, *) "test_stability_check failed: Produced error for "// &
-                    trim(case_name)//"."
-                test_stability_check = .false.
-            end if
-            if (stable .neqv. i_point == 1) then
-                write(stderr, *) "test_stability_check failed: Stability "// &
-                    "incorrectly classified for "//trim(case_name)//"."
-                test_stability_check = .false.
-            end if
-            if (.not. is_close(state%min_eigval, hess_eigvals(1))) then
-                write(stderr, *) "test_stability_check failed: Lowest eigenvalue "// &
-                    "not held by the state for "//trim(case_name)//"."
-                test_stability_check = .false.
-            end if
-            if (.not. is_close(abs(dot_product(direction, hess_eigvecs(:, 1))), &
-                               1.0_rp)) then
-                write(stderr, *) "test_stability_check failed: Eigenvector of the "// &
-                    "lowest eigenvalue not returned for "//trim(case_name)//"."
-                test_stability_check = .false.
-            end if
-            if (state%iteration < 1) then
-                write(stderr, *) "test_stability_check failed: Iteration not in "// &
-                    "the state for "//trim(case_name)//"."
-                test_stability_check = .false.
-            end if
-            if (.not. is_below(state%residual_rms, settings%conv_tol)) then
-                write(stderr, *) "test_stability_check failed: Converged residual "// &
-                    "of the lowest eigenvalue not in the state for "// &
-                    trim(case_name)//"."
-                test_stability_check = .false.
-            end if
-            if (.not. check_call_counts( &
-                context, "stability_check", "for "//trim(case_name), &
-                n_hess_x=state%n_hess_x)) test_stability_check = .false.
+        do i_method = 1, size(method_names)
+            settings = stability_settings_type()
+            settings%context => context
+            settings%diag_solver = method_names(i_method)
+            do i_point = 1, size(points, 2)
+                context%hess = hartmann6d_hessian(points(:, i_point))
+                call ref_symm_mat_diag(context%hess, hess_eigvals, hess_eigvecs)
+                h_diag = [(context%hess(i, i), i=1, size(h_diag))]
+                case_name = trim(point_names(i_point))//" with "// &
+                            trim(method_names(i_method))//" method"
+                context%n_hess_x_calls = 0
+                call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
+                                     state, direction)
+                if (error /= 0) then
+                    write(stderr, *) "test_stability_check failed: Produced error "// &
+                        "for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (stable .neqv. i_point == 1) then
+                    write(stderr, *) "test_stability_check failed: Stability "// &
+                        "incorrectly classified for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (state%iteration < 1) then
+                    write(stderr, *) "test_stability_check failed: Iteration not "// &
+                        "in the state for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (.not. check_call_counts( &
+                    context, "stability_check", "for "//trim(case_name), &
+                    n_hess_x=state%n_hess_x)) test_stability_check = .false.
+                if (method_names(i_method) == "lanczos") then
+                    if (.not. is_close(norm2(direction), 1.0_rp) .or. .not. is_close( &
+                        state%min_eigval, &
+                        dot_product(direction, matmul(context%hess, direction)))) then
+                        write(stderr, *) "test_stability_check failed: Unit vector "// &
+                            "whose Rayleigh quotient the state holds not returned "// &
+                            "for "//trim(case_name)//"."
+                        test_stability_check = .false.
+                    end if
+                    cycle
+                end if
+                if (.not. is_close(state%min_eigval, hess_eigvals(1))) then
+                    write(stderr, *) "test_stability_check failed: Lowest "// &
+                        "eigenvalue not held by the state for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (.not. is_close(abs(dot_product(direction, hess_eigvecs(:, 1))), &
+                                   1.0_rp)) then
+                    write(stderr, *) "test_stability_check failed: Eigenvector of "// &
+                        "the lowest eigenvalue not returned for "//trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+                if (.not. is_below(state%residual_rms, settings%conv_tol)) then
+                    write(stderr, *) "test_stability_check failed: Converged "// &
+                        "residual of the lowest eigenvalue not in the state for "// &
+                        trim(case_name)//"."
+                    test_stability_check = .false.
+                end if
+            end do
         end do
 
         ! check that a warning with the lowest eigenvalue is printed at the saddle point
@@ -3190,6 +3334,21 @@ contains
             test_stability_check = .false.
         end if
         context%stability_state => null()
+
+        ! check that the preconditioner factor function, which only the Lanczos method
+        ! calls, receives the host context of the settings as well
+        call setup_settings(settings, context)
+        settings%diag_solver = "lanczos"
+        settings%precond_factor => identity_precond_factor
+        call arm_host_context(settings, context)
+        call stability_check(h_diag, hess_x_funptr, stable, error, settings)
+        if (error /= 0) then
+            write(stderr, *) "test_stability_check failed: Produced error for "// &
+                "saddle point with preconditioner factor function."
+            test_stability_check = .false.
+        end if
+        if (.not. host_context_reached("stability_check", context)) &
+            test_stability_check = .false.
 
         ! check that the saddle point is found to be unstable without a returned
         ! direction and eigenvalue
@@ -3453,10 +3612,18 @@ contains
 
             ! the unfaulted run reaches every callback function of the stability check
             ! and the preconditioner, which the Jacobi-Davidson method started at the
-            ! first iteration replaces, only with the Davidson method
+            ! first iteration replaces, only with the Davidson method, which also
+            ! continues from the space of the Lanczos method, while only the Lanczos
+            ! method calls the preconditioner factor function and it calls no extra
+            ! trial vector function
             expected_calls = .false.
             expected_calls(fault_callbacks) = .true.
-            expected_calls(fault_precond) = diag_solver_options(i_solver) == "davidson"
+            expected_calls(fault_precond) = &
+                diag_solver_options(i_solver) /= "jacobi-davidson"
+            expected_calls(fault_get_extra_trial_vectors) = &
+                diag_solver_options(i_solver) /= "lanczos"
+            expected_calls(fault_precond_factor) = &
+                diag_solver_options(i_solver) == "lanczos"
             do callback = 1, n_fault_callbacks
                 if ((n_calls(callback) > 0) .neqv. expected_calls(callback)) then
                     write(stderr, *) "test_stability_check failed: Unfaulted run "// &
@@ -3535,6 +3702,7 @@ contains
             settings%conv_check => faulty_stability_conv_check
             settings%n_extra_trial_vectors = n_extra_trial_vectors
             settings%get_extra_trial_vectors => faulty_get_extra_trial_vectors
+            settings%precond_factor => faulty_precond_factor
 
             ! run stability check
             call stability_check(h_diag, hess_x_funptr, stable, error, settings, &
@@ -5950,6 +6118,39 @@ contains
 
     end function test_generate_random_trial_vectors
 
+    logical(c_bool) function test_generate_gaussian_vector() bind(C)
+        !
+        ! this function tests the subroutine which generates a standard normal random
+        ! vector
+        !
+        use opentrustregion_core, only: generate_gaussian_vector
+
+        integer(ip), parameter :: n_samples = 100000
+        real(rp) :: vector(n_samples), mean, variance, kurtosis
+
+        ! assume tests pass
+        test_generate_gaussian_vector = .true.
+
+        ! generate many samples and check that their mean, variance and kurtosis are
+        ! those of the standard normal distribution, 0, 1 and 3, within ten times their
+        ! statistical error, which for the kurtosis tells the standard normal
+        ! distribution apart from a uniform one, whose kurtosis is 1.8, and which a
+        ! value that is not finite fails
+        call generate_gaussian_vector(vector)
+        mean = sum(vector) / n_samples
+        variance = sum((vector - mean)**2) / n_samples
+        kurtosis = sum((vector - mean)**4) / n_samples / variance**2
+        if (.not. is_close(mean, 0.0_rp, &
+                           10.0_rp / sqrt(real(n_samples, kind=rp))) .or. &
+            .not. is_close(variance, 1.0_rp, 10.0_rp * sqrt(2.0_rp / n_samples)) .or. &
+            .not. is_close(kurtosis, 3.0_rp, 10.0_rp * sqrt(24.0_rp / n_samples))) then
+            write(stderr, *) "test_generate_gaussian_vector failed: Generated "// &
+                "values do not follow the standard normal distribution."
+            test_generate_gaussian_vector = .false.
+        end if
+
+    end function test_generate_gaussian_vector
+
     logical(c_bool) function test_block_davidson() bind(C)
         !
         ! this function tests the Davidson procedure for both a single tracked
@@ -5958,18 +6159,19 @@ contains
         use opentrustregion_core, only: hess_x_type, stability_settings_type, &
                                         block_davidson, error_hess_x, error_conv_check
 
-        integer(ip), parameter :: n_block = 3
+        integer(ip), parameter :: n_block = 3, initial_iteration = 5
         character(len=*), parameter :: jacobi_davidson_case_names(5) = &
             [character(len=26) :: "for a single eigenpair", "for a block of two", &
              "with a residual tolerance", "by the Davidson method", &
              "before the requested start"]
-        real(rp), parameter :: res_tol = 1e-8_rp, asymm_perturb = 0.1_rp
+        real(rp), parameter :: res_tol = 1e-8_rp, asymm_perturb = 0.1_rp, &
+                               unstable_factor = 0.3_rp
         real(rp) :: well_separated(n_param, n_param), ref_eigvals(n_param), &
                     eigvals(n_block), eigvecs(n_param, n_block), h_diag(n_param), &
                     ref_eigvecs(n_param, n_param), ref_eigvals_re(n_param), &
                     ref_eigvals_im(n_param), left_eigvecs(n_param, n_param)
         real(rp), allocatable :: trial_space(:, :)
-        integer(ip) :: error, i, j, min_idx, i_case
+        integer(ip) :: error, i, j, min_idx, i_case, n_computed
         logical :: sorted(n_param)
         logical :: converged
         procedure(hess_x_type), pointer :: hess_x_funptr
@@ -6052,6 +6254,7 @@ contains
         settings%precond => mu_recording_precond
         context%recorded_mu = huge(1.0_rp)
         trial_space = unit_vectors(1_ip)
+        state = stability_state_type(iteration=initial_iteration)
         call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
                             eigvals(:1), eigvecs(:, :1), converged, settings, state, &
                             error)
@@ -6076,10 +6279,11 @@ contains
             test_block_davidson = .false.
         end if
 
-        ! check that the state holds the iteration, at most one per parameter since
-        ! every iteration adds a vector, the lowest eigenvalue and the RMS of its
-        ! residual
-        if (state%iteration < 2 .or. state%iteration > n_param) then
+        ! check that the state holds the iteration, counted on from the one it held,
+        ! at most one per parameter since every iteration adds a vector, the lowest
+        ! eigenvalue and the RMS of its residual
+        if (state%iteration < initial_iteration + 2 .or. &
+            state%iteration > initial_iteration + n_param) then
             write(stderr, *) "test_block_davidson failed: Iteration of single "// &
                 "eigenpair not in the state."
             test_block_davidson = .false.
@@ -6103,6 +6307,7 @@ contains
         context%stability_state => state
         context%seen_residual_rms = -1.0_rp
         trial_space = unit_vectors(1_ip)
+        state = stability_state_type()
         call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
                             eigvals(:1), eigvecs(:, :1), converged, settings, state, &
                             error)
@@ -6126,6 +6331,86 @@ contains
             test_block_davidson = .false.
         end if
         context%stability_state => null()
+
+        ! check that the linear transformations of the starting space are used when
+        ! given instead of being calculated, which reaches the same eigenpair with as
+        ! many fewer Hessian linear transformations as the space has vectors
+        call setup_settings(settings, context)
+        settings%conv_tol = res_tol
+        trial_space = unit_vectors(2_ip)
+        state%n_hess_x = 0
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
+                            eigvals(:1), eigvecs(:, :1), converged, settings, state, &
+                            error)
+        if (error /= 0 .or. .not. converged) then
+            write(stderr, *) "test_block_davidson failed: Produced error or did "// &
+                "not converge without given linear transformations of the starting "// &
+                "space."
+            test_block_davidson = .false.
+        end if
+        n_computed = state%n_hess_x
+        trial_space = unit_vectors(2_ip)
+        state%n_hess_x = 0
+        call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, 200_ip, &
+                            eigvals(2:2), eigvecs(:, 2:2), converged, settings, state, &
+                            error, start_h_basis=matmul(context%hess, trial_space))
+        if (error /= 0 .or. .not. converged) then
+            write(stderr, *) "test_block_davidson failed: Produced error or did "// &
+                "not converge with given linear transformations of the starting space."
+            test_block_davidson = .false.
+        end if
+        if (.not. is_close(eigvals(2), eigvals(1)) .or. &
+            .not. is_close(abs(dot_product(eigvecs(:, 2), eigvecs(:, 1))), 1.0_rp)) then
+            write(stderr, *) "test_block_davidson failed: Given linear "// &
+                "transformations of the starting space do not reach the same eigenpair."
+            test_block_davidson = .false.
+        end if
+        if (state%n_hess_x /= n_computed - 2) then
+            write(stderr, *) "test_block_davidson failed: Given linear "// &
+                "transformations of the starting space not used."
+            test_block_davidson = .false.
+        end if
+
+        ! check that a factor for unstable eigenpairs accepts the lowest eigenpair of
+        ! the Hessian shifted to instability once its residual is at most this factor
+        ! times its eigenvalue, before it reaches the convergence threshold, while the
+        ! lowest eigenpair of the stable Hessian still has to reach it
+        do i_case = 1, 2
+            context%hess = well_separated
+            if (i_case == 1) then
+                do i = 1, n_param
+                    context%hess(i, i) = context%hess(i, i) - 3.0_rp
+                end do
+            end if
+            h_diag = [(context%hess(i, i), i=1, n_param)]
+            call setup_settings(settings, context)
+            settings%conv_tol = res_tol
+            trial_space = unit_vectors(1_ip)
+            call block_davidson(hess_x_funptr, h_diag, trial_space, .true., 1_ip, &
+                                200_ip, eigvals(:1), eigvecs(:, :1), converged, &
+                                settings, state, error, unstable_factor=unstable_factor)
+            if (error /= 0 .or. .not. converged) then
+                write(stderr, *) "test_block_davidson failed: Produced error or "// &
+                    "did not converge with a factor for unstable eigenpairs."
+                test_block_davidson = .false.
+            end if
+            if (i_case == 1 .and. (.not. is_below( &
+                eigvals(1), settings%stability_thresh) .or. .not. is_at_most(norm2( &
+                    matmul(context%hess, eigvecs(:, 1)) - eigvals(1) * eigvecs(:, 1)), &
+                    unstable_factor * abs(eigvals(1))) .or. .not. is_above( &
+                        state%residual_rms, settings%conv_tol))) then
+                write(stderr, *) "test_block_davidson failed: Unstable eigenpair "// &
+                    "not accepted at its factor of the eigenvalue."
+                test_block_davidson = .false.
+            end if
+            if (i_case == 2 .and. &
+                .not. is_below(state%residual_rms, settings%conv_tol)) then
+                write(stderr, *) "test_block_davidson failed: Stable eigenpair "// &
+                    "accepted before the convergence threshold with a factor for "// &
+                    "unstable eigenpairs."
+                test_block_davidson = .false.
+            end if
+        end do
 
         ! check that a trial space which grows to span the full space with a
         ! convergence threshold that no residual satisfies converges, since its
@@ -6394,6 +6679,819 @@ contains
         end function unit_vectors
 
     end function test_block_davidson
+
+    logical(c_bool) function test_lowest_ritz_pairs() bind(C)
+        !
+        ! this function tests the subroutine which returns the lowest Rayleigh-Ritz
+        ! pairs of the Hessian in a space and their residuals
+        !
+        use opentrustregion_core, only: stability_settings_type, lowest_ritz_pairs
+
+        integer(ip), parameter :: n_red = 4, n_target = 2
+        real(rp) :: eigvals(n_param), eigvecs(n_param, n_param), &
+                    hess(n_param, n_param), red_eigvals(n_red), &
+                    red_eigvecs(n_red, n_red), triangular(n_red, n_red), &
+                    ritz_vals(n_target), ritz_vecs(n_param, n_target), &
+                    residuals(n_param, n_target)
+        integer(ip) :: error, i
+        type(stability_settings_type) :: settings
+
+        ! assume tests pass
+        test_lowest_ritz_pairs = .true.
+
+        ! orthonormal basis of a random space, a random Hessian and the eigenpairs of
+        ! its projection onto the space
+        call ref_symm_mat_diag(generate_random_symm_matrix(n_param), eigvals, eigvecs)
+        hess = generate_random_symm_matrix(n_param)
+        call ref_symm_mat_diag(matmul(transpose(eigvecs(:, :n_red)), matmul( &
+            hess, eigvecs(:, :n_red))), red_eigvals, red_eigvecs)
+
+        ! check that the lowest Ritz pairs are returned with their residuals
+        call lowest_ritz_pairs(eigvecs(:, :n_red), matmul(hess, eigvecs(:, :n_red)), &
+                               .true., ritz_vals, ritz_vecs, residuals, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_lowest_ritz_pairs failed: Produced error."
+            test_lowest_ritz_pairs = .false.
+        else
+            if (.not. all(is_close(ritz_vals, red_eigvals(:n_target))) .or. &
+                .not. all(is_close(abs(sum( &
+                    ritz_vecs * matmul(eigvecs(:, :n_red), red_eigvecs(:, :n_target)), &
+                    dim=1)), 1.0_rp))) then
+                write(stderr, *) "test_lowest_ritz_pairs failed: Lowest Ritz pairs "// &
+                    "not returned."
+                test_lowest_ritz_pairs = .false.
+            end if
+            if (.not. all(is_close(residuals, matmul(hess, ritz_vecs) - &
+                                   spread(ritz_vals, 1, n_param) * ritz_vecs))) then
+                write(stderr, *) "test_lowest_ritz_pairs failed: Residuals not "// &
+                    "returned."
+                test_lowest_ritz_pairs = .false.
+            end if
+        end if
+
+        ! a non-symmetric Hessian whose projection onto the space is an upper
+        ! triangular matrix with the eigenvalues 1 to n_red, which its symmetric upper
+        ! triangle does not share, so that the symmetry is passed on
+        triangular = generate_random_upper_triangular_matrix(n_red)
+        do i = 1, n_red
+            triangular(i, i) = real(i, kind=rp)
+        end do
+        call lowest_ritz_pairs(eigvecs(:, :n_red), &
+                               matmul(eigvecs(:, :n_red), triangular), .false., &
+                               ritz_vals, ritz_vecs, residuals, settings, error)
+        if (error /= 0 .or. .not. all(is_close(ritz_vals, [1.0_rp, 2.0_rp]))) then
+            write(stderr, *) "test_lowest_ritz_pairs failed: Lowest Ritz values of "// &
+                "a non-symmetric Hessian not returned."
+            test_lowest_ritz_pairs = .false.
+        end if
+
+    end function test_lowest_ritz_pairs
+
+    logical(c_bool) function test_certified_stability_check() bind(C)
+        !
+        ! this function tests the stability check which decides on the stability with
+        ! a certificate
+        !
+        use opentrustregion_core, only: &
+            hess_x_type, stability_settings_type, certified_stability_check, &
+            error_stability_check_max_iter, unstable_res_factor
+
+        integer(ip), parameter :: n_large = 200
+        character(len=*), parameter :: case_names(2) = &
+            [character(len=46) :: "for a stable Hessian with outlying eigenvalues", &
+             "for an unstable Hessian"]
+        real(rp) :: eigval, eigvec(n_large), h_diag(n_large), residual(n_large), &
+                    eigvals(n_large), eigvecs(n_large, n_large)
+        integer(ip) :: error, i, i_case, n_iterations, n_left, n_hess_x_decided
+        integer, allocatable :: rng_state(:)
+        integer :: n_rng_state
+        logical :: converged
+        character(len=100) :: case_name
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        type(stability_settings_type) :: settings
+        type(stability_state_type), target :: state
+        type(quadratic_context_type), target :: context
+
+        ! assume tests pass
+        test_certified_stability_check = .true.
+
+        ! storage of the state of the random number generator
+        call random_seed(size=n_rng_state)
+        allocate(rng_state(n_rng_state))
+
+        ! decide on the stability of a stable Hessian with outlying eigenvalues, which
+        ! a single Lanczos run could only certify once it has exhausted the space, and
+        ! of an unstable Hessian, with the identity as the factor
+        hess_x_funptr => quadratic_hess_x
+        do i_case = 1, size(case_names)
+            case_name = case_names(i_case)
+
+            ! Hessian with random eigenvectors and eigenvalues between 0.6 and 1.9,
+            ! which the preconditioned shifted Hessian shares up to the shift, apart
+            ! from two low and one high eigenvalue for the stable Hessian and a
+            ! negative eigenvalue for the unstable one
+            call ref_symm_mat_diag(generate_random_symm_matrix(n_large), eigvals, &
+                                   eigvecs)
+            call random_number(eigvals)
+            eigvals = 0.6_rp + 1.3_rp * eigvals
+            if (i_case == 1) then
+                eigvals(:3) = [1e-3_rp, 5e-3_rp, 50.0_rp]
+            else
+                eigvals(1) = -0.5_rp
+            end if
+            context%hess = matmul(eigvecs * spread(eigvals, 1, n_large), &
+                                  transpose(eigvecs))
+            h_diag = [(context%hess(i, i), i=1, n_large)]
+
+            ! run the check
+            call setup_settings(settings, context)
+            settings%precond_factor => identity_precond_factor
+            state = stability_state_type()
+            call random_seed(get=rng_state)
+            call certified_stability_check(hess_x_funptr, h_diag, eigval, eigvec, &
+                                           converged, settings, state, error)
+            if (error /= 0) then
+                write(stderr, *) "test_certified_stability_check failed: Produced "// &
+                    "error "//trim(case_name)//"."
+                test_certified_stability_check = .false.
+                cycle
+            end if
+            residual = matmul(context%hess, eigvec) - eigval * eigvec
+            if (.not. converged) then
+                write(stderr, *) "test_certified_stability_check failed: Not "// &
+                    "converged "//trim(case_name)//"."
+                test_certified_stability_check = .false.
+            end if
+            if (.not. is_close(norm2(eigvec), 1.0_rp) .or. .not. is_close( &
+                eigval, dot_product(eigvec, matmul(context%hess, eigvec))) .or. &
+                (i_case == 1 .and. &
+                 .not. is_above(eigval, settings%stability_thresh)) .or. &
+                (i_case == 2 .and. &
+                 .not. is_at_most(eigval, settings%stability_thresh))) then
+                write(stderr, *) "test_certified_stability_check failed: Rayleigh "// &
+                    "quotient of a unit vector on the side of the threshold of the "// &
+                    "lowest eigenvalue not returned "//trim(case_name)//"."
+                test_certified_stability_check = .false.
+            end if
+            if (.not. is_close(state%min_eigval, eigval) .or. .not. is_close( &
+                state%residual_rms, norm2(residual) / sqrt(real(n_large, kind=rp)))) &
+                then
+                write(stderr, *) "test_certified_stability_check failed: "// &
+                    "Eigenvalue or the RMS of its residual not in the state "// &
+                    trim(case_name)//"."
+                test_certified_stability_check = .false.
+            end if
+            if (i_case == 1 .and. &
+                (state%n_hess_x >= n_large .or. state%n_hess_x /= state%iteration)) then
+                write(stderr, *) "test_certified_stability_check failed: Not "// &
+                    "certified before the space is exhausted with one Hessian "// &
+                    "linear transformation per iteration "//trim(case_name)//"."
+                test_certified_stability_check = .false.
+            end if
+            if (i_case == 2 .and. &
+                (.not. is_at_most(norm2(residual), &
+                                  unstable_res_factor * abs(eigval)) .or. &
+                 .not. is_above(state%residual_rms, settings%conv_tol))) then
+                write(stderr, *) "test_certified_stability_check failed: Residual "// &
+                    "not reduced just to its factor of the eigenvalue "// &
+                    trim(case_name)//"."
+                test_certified_stability_check = .false.
+            end if
+            if (i_case == 2 .and. state%iteration /= state%n_hess_x + 1) then
+                write(stderr, *) "test_certified_stability_check failed: "// &
+                    "Iterations of the Lanczos method and the Davidson method not "// &
+                    "counted together with the Hessian linear transformations of "// &
+                    "the Lanczos method reused "//trim(case_name)//"."
+                test_certified_stability_check = .false.
+            end if
+
+            ! repeat the run of the unstable Hessian from the same random numbers with
+            ! ever fewer iterations left, and check that the instability is returned
+            ! as converged at the maximum iteration, also when the Lanczos method
+            ! leaves no iterations to the Davidson method, until the Lanczos method no
+            ! longer decides
+            if (i_case == 2) then
+                n_iterations = state%iteration
+                do n_left = n_iterations - 1, 1, -1
+                    state = stability_state_type(iteration=settings%n_iter - n_left)
+                    call random_seed(put=rng_state)
+                    call certified_stability_check(hess_x_funptr, h_diag, eigval, &
+                                                   eigvec, converged, settings, state, &
+                                                   error)
+                    if (error /= 0) exit
+                    n_hess_x_decided = state%n_hess_x
+                    if (.not. converged .or. state%iteration /= settings%n_iter .or. &
+                        .not. is_at_most(eigval, settings%stability_thresh)) then
+                        write(stderr, *) "test_certified_stability_check failed: "// &
+                            "Instability not returned at the maximum iteration "// &
+                            trim(case_name)//"."
+                        test_certified_stability_check = .false.
+                    end if
+                end do
+                if (error /= error_stability_check_max_iter .or. &
+                    n_hess_x_decided /= n_left + 1) then
+                    write(stderr, *) "test_certified_stability_check failed: "// &
+                        "Instability not returned without iterations left for the "// &
+                        "Davidson method "//trim(case_name)//"."
+                    test_certified_stability_check = .false.
+                end if
+            end if
+        end do
+
+        ! shift the Hessian to stability and allow fewer iterations than the
+        ! exploration needs before it ends, and check that the maximum iteration error
+        ! code is returned with an error message after these iterations
+        do i = 1, n_large
+            context%hess(i, i) = context%hess(i, i) + 1.0_rp
+        end do
+        h_diag = [(context%hess(i, i), i=1, n_large)]
+        call setup_error_logging(settings, context)
+        settings%precond_factor => identity_precond_factor
+        settings%n_iter = 3
+        state = stability_state_type()
+        call certified_stability_check(hess_x_funptr, h_diag, eigval, eigvec, &
+                                       converged, settings, state, error)
+        if (error /= error_stability_check_max_iter) then
+            write(stderr, *) "test_certified_stability_check failed: Did not "// &
+                "return maximum iteration error code when undecided."
+            test_certified_stability_check = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_certified_stability_check failed: No error "// &
+                "message printed when undecided."
+            test_certified_stability_check = .false.
+        end if
+        if (state%n_hess_x /= settings%n_iter) then
+            write(stderr, *) "test_certified_stability_check failed: Did not stop "// &
+                "after the iterations when undecided."
+            test_certified_stability_check = .false.
+        end if
+
+    end function test_certified_stability_check
+
+    logical(c_bool) function test_lanczos_random_start() bind(C)
+        !
+        ! this function tests the subroutine which draws the start vector of a Lanczos
+        ! run
+        !
+        use opentrustregion_core, only: stability_settings_type, lanczos_random_start, &
+                                        error_project
+
+        integer(ip), parameter :: n_samples = 100000
+        real(rp) :: start(n_samples), mean, variance
+        integer(ip) :: error
+        type(stability_settings_type) :: settings
+        type(hartmann6d_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_lanczos_random_start = .true.
+
+        ! check that the start vector follows the standard normal distribution by its
+        ! mean and variance within ten times their statistical error, which a uniform
+        ! distribution fails
+        call setup_settings(settings, context)
+        call lanczos_random_start(start, settings, error)
+        mean = sum(start) / n_samples
+        variance = sum((start - mean)**2) / n_samples
+        if (error /= 0 .or. .not. is_close(mean, 0.0_rp, 10.0_rp / &
+                                           sqrt(real(n_samples, kind=rp))) .or. &
+            .not. is_close(variance, 1.0_rp, 10.0_rp * sqrt(2.0_rp / n_samples))) then
+            write(stderr, *) "test_lanczos_random_start failed: Start vector does "// &
+                "not follow the standard normal distribution."
+            test_lanczos_random_start = .false.
+        end if
+
+        ! check that the projection is applied
+        settings%project => mock_project_out_pair
+        call lanczos_random_start(start, settings, error)
+        if (error /= 0 .or. .not. is_at_most(abs(sum(start(:2))), tol) .or. &
+            .not. is_above(norm2(start), 0.0_rp)) then
+            write(stderr, *) "test_lanczos_random_start failed: Projection not applied."
+            test_lanczos_random_start = .false.
+        end if
+
+        ! let the projection fail and check that the error is returned with its origin
+        settings = stability_settings_type()
+        settings%context => fault_context
+        settings%project => faulty_project
+        fault_context%n_callback_calls = 0
+        fault_context%fault_callback = fault_project
+        fault_context%fault_call = 1
+        fault_context%fault_kind = error_fault
+        call lanczos_random_start(start, settings, error)
+        if (error /= error_project + 1) then
+            write(stderr, *) "test_lanczos_random_start failed: Failing projection "// &
+                "not reported with its origin."
+            test_lanczos_random_start = .false.
+        end if
+
+    end function test_lanczos_random_start
+
+    logical(c_bool) function test_lanczos() bind(C)
+        !
+        ! this function tests the Lanczos method for the preconditioned shifted
+        ! Hessian, which decides on the stability or ends the exploration of the
+        ! spectrum or a certifying pass
+        !
+        use opentrustregion_core, only: &
+            hess_x_type, stability_settings_type, lanczos, error_hess_x, &
+            precond_floor, lanczos_explore, lanczos_certify, lanczos_certify_final, &
+            lanczos_undecided, lanczos_unstable, lanczos_certified, lanczos_explored, &
+            lanczos_band_low, lanczos_band_high, lanczos_explored_tol, &
+            lanczos_min_explore_steps, lanczos_min_certify_steps, lanczos_restart_steps
+
+        integer(ip), parameter :: &
+            n_large = 80, n_cases = 11, initial_iteration = 3, &
+            modes(n_cases) = [lanczos_explore, lanczos_certify, lanczos_explore, &
+                              lanczos_certify_final, lanczos_explore, &
+                              lanczos_certify_final, lanczos_certify_final, &
+                              lanczos_certify, lanczos_certify_final, lanczos_certify, &
+                              lanczos_certify], &
+            expected_outcomes(n_cases) = [ &
+                lanczos_explored, lanczos_certified, lanczos_unstable, &
+                lanczos_certified, lanczos_undecided, lanczos_certified, &
+                lanczos_certified, lanczos_explored, lanczos_certified, &
+                lanczos_certified, lanczos_explored]
+        real(rp), parameter :: failure_probability = 1e-2_rp
+        character(len=*), parameter :: case_names(n_cases) = [ &
+            character(len=80) :: "exploring a stable Hessian with a low eigenvalue "// &
+            "with the diagonal factor", "certifying a stable Hessian with a factor "// &
+            "function", "exploring an unstable Hessian with a factor function", &
+            "for a stable Hessian whose space is exhausted", "for a stable Hessian "// &
+            "within too few iterations", "for a stable Hessian with the diagonal "// &
+            "factor and a projection", "for a Hessian with a negative eigenvalue "// &
+            "above the threshold", "restarting a certifying pass with a rescaling", &
+            "finishing a certifying pass with a rescaling", &
+            "certifying a stable Hessian whose certificate is close", "restarting "// &
+            "a certifying pass once a cluster of low eigenvalues is explored"]
+        real(rp), allocatable :: hess(:, :), factor(:, :), h_diag(:), start(:), &
+                                 eigvals(:), eigvecs(:, :), rescale_vecs(:, :), &
+                                 rescale_scale(:), rescaling(:, :), b(:, :), b0(:, :), &
+                                 lanczos_basis(:, :), b0_basis(:, :), &
+                                 red_space_basis(:, :), h_basis(:, :), projector(:, :)
+        real(rp), allocatable :: basis(:, :), next(:), red_eigvals(:), &
+                                 red_eigvecs(:, :), residuals(:)
+        integer(ip) :: error, i, i_case, n, outcome, ref_iteration, ref_outcome, &
+                       i_ritz, remaining
+        logical :: exhausted, explored
+        real(rp) :: fault_start(n_param)
+        logical :: factor_function, projection
+        character(len=100) :: case_name
+        procedure(hess_x_type), pointer :: hess_x_funptr
+        type(stability_settings_type) :: settings
+        type(stability_state_type), target :: state
+        type(quadratic_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_lanczos = .true.
+
+        ! run the Lanczos method in every mode for stable and unstable Hessians, with
+        ! the diagonal factor and a non-symmetric factor function, for a Hessian whose
+        ! space it exhausts, within too few remaining iterations, with a projection and
+        ! with a rescaling, and compare it with a reimplementation with dense matrices;
+        ! the Hessian with a negative eigenvalue above the threshold is only stable
+        ! when shifted by the threshold, the certifying passes with a rescaling share
+        ! their Hessian, with a low eigenvalue for which only the final pass does not
+        ! restart, a certifying pass whose certificate is close does not restart, and
+        ! one with a cluster of low eigenvalues restarts only once it is explored
+        hess_x_funptr => quadratic_hess_x
+        do i_case = 1, n_cases
+            case_name = case_names(i_case)
+            factor_function = any(i_case == [2, 3, 8, 9, 10, 11])
+            projection = i_case == 6
+            n = merge(n_param, n_large, i_case == 4 .or. i_case == 6)
+
+            ! Hessian with random eigenvectors and eigenvalues between 0.5 and 2, for
+            ! the certifying passes with a rescaling, which share their Hessian,
+            ! between 0.9 and 1.1 and for the certificate that is close between 0.6
+            ! and 1.9, the lowest of which is low, slightly negative or negative above
+            ! the threshold, or followed by a cluster of low eigenvalues
+            if (i_case /= 9) then
+                if (allocated(eigvals)) deallocate(eigvals, eigvecs, start, factor)
+                allocate(eigvals(n), eigvecs(n, n), start(n), factor(n, n))
+                call ref_symm_mat_diag(generate_random_symm_matrix(n), eigvals, eigvecs)
+                call random_number(eigvals)
+                eigvals = 0.5_rp + 1.5_rp * eigvals
+                if (i_case == 8) eigvals = 0.9_rp + 0.2_rp / 1.5_rp * (eigvals - 0.5_rp)
+                if (i_case == 10) &
+                    eigvals = 0.6_rp + 1.3_rp / 1.5_rp * (eigvals - 0.5_rp)
+                if (i_case == 1) eigvals(1) = 1e-2_rp
+                if (i_case == 3) eigvals(1) = -5e-2_rp
+                if (i_case == 7) eigvals(1) = -0.2_rp
+                if (i_case == 8) eigvals(1) = 1e-3_rp
+                if (i_case == 10) eigvals(1) = 7.5e-2_rp
+                if (i_case == 11) &
+                    eigvals(:11) = [1e-2_rp, (0.1_rp + 3.5e-2_rp * i, i=0, 9)]
+                hess = matmul(eigvecs, matmul(diag_matrix(eigvals), transpose(eigvecs)))
+            end if
+
+            ! the projection removes the component along the symmetric combination of
+            ! the first two unit vectors, onto whose complement the Hessian is
+            ! projected so that it is self-projecting
+            projector = identity_matrix(n)
+            if (projection) then
+                projector(1:2, 1:2) = projector(1:2, 1:2) - 0.5_rp
+                hess = matmul(projector, matmul(hess, projector))
+            end if
+            h_diag = [(hess(i, i), i=1, n)]
+
+            ! settings with the factor function of a well-conditioned lower triangular
+            ! factor with positive diagonal, which is not symmetric, or of the identity
+            ! for the certifying passes, or the diagonal factor
+            call setup_settings(settings, context)
+            if (i_case == 5) settings%n_iter = initial_iteration + 2
+            if (i_case == 7) settings%stability_thresh = -0.5_rp
+            if (factor_function) then
+                if (i_case >= 8) then
+                    factor = identity_matrix(n)
+                else
+                    call random_number(factor)
+                    do i = 1, n
+                        factor(:i - 1, i) = 0.0_rp
+                        factor(i + 1:, i) = 0.05_rp * &
+                                            (2.0_rp * factor(i + 1:, i) - 1.0_rp)
+                        factor(i, i) = 0.8_rp + 0.4_rp * factor(i, i)
+                    end do
+                end if
+                settings%precond_factor => quadratic_precond_factor
+            else
+                factor = matmul(projector, matmul(diag_matrix( &
+                    1.0_rp / sqrt(max(abs(h_diag - settings%stability_thresh), &
+                                      precond_floor))), projector))
+            end if
+            if (projection) settings%project => mock_project_out_pair
+            context%hess = hess
+            context%factor = factor
+
+            ! rescaling of two random orthonormal directions by the factors 0.8 and 1.2
+            ! for the certifying passes with a rescaling and none otherwise
+            if (i_case == 8 .or. i_case == 9) then
+                rescale_vecs = eigvecs(:, n - 1:)
+                rescale_scale = [-0.2_rp, 0.2_rp]
+            else
+                if (allocated(rescale_vecs)) deallocate(rescale_vecs, rescale_scale)
+                allocate(rescale_vecs(n, 0), rescale_scale(0))
+            end if
+            rescaling = identity_matrix(n) + matmul(rescale_vecs, matmul( &
+                diag_matrix(rescale_scale), transpose(rescale_vecs)))
+
+            ! random start vector, projected where a projection is given
+            call random_number(start)
+            start = matmul(projector, start - 0.5_rp)
+
+            ! run the Lanczos method and the reimplementation
+            state = stability_state_type()
+            state%iteration = initial_iteration
+            call lanczos(hess_x_funptr, h_diag, start, rescale_vecs, rescale_scale, &
+                         modes(i_case), failure_probability, lanczos_basis, b0_basis, &
+                         red_space_basis, h_basis, outcome, settings, state, error)
+            b0 = matmul(transpose(factor), matmul(hess - settings%stability_thresh * &
+                                                  identity_matrix(n), factor))
+            b = matmul(rescaling, matmul(b0, rescaling))
+
+            ! reimplementation with dense matrices, which decides on instability once
+            ! the lowest Ritz value is not positive, on stability once the Krylov space
+            ! is exhausted or certified, and ends an exploration or a certifying pass
+            ! that is not the final one once every Ritz pair outside the band has a
+            ! small residual, after enough iterations, for the certifying pass also
+            ! only while the certificate is more than the given number of steps away
+            if (allocated(basis)) &
+                deallocate(basis, next, red_eigvals, red_eigvecs, residuals)
+            allocate(basis(n, settings%n_iter + 1), next(n), red_eigvals(n), &
+                     red_eigvecs(n, n), residuals(n))
+            ref_outcome = lanczos_undecided
+            basis(:, 1) = start / norm2(start)
+            do ref_iteration = 1, settings%n_iter - initial_iteration
+                ! Ritz pairs from the dense projection and their residuals
+                call ref_symm_mat_diag(matmul(transpose(basis(:, :ref_iteration)), &
+                                              matmul(b, basis(:, :ref_iteration))), &
+                                       red_eigvals(:ref_iteration), &
+                                       red_eigvecs(:ref_iteration, :ref_iteration))
+                do i_ritz = 1, ref_iteration
+                    residuals(i_ritz) = norm2(matmul( &
+                        b - red_eigvals(i_ritz) * identity_matrix(n), &
+                        matmul(basis(:, :ref_iteration), &
+                               red_eigvecs(:ref_iteration, i_ritz))))
+                end do
+
+                ! next Lanczos vector, orthogonalized twice
+                next = matmul(b, basis(:, ref_iteration))
+                next = next - matmul(basis(:, :ref_iteration), &
+                                     matmul(next, basis(:, :ref_iteration)))
+                next = next - matmul(basis(:, :ref_iteration), &
+                                     matmul(next, basis(:, :ref_iteration)))
+                exhausted = norm2(next) < 1e-10_rp * &
+                            norm2(matmul(b, basis(:, ref_iteration))) .or. &
+                            ref_iteration == n
+
+                ! outcome
+                if (red_eigvals(1) <= 0.0_rp) then
+                    ref_outcome = lanczos_unstable
+                else if (exhausted .or. ref_stability_certified( &
+                    red_eigvals(1), red_eigvals(ref_iteration), ref_iteration, n, &
+                    failure_probability, settings%n_iter)) then
+                    ref_outcome = lanczos_certified
+                else
+                    explored = all( &
+                        residuals(:ref_iteration) <= lanczos_explored_tol * &
+                        sqrt(red_eigvals(:ref_iteration)) .or. &
+                        (red_eigvals(:ref_iteration) >= lanczos_band_low .and. &
+                         red_eigvals(:ref_iteration) <= lanczos_band_high))
+                    if (modes(i_case) == lanczos_explore .and. explored .and. &
+                        ref_iteration >= lanczos_min_explore_steps) &
+                        ref_outcome = lanczos_explored
+                    if (modes(i_case) == lanczos_certify .and. explored .and. &
+                        ref_iteration >= lanczos_min_certify_steps) then
+                        remaining = 1
+                        do while (.not. ref_stability_certified( &
+                            red_eigvals(1), red_eigvals(ref_iteration), &
+                            ref_iteration + remaining, n, failure_probability, &
+                            settings%n_iter))
+                            remaining = remaining + 1
+                        end do
+                        if (remaining > lanczos_restart_steps) &
+                            ref_outcome = lanczos_explored
+                    end if
+                end if
+                if (ref_outcome /= lanczos_undecided) exit
+                basis(:, ref_iteration + 1) = next / norm2(next)
+            end do
+            ref_iteration = min(ref_iteration, settings%n_iter - initial_iteration)
+            if (error /= 0) then
+                write(stderr, *) "test_lanczos failed: Produced error "// &
+                    trim(case_name)//"."
+                test_lanczos = .false.
+                cycle
+            end if
+            if (outcome /= expected_outcomes(i_case) .or. outcome /= ref_outcome) then
+                write(stderr, *) "test_lanczos failed: Wrong outcome "// &
+                    trim(case_name)//"."
+                test_lanczos = .false.
+            end if
+            if (state%iteration /= initial_iteration + ref_iteration .or. &
+                state%n_hess_x /= ref_iteration) then
+                write(stderr, *) "test_lanczos failed: Did not stop at the "// &
+                    "iteration of the outcome "//trim(case_name)//"."
+                test_lanczos = .false.
+            end if
+            if (size(lanczos_basis, 2) /= state%n_hess_x .or. &
+                size(b0_basis, 2) /= state%n_hess_x .or. &
+                .not. all(is_close(matmul(transpose(lanczos_basis), lanczos_basis), &
+                                   identity_matrix(state%n_hess_x))) .or. &
+                .not. all(is_close(lanczos_basis(:, 1), start / norm2(start))) .or. &
+                .not. all(is_close(b0_basis, &
+                                   matmul(b0, matmul(rescaling, lanczos_basis))))) then
+                write(stderr, *) "test_lanczos failed: Lanczos basis with the "// &
+                    "products of the rescaled vectors not returned "// &
+                    trim(case_name)//"."
+                test_lanczos = .false.
+            end if
+            if (size(red_space_basis, 2) /= state%n_hess_x .or. .not. all(is_close( &
+                matmul(transpose(red_space_basis), red_space_basis), &
+                identity_matrix(state%n_hess_x))) .or. .not. all(is_close( &
+                    matmul(factor, matmul(rescaling, lanczos_basis)), &
+                    matmul(red_space_basis, matmul(transpose(red_space_basis), matmul( &
+                        factor, matmul(rescaling, lanczos_basis)))))) .or. &
+                .not. all(is_close(h_basis, matmul(hess, red_space_basis))) .or. &
+                .not. all(is_close(matmul(projector, red_space_basis), &
+                                   red_space_basis))) then
+                write(stderr, *) "test_lanczos failed: Orthonormal basis of the "// &
+                    "space with its Hessian linear transformations not returned "// &
+                    trim(case_name)//"."
+                test_lanczos = .false.
+            end if
+        end do
+
+        ! check that a start vector which vanishes returns an error and prints an
+        ! error message
+        call setup_error_logging(settings, context)
+        start = 0.0_rp
+        call lanczos(hess_x_funptr, h_diag, start, rescale_vecs, rescale_scale, &
+                     lanczos_explore, failure_probability, lanczos_basis, b0_basis, &
+                     red_space_basis, h_basis, outcome, settings, state, error)
+        if (error /= 1) then
+            write(stderr, *) "test_lanczos failed: No error returned for a start "// &
+                "vector which vanishes."
+            test_lanczos = .false.
+        end if
+        if (len_trim(context%log_message) == 0) then
+            write(stderr, *) "test_lanczos failed: No error message printed for a "// &
+                "start vector which vanishes."
+            test_lanczos = .false.
+        end if
+
+        ! let the first call of the Hessian linear transformation fail and check that
+        ! the error is returned with its origin
+        fault_context%hess = hartmann6d_hessian(minimum1)
+        hess_x_funptr => faulty_hess_x
+        deallocate(rescale_vecs, rescale_scale)
+        allocate(rescale_vecs(n_param, 0), rescale_scale(0))
+        settings = stability_settings_type()
+        settings%context => fault_context
+        state = stability_state_type()
+        fault_context%n_callback_calls = 0
+        fault_context%fault_callback = fault_hess_x
+        fault_context%fault_call = 1
+        fault_context%fault_kind = error_fault
+        call random_number(fault_start)
+        call lanczos(hess_x_funptr, [(fault_context%hess(i, i), i=1, n_param)], &
+                     fault_start, rescale_vecs, rescale_scale, lanczos_explore, &
+                     failure_probability, lanczos_basis, b0_basis, red_space_basis, &
+                     h_basis, outcome, settings, state, error)
+        if (error /= error_hess_x + 1) then
+            write(stderr, *) "test_lanczos failed: Failing Hessian linear "// &
+                "transformation not reported with its origin."
+            test_lanczos = .false.
+        end if
+
+    contains
+
+        function diag_matrix(diagonal) result(matrix)
+            !
+            ! this function returns the diagonal matrix with the given diagonal
+            !
+            real(rp), intent(in) :: diagonal(:)
+            real(rp) :: matrix(size(diagonal), size(diagonal))
+
+            integer(ip) :: i_diag
+
+            matrix = 0.0_rp
+            do i_diag = 1, size(diagonal)
+                matrix(i_diag, i_diag) = diagonal(i_diag)
+            end do
+
+        end function diag_matrix
+
+    end function test_lanczos
+
+    logical(c_bool) function test_certificate_steps() bind(C)
+        !
+        ! this function tests the number of steps at which the certificate of
+        ! stability of the Lanczos method holds
+        !
+        use opentrustregion_core, only: stability_settings_type, certificate_steps
+
+        integer(ip), parameter :: n_param_large = 1000
+        character(len=*), parameter :: case_names(3) = &
+            [character(len=33) :: "with the default settings", &
+             "with a larger failure probability", "with fewer iterations at most"]
+        real(rp) :: lowest_eigval, highest_eigval, n_steps
+        integer(ip) :: i_case, below
+        type(stability_settings_type) :: settings
+
+        ! assume tests pass
+        test_certificate_steps = .true.
+
+        ! check for random lowest and highest Ritz values that the reimplemented
+        ! certificate does not hold at the largest number of steps not above the
+        ! returned one and holds at the next, for the default settings, for a larger
+        ! failure probability and for fewer iterations at most
+        do i_case = 1, size(case_names)
+            settings = stability_settings_type()
+            if (i_case == 2) settings%failure_probability = 1e-1_rp
+            if (i_case == 3) settings%n_iter = 60
+            call random_number(lowest_eigval)
+            call random_number(highest_eigval)
+            lowest_eigval = 1e-3_rp + 1e-1_rp * lowest_eigval
+            highest_eigval = 1.0_rp + 10.0_rp * highest_eigval
+            n_steps = certificate_steps(lowest_eigval, highest_eigval, n_param_large, &
+                                        settings%failure_probability, settings)
+            below = floor(n_steps, kind=ip)
+            if (ref_stability_certified(lowest_eigval, highest_eigval, below, &
+                                        n_param_large, settings%failure_probability, &
+                                        settings%n_iter) .or. &
+                .not. ref_stability_certified( &
+                    lowest_eigval, highest_eigval, below + 1, n_param_large, &
+                    settings%failure_probability, settings%n_iter)) then
+                write(stderr, *) "test_certificate_steps failed: Certificate does "// &
+                    "not start to hold at the returned number of steps "// &
+                    trim(case_names(i_case))//"."
+                test_certificate_steps = .false.
+            end if
+        end do
+
+    end function test_certificate_steps
+
+    logical(c_bool) function test_build_rescaling() bind(C)
+        !
+        ! this function tests the subroutine which builds the rescaling of the Ritz
+        ! pairs outside the band to one
+        !
+        use opentrustregion_core, only: stability_settings_type, build_rescaling
+
+        integer(ip), parameter :: n_red = 6, n_large = 20
+        real(rp), parameter :: ritz_vals(n_red) = &
+            [-0.3_rp, 0.1_rp, 0.6_rp, 1.5_rp, 3.0_rp, 10.0_rp]
+        logical, parameter :: rescaled(n_red) = &
+            [.false., .true., .false., .false., .true., .true.]
+        real(rp) :: eigvals(n_large), eigvecs(n_large, n_large), &
+                    basis(n_large, n_red), red_eigvals(n_red), &
+                    red_eigvecs(n_red, n_red), matrix(n_large, n_large), &
+                    red_matrix(n_red, n_red), coeffs(n_red, n_red + 3), &
+                    vectors(n_large, n_red + 3)
+        real(rp), allocatable :: rescale_vecs(:, :), rescale_scale(:)
+        integer(ip) :: error
+        type(stability_settings_type) :: settings
+
+        ! assume tests pass
+        test_build_rescaling = .true.
+
+        ! three vectors more than the dimension of a random space, which are therefore
+        ! linearly dependent and not orthonormal, and a random symmetric matrix whose
+        ! projection onto the space has Ritz values below, inside and above the band,
+        ! one of them negative
+        call ref_symm_mat_diag(generate_random_symm_matrix(n_large), eigvals, eigvecs)
+        basis = eigvecs(:, :n_red)
+        call ref_symm_mat_diag(generate_random_symm_matrix(n_red), red_eigvals, &
+                               red_eigvecs)
+        red_matrix = matmul(red_eigvecs * spread(ritz_vals, 1, n_red), &
+                            transpose(red_eigvecs))
+        matrix = generate_random_symm_matrix(n_large)
+        matrix = matrix + matmul(basis, matmul(red_matrix - matmul( &
+            transpose(basis), matmul(matrix, basis)), transpose(basis)))
+        call random_number(coeffs)
+        vectors = matmul(basis, coeffs - 0.5_rp)
+
+        ! check that the positive Ritz pairs outside the band are returned as
+        ! orthonormal vectors within the space, which the matrix maps to their Ritz
+        ! values, with the scaling factors that rescale these to one
+        call build_rescaling(vectors, matmul(matrix, vectors), rescale_vecs, &
+                             rescale_scale, settings, error)
+        if (error /= 0) then
+            write(stderr, *) "test_build_rescaling failed: Produced error."
+            test_build_rescaling = .false.
+            return
+        end if
+        if (size(rescale_scale) /= count(rescaled) .or. &
+            size(rescale_vecs, 2) /= count(rescaled)) then
+            write(stderr, *) "test_build_rescaling failed: Wrong number of "// &
+                "rescaled Ritz pairs."
+            test_build_rescaling = .false.
+            return
+        end if
+        if (.not. all(is_close(matmul(transpose(rescale_vecs), rescale_vecs), &
+                               identity_matrix(count(rescaled, kind=ip)))) .or. &
+            .not. all(is_close(matmul(basis, matmul(transpose(basis), rescale_vecs)), &
+                               rescale_vecs)) .or. &
+            .not. all(is_close( &
+                matmul(transpose(rescale_vecs), matmul(matrix, rescale_vecs)), &
+                identity_matrix(count(rescaled, kind=ip)) * &
+                spread(pack(ritz_vals, rescaled), 1, count(rescaled))))) then
+            write(stderr, *) "test_build_rescaling failed: Ritz vectors outside "// &
+                "the band not returned."
+            test_build_rescaling = .false.
+        end if
+        if (.not. all(is_close((1.0_rp + rescale_scale)**2 * &
+                               pack(ritz_vals, rescaled), 1.0_rp))) then
+            write(stderr, *) "test_build_rescaling failed: Scaling factors do not "// &
+                "rescale the Ritz values to one."
+            test_build_rescaling = .false.
+        end if
+
+    end function test_build_rescaling
+
+    logical(c_bool) function test_apply_rescaling() bind(C)
+        !
+        ! this function tests the function which applies the rescaling
+        !
+        use opentrustregion_core, only: apply_rescaling
+
+        integer(ip), parameter :: n_rescaled = 3
+        real(rp) :: eigvals(n_param), eigvecs(n_param, n_param), &
+                    rescale_scale(n_rescaled), vector(n_param), &
+                    rescaling(n_param, n_param)
+
+        ! assume tests pass
+        test_apply_rescaling = .true.
+
+        ! rescaling of random orthonormal directions by random factors between 0.5 and
+        ! 2 and a random vector
+        call ref_symm_mat_diag(generate_random_symm_matrix(n_param), eigvals, eigvecs)
+        call random_number(rescale_scale)
+        rescale_scale = 1.5_rp * rescale_scale - 0.5_rp
+        rescaling = identity_matrix(n_param) + matmul( &
+            eigvecs(:, :n_rescaled) * spread(rescale_scale, 1, n_param), &
+            transpose(eigvecs(:, :n_rescaled)))
+        call random_number(vector)
+
+        ! check the rescaling and that without rescaled directions the vector is
+        ! returned unchanged
+        if (.not. all(is_close( &
+            apply_rescaling(vector, eigvecs(:, :n_rescaled), rescale_scale), &
+            matmul(rescaling, vector)))) then
+            write(stderr, *) "test_apply_rescaling failed: Rescaling not applied."
+            test_apply_rescaling = .false.
+        end if
+        if (.not. all(is_close(apply_rescaling( &
+            vector, eigvecs(:, :0), rescale_scale(:0)), vector, 0.0_rp))) then
+            write(stderr, *) "test_apply_rescaling failed: Vector changed without "// &
+                "rescaled directions."
+            test_apply_rescaling = .false.
+        end if
+
+    end function test_apply_rescaling
 
     logical(c_bool) function test_get_stability_trial_space() bind(C)
         !
@@ -7035,6 +8133,115 @@ contains
         end do
 
     end function test_abs_diag_precond
+
+    logical(c_bool) function test_apply_precond_factor() bind(C)
+        !
+        ! this function tests the subroutine that applies the factor of the
+        ! preconditioner of the Lanczos method
+        !
+        use opentrustregion_core, only: stability_settings_type, apply_precond_factor, &
+                                        error_precond_factor, error_project
+
+        real(rp) :: vector(3), h_diag(3), factor_vector(3)
+        type(stability_settings_type) :: settings
+        integer(ip) :: error, i_case
+        logical :: transpose_case
+        type(quadratic_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_apply_precond_factor = .true.
+
+        ! setup settings object
+        call setup_settings(settings, context)
+
+        ! initialize quantities, with a Hessian diagonal whose second element equals
+        ! the stability threshold, so that the floor applies there
+        vector = [1.0_rp, 1.0_rp, 1.0_rp]
+        settings%stability_thresh = -1.0_rp
+        h_diag = [-5.0_rp, -1.0_rp, 3.0_rp]
+
+        ! check the diagonal factor, the inverse square root of the absolute value of
+        ! the shifted Hessian diagonal, which is its own transpose
+        do i_case = 1, 2
+            transpose_case = i_case == 2
+            call apply_precond_factor(vector, transpose_case, h_diag, factor_vector, &
+                                      settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_apply_precond_factor failed: Produced error "// &
+                    "for diagonal factor."
+                test_apply_precond_factor = .false.
+            end if
+            if (.not. all(is_close(factor_vector, [0.5_rp, 1e5_rp, 0.5_rp]))) then
+                write(stderr, *) "test_apply_precond_factor failed: Returned "// &
+                    "vector not correct for diagonal factor."
+                test_apply_precond_factor = .false.
+            end if
+        end do
+
+        ! check that the diagonal factor is followed by the projection
+        settings%project => mock_project
+        call apply_precond_factor(vector, .false., h_diag, factor_vector, settings, &
+                                  error)
+        if (error /= 0 .or. &
+            .not. all(is_close(factor_vector, [1.0_rp, 2e5_rp, 1.0_rp]))) then
+            write(stderr, *) "test_apply_precond_factor failed: Diagonal factor "// &
+                "not projected."
+            test_apply_precond_factor = .false.
+        end if
+
+        ! check that a factor function receives the vector and whether the factor is
+        ! transposed, with a factor which is not symmetric, and that its result is
+        ! returned without projection
+        settings%precond_factor => quadratic_precond_factor
+        context%factor = reshape([1.0_rp, 0.0_rp, 0.0_rp, &
+                                  2.0_rp, 1.0_rp, 0.0_rp, &
+                                  0.0_rp, 3.0_rp, 1.0_rp], [3, 3])
+        do i_case = 1, 2
+            transpose_case = i_case == 2
+            call apply_precond_factor(vector, transpose_case, h_diag, factor_vector, &
+                                      settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_apply_precond_factor failed: Produced error "// &
+                    "for factor function."
+                test_apply_precond_factor = .false.
+            end if
+            if (.not. all(is_close(factor_vector, merge( &
+                [1.0_rp, 3.0_rp, 4.0_rp], [3.0_rp, 4.0_rp, 1.0_rp], transpose_case)))) &
+                then
+                write(stderr, *) "test_apply_precond_factor failed: Returned "// &
+                    "vector not correct for factor function."
+                test_apply_precond_factor = .false.
+            end if
+        end do
+
+        ! check that the errors of a failing factor function and of a failing
+        ! projection of the diagonal factor are reported with their origins
+        call setup_settings(settings, fault_context)
+        do i_case = 1, 2
+            if (i_case == 1) then
+                settings%precond_factor => faulty_precond_factor
+            else
+                settings%precond_factor => null()
+                settings%project => faulty_project
+            end if
+            fault_context%n_callback_calls = 0
+            fault_context%fault_callback = &
+                merge(fault_precond_factor, fault_project, i_case == 1)
+            fault_context%fault_call = 1
+            call apply_precond_factor(vector, .false., h_diag, factor_vector, &
+                                      settings, error)
+            if (error /= merge(error_precond_factor, error_project, i_case == 1) + 1) &
+                then
+                write(stderr, *) "test_apply_precond_factor failed: Error of "// &
+                    "failing "// &
+                    trim(fault_callback_names(fault_context%fault_callback))// &
+                    " not reported with its origin."
+                test_apply_precond_factor = .false.
+            end if
+        end do
+
+    end function test_apply_precond_factor
 
     logical(c_bool) function test_orthogonal_projection() bind(C)
         !
@@ -9795,21 +11002,25 @@ contains
 
         ! the diagonalization solvers in mixed case and settings which the sanity check
         ! rejects
-        character(len=*), parameter :: mixed_case_diag_solvers(2) = &
-            [character(len=15) :: "Davidson", "Jacobi-Davidson"]
-        character(len=*), parameter :: error_case_names(11) = [ &
-            character(len=55) :: "vanishing number of parameters", &
-            "extra trial vector function without extra trial vectors", &
-            "vanishing number of trial vectors", "no random and a negative number "// &
-            "of extra trial vectors", "no extra and no random trial vectors that fit", &
-            "unknown diagonalization solver", &
-            "non-symmetric Hessian with Jacobi-Davidson solver", "stopping at an "// &
-            "instability with non-symmetric Hessian", "vanishing stability threshold", &
-            "Hessian diagonal which is not a number", "infinite Hessian diagonal"]
-        character(len=*), parameter :: accepted_case_names(4) = &
+        character(len=*), parameter :: mixed_case_diag_solvers(3) = &
+            [character(len=15) :: "Davidson", "Jacobi-Davidson", "Lanczos"]
+        character(len=*), parameter :: error_case_names(15) = [ &
+            character(len=55) :: "vanishing number of parameters", "extra trial "// &
+            "vector function without extra trial vectors", "vanishing number of "// &
+            "trial vectors", "no random and a negative number of extra trial vectors", &
+            "no extra and no random trial vectors that fit", "unknown "// &
+            "diagonalization solver", "non-symmetric Hessian with Jacobi-Davidson "// &
+            "solver", "stopping at an instability with non-symmetric Hessian", &
+            "vanishing stability threshold", "Hessian diagonal which is not a number", &
+            "infinite Hessian diagonal", "non-symmetric Hessian with Lanczos solver", &
+            "vanishing failure probability", "failure probability of one", &
+            "failure probability which is not a number"]
+        character(len=*), parameter :: accepted_case_names(7) = &
             [character(len=49) :: "non-symmetric Hessian with Davidson solver", &
              "stopping at an instability with symmetric Hessian", "no random but "// &
-             "extra trial vectors", "slightly negative stability threshold"]
+             "extra trial vectors", "slightly negative stability threshold", &
+             "Lanczos solver with extra trial vector function", &
+             "tiny failure probability", "failure probability slightly below one"]
         type(stability_settings_type) :: settings
         integer(ip) :: error, i_solver, i_case, n_param
         real(rp) :: h_diag(4)
@@ -9821,7 +11032,8 @@ contains
         ! check that every diagonalization solver passes when given in mixed case,
         ! which is converted to lowercase, and that an unset number of random trial
         ! vectors resolves to the default of a stability check outside the solver
-        ! without any message
+        ! without any message, except for the Lanczos method, which uses no random
+        ! trial vectors
         do i_solver = 1, size(diag_solver_options)
             call setup_settings(settings, context)
             settings%diag_solver = mixed_case_diag_solvers(i_solver)
@@ -9839,8 +11051,9 @@ contains
                     trim(diag_solver_options(i_solver))//" diagonalization solver."
                 test_stability_sanity_check = .false.
             end if
-            if (settings%n_random_trial_vectors /= standalone_n_random_trial_vectors) &
-                then
+            if (settings%n_random_trial_vectors /= &
+                merge(-1_ip, standalone_n_random_trial_vectors, &
+                      diag_solver_options(i_solver) == "lanczos")) then
                 write(stderr, *) "test_stability_sanity_check failed: Unset number "// &
                     "of random trial vectors not resolved for "// &
                     trim(diag_solver_options(i_solver))//" diagonalization solver."
@@ -9914,6 +11127,18 @@ contains
                 h_diag(2) = ieee_value(1.0_rp, ieee_quiet_nan)
             case (11)
                 h_diag(2) = ieee_value(1.0_rp, ieee_positive_inf)
+            case (12)
+                settings%diag_solver = "lanczos"
+                settings%hess_symm = .false.
+            case (13)
+                settings%diag_solver = "lanczos"
+                settings%failure_probability = 0.0_rp
+            case (14)
+                settings%diag_solver = "lanczos"
+                settings%failure_probability = 1.0_rp
+            case (15)
+                settings%diag_solver = "lanczos"
+                settings%failure_probability = ieee_value(1.0_rp, ieee_quiet_nan)
             end select
             call stability_sanity_check(settings, n_param, error, h_diag(:n_param))
             if (error /= 1) then
@@ -9942,6 +11167,17 @@ contains
                 settings%n_random_trial_vectors = 0
             case (4)
                 settings%stability_thresh = -epsilon(1.0_rp)
+            case (5)
+                settings%diag_solver = "lanczos"
+                settings%get_extra_trial_vectors => mock_get_extra_trial_vectors
+                settings%n_extra_trial_vectors = 0
+                settings%n_random_trial_vectors = 0
+            case (6)
+                settings%diag_solver = "lanczos"
+                settings%failure_probability = tiny(1.0_rp)
+            case (7)
+                settings%diag_solver = "lanczos"
+                settings%failure_probability = 1.0_rp - epsilon(1.0_rp)
             end select
             call stability_sanity_check(settings, 4_ip, error, h_diag)
             if (error /= 0) then
@@ -9949,7 +11185,8 @@ contains
                     "returned for "//trim(accepted_case_names(i_case))//"."
                 test_stability_sanity_check = .false.
             end if
-            if (i_case == 3 .and. settings%n_random_trial_vectors /= 0) then
+            if ((i_case == 3 .or. i_case == 5) .and. &
+                settings%n_random_trial_vectors /= 0) then
                 write(stderr, *) "test_stability_sanity_check failed: Vanishing "// &
                     "number of random trial vectors replaced."
                 test_stability_sanity_check = .false.
@@ -10385,6 +11622,71 @@ contains
         end do
 
     end function test_invoke_precond
+
+    logical(c_bool) function test_invoke_precond_factor() bind(C)
+        !
+        ! this function tests the subroutine which calls the preconditioner factor
+        ! function
+        !
+        use opentrustregion_core, only: stability_settings_type, &
+                                        invoke_precond_factor, error_precond_factor
+        use test_reference, only: arm_host_context, host_context_reached
+
+        real(rp) :: vector(n_param), factor_vector(n_param)
+        integer(ip) :: error, fault_kind, i_case
+        logical :: transpose_case
+        type(stability_settings_type) :: settings
+        type(quadratic_context_type), target :: context
+        type(hartmann6d_fault_context_type), target :: fault_context
+
+        ! assume tests pass
+        test_invoke_precond_factor = .true.
+
+        ! call a factor function of a random factor with a random vector, without and
+        ! with transposition, and check that it receives the vector, whether to
+        ! transpose and the host context and that its result is returned
+        call setup_settings(settings, context)
+        call arm_host_context(settings, context)
+        settings%precond_factor => quadratic_precond_factor
+        allocate(context%factor(n_param, n_param))
+        call random_number(context%factor)
+        call random_number(vector)
+        do i_case = 1, 2
+            transpose_case = i_case == 2
+            call invoke_precond_factor(vector, transpose_case, factor_vector, &
+                                       settings, error)
+            if (error /= 0) then
+                write(stderr, *) "test_invoke_precond_factor failed: Produced error."
+                test_invoke_precond_factor = .false.
+            end if
+            if (.not. all(is_close(factor_vector, merge( &
+                matmul(vector, context%factor), matmul(context%factor, vector), &
+                transpose_case)))) then
+                write(stderr, *) "test_invoke_precond_factor failed: Factor "// &
+                    "applied to the vector not returned."
+                test_invoke_precond_factor = .false.
+            end if
+        end do
+        if (.not. host_context_reached("invoke_precond_factor", context)) &
+            test_invoke_precond_factor = .false.
+
+        ! let the factor function fail with an error, a value that is not a number and
+        ! an infinite value in turn and check that each is reported
+        settings%precond_factor => faulty_precond_factor
+        fault_context%fault_callback = fault_precond_factor
+        fault_context%fault_call = 1
+        do fault_kind = error_fault, inf_fault
+            fault_context%n_callback_calls = 0
+            fault_context%fault_kind = fault_kind
+            call setup_error_logging(settings, fault_context)
+            call invoke_precond_factor(vector, .false., factor_vector, settings, error)
+            if (.not. check_invoke_fault("invoke_precond_factor", &
+                                         fault_precond_factor, fault_kind, &
+                                         error_precond_factor, error, fault_context)) &
+                test_invoke_precond_factor = .false.
+        end do
+
+    end function test_invoke_precond_factor
 
     logical(c_bool) function test_invoke_project() bind(C)
         !

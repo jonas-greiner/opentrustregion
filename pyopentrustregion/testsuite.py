@@ -54,6 +54,7 @@ from pyopentrustregion.python_interface import (
     HessXInterface,
     UpdateOrbsInterface,
     PrecondInterface,
+    PrecondFactorInterface,
     ProjectInterface,
     GetExtraTrialVectorsInterface,
     ConvCheckInterface,
@@ -61,6 +62,7 @@ from pyopentrustregion.python_interface import (
     check_struct_sizes,
     hess_x_interface_type,
     precond_interface_type,
+    precond_factor_interface_type,
     project_interface_type,
     get_extra_trial_vectors_interface_type,
     conv_check_interface_type,
@@ -78,13 +80,19 @@ fortran_tests = {
         "add_column",
         "add_error_origin",
         "add_trial_vector",
+        "apply_precond_factor",
+        "apply_rescaling",
         "bisection_ah",
         "bisection_mu",
         "block_davidson",
         "bracket",
+        "build_rescaling",
+        "certificate_steps",
+        "certified_stability_check",
         "check_stationary_point",
         "extend_matrix",
         "general_mat_diag",
+        "generate_gaussian_vector",
         "generate_random_trial_vectors",
         "generate_trial_vectors",
         "get_stability_trial_space",
@@ -95,12 +103,16 @@ fortran_tests = {
         "invoke_hess_x",
         "invoke_obj_func",
         "invoke_precond",
+        "invoke_precond_factor",
         "invoke_project",
         "invoke_update_orbs",
         "jacobi_davidson_correction",
+        "lanczos",
+        "lanczos_random_start",
         "level_shifted_davidson",
         "level_shifted_diag_precond",
         "lowest_h_diag_unit_vectors",
+        "lowest_ritz_pairs",
         "mat_diag",
         "mat_lowest_eigpairs",
         "mat_min_eig",
@@ -143,6 +155,7 @@ fortran_tests = {
         "logger_f_wrapper",
         "obj_func_f_wrapper",
         "precond_f_wrapper",
+        "precond_factor_f_wrapper",
         "project_f_wrapper",
         "solver_c_wrapper",
         "solver_settings_size",
@@ -165,6 +178,7 @@ fortran_tests = {
         "h2o_fb_stability_check_default",
         "h2o_fb_stability_check_hess_symm",
         "h2o_fb_stability_check_jacobi_davidson",
+        "h2o_fb_stability_check_lanczos",
     ],
     "c_integration_tests": [
         "settings_layout",
@@ -298,6 +312,14 @@ class PyInterfaceUnitTests(unittest.TestCase):
         precond_residual[:] = mu * residual
 
     @staticmethod
+    def _mock_precond_factor(vector, transpose, factor_vector):
+        """
+        this function is a mock function for the preconditioner factor function, which
+        scales the vector by 2 and, for the transposed factor, by 3
+        """
+        factor_vector[:] = (3 if transpose else 2) * vector
+
+    @staticmethod
     def _mock_project(vector):
         """
         this function is a mock function for the projection function
@@ -378,6 +400,9 @@ class PyInterfaceUnitTests(unittest.TestCase):
         settings.stability_settings.precond = recording(
             "stability_precond", self._mock_precond
         )
+        settings.stability_settings.precond_factor = recording(
+            "stability_precond_factor", self._mock_precond_factor
+        )
         settings.stability_settings.project = recording(
             "stability_project", self._mock_project
         )
@@ -441,6 +466,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
             "project",
             "get_extra_trial_vectors",
             "stability_precond",
+            "stability_precond_factor",
             "stability_project",
             "stability_get_extra_trial_vectors",
             "stability_conv_check",
@@ -591,6 +617,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         messages = []
         settings = StabilitySettings()
         settings.precond = self._mock_precond
+        settings.precond_factor = self._mock_precond_factor
         settings.project = self._mock_project
         settings.get_extra_trial_vectors = self._mock_get_extra_trial_vectors
         settings.conv_check = self._mock_conv_check
@@ -929,6 +956,10 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 precond_interface_type,
                 (vector_ptr, pointer(c_real(1.0)), vector_ptr),
             ),
+            "precond_factor": (
+                precond_factor_interface_type,
+                (vector_ptr, True, vector_ptr),
+            ),
             "project": (project_interface_type, (vector_ptr,)),
             "get_extra_trial_vectors": (
                 get_extra_trial_vectors_interface_type,
@@ -981,7 +1012,7 @@ class PyInterfaceUnitTests(unittest.TestCase):
         # every optional callback function raises an exception of its own
         failures = {}
         for some_settings, _, prefix in levels(settings, settings_c):
-            for name in callbacks:
+            for name in callbacks.keys() & some_settings.callback_fields.keys():
                 failures[prefix + name] = ValueError(prefix + name)
                 setattr(some_settings, name, raising(failures[prefix + name]))
 
@@ -992,8 +1023,10 @@ class PyInterfaceUnitTests(unittest.TestCase):
         interfaces = []
         settings.set_optional_callbacks(settings_c, interfaces, library_call)
         kept = {c_void_p.from_buffer(i).value for i in interfaces if i is not None}
-        for _, some_settings_c, prefix in levels(settings, settings_c):
+        for some_settings, some_settings_c, prefix in levels(settings, settings_c):
             for name, (interface_type, args) in callbacks.items():
+                if name not in some_settings.callback_fields:
+                    continue
                 if getattr(some_settings_c, name) not in kept:
                     print(
                         f" {test_name} failed: Interface of {prefix}{name} not kept "
@@ -1376,6 +1409,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
                     (vector_ptr, pointer(c_real(1.0)), vector_ptr),
                 ),
                 (
+                    "preconditioner factor function",
+                    lambda call: PrecondFactorInterface(raising(error_type), call),
+                    (vector_ptr, True, vector_ptr),
+                ),
+                (
                     "projection",
                     lambda call: ProjectInterface(raising(error_type), call),
                     (vector_ptr,),
@@ -1440,6 +1478,11 @@ class PyInterfaceUnitTests(unittest.TestCase):
                 "preconditioner",
                 lambda call: PrecondInterface(writing_into_input, call),
                 (vector_ptr, pointer(c_real(1.0)), output_ptr),
+            ),
+            (
+                "preconditioner factor function",
+                lambda call: PrecondFactorInterface(writing_into_input, call),
+                (vector_ptr, True, output_ptr),
             ),
         ]:
             library_call = LibraryCall("solver", n_param)
@@ -2152,6 +2195,27 @@ class PyIntegrationTests(unittest.TestCase):
                     "stability settings was not called by the internal stability check."
                 )
                 test_passed = False
+
+        # solve once more with the Lanczos method for the internal stability check,
+        # which has to call the preconditioner factor function of the nested settings,
+        # here the identity
+        def precond_factor(vector, transpose, out):
+            state["called"].add("stability_precond_factor")
+            out[:] = vector
+
+        state["curr"] = self.near_minimum.copy()
+        state["n_update_orbs_calls"] = 0
+        settings.stability_settings.diag_solver = "lanczos"
+        settings.stability_settings.precond_factor = precond_factor
+        settings.stability_settings.conv_check = None
+        solver(update_orbs, obj_func, self.n_param, settings)
+        if "stability_precond_factor" not in state["called"]:
+            print(
+                " test_solver_py failed: Preconditioner factor function set on the "
+                "nested stability settings was not called by the internal stability "
+                "check."
+            )
+            test_passed = False
         self.assertTrue(test_passed, "test_solver_py failed")
         print(" test_solver_py PASSED")
 
@@ -2312,6 +2376,24 @@ class PyIntegrationTests(unittest.TestCase):
             print(
                 " test_stability_check_py failed: Stability check does not return a "
                 "direction of negative curvature for saddle point."
+            )
+            test_passed = False
+
+        # at the saddle point, the Lanczos method has to call the preconditioner
+        # factor function, here the identity, and find the instability as well
+        def precond_factor(vector, transpose, out):
+            called.add("precond_factor")
+            out[:] = vector
+
+        settings.diag_solver = "lanczos"
+        settings.precond_factor = precond_factor
+        settings.conv_check = None
+        stable = stability_check(h_diag, hess_x, self.n_param, settings)
+        if stable or "precond_factor" not in called:
+            print(
+                " test_stability_check_py failed: Preconditioner factor function was "
+                "not called or saddle point not found unstable with the Lanczos "
+                "method."
             )
             test_passed = False
         self.assertTrue(test_passed, "test_stability_check_py failed")

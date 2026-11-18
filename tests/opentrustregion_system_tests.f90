@@ -8,7 +8,7 @@ module opentrustregion_system_tests
 
     use opentrustregion, only: rp, ip
     use opentrustregion_core, only: stderr
-    use test_reference, only: is_close, is_below
+    use test_reference, only: is_close, is_below, is_at_most
     use, intrinsic :: iso_c_binding, only: c_bool, c_ptr, c_char, c_f_pointer, &
                                            c_null_char
 
@@ -495,9 +495,13 @@ contains
         ! of the occupied orbitals of water at the minimum and at a saddle point with
         ! a stability check option switched on and checks that the minimum is found to
         ! be stable and the saddle point to be unstable with a returned direction along
-        ! the eigenvector of the lowest eigenvalue of the Hessian
+        ! the eigenvector of the lowest eigenvalue of the Hessian, or, for the Lanczos
+        ! method, which converges it only for a step along it, with a Rayleigh
+        ! quotient below the threshold and a residual of at most the factor for
+        ! unstable eigenpairs times its absolute value
         !
         use opentrustregion, only: hess_x_type, stability_settings_type, stability_check
+        use opentrustregion_core, only: unstable_res_factor
 
         character(len=*), intent(in) :: test_name, option
 
@@ -508,7 +512,7 @@ contains
         integer(ip) :: error, i_point, i, info
         real(rp) :: kappa(n_param), grad(n_param), h_diag(n_param), func, &
                     unit_vector(n_param), hess(n_param, n_param), eigvals(n_param), &
-                    work(3 * n_param)
+                    work(3 * n_param), hess_kappa(n_param), curvature
         logical :: stable
         real(rp), parameter :: direction_tol = 1e-6_rp
         character(len=*), parameter :: point_names(2) = &
@@ -582,6 +586,8 @@ contains
                 unit_vector(i) = 1.0_rp
                 call hess_x_funptr(unit_vector, hess(:, i), error, context_ptr)
             end do
+            hess_kappa = matmul(hess, kappa)
+            curvature = dot_product(kappa, hess_kappa)
             call dsyev("V", "U", n_param, hess, n_param, eigvals, work, &
                        size(work, kind=ip), info)
             if (info /= 0) then
@@ -590,8 +596,18 @@ contains
                 check_h2o_fb_stability_check = .false.
                 cycle
             end if
-            if (.not. is_close(abs(dot_product(kappa, hess(:, 1))), 1.0_rp, &
-                               direction_tol)) then
+            if (option == "lanczos") then
+                if (.not. is_close(norm2(kappa), 1.0_rp) .or. &
+                    .not. is_below(curvature, settings%stability_thresh) .or. &
+                    .not. is_at_most(norm2(hess_kappa - curvature * kappa), &
+                                     unstable_res_factor * abs(curvature))) then
+                    write(stderr, *) "test_"//test_name//" failed: Returned "// &
+                        "direction at the saddle point does not have a Rayleigh "// &
+                        "quotient below the threshold with a small residual."
+                    check_h2o_fb_stability_check = .false.
+                end if
+            else if (.not. is_close(abs(dot_product(kappa, hess(:, 1))), 1.0_rp, &
+                                    direction_tol)) then
                 write(stderr, *) "test_"//test_name//" failed: Returned direction "// &
                     "at the saddle point is not the lowest eigenvector of the Hessian."
                 check_h2o_fb_stability_check = .false.
@@ -705,6 +721,16 @@ contains
                                          "jacobi-davidson"), kind=c_bool)
 
     end function test_h2o_fb_stability_check_jacobi_davidson
+
+    logical(c_bool) function test_h2o_fb_stability_check_lanczos() bind(C)
+        !
+        ! this function tests the stability check for the Foster-Boys localization of
+        ! the occupied orbitals of water with the Lanczos method
+        !
+        test_h2o_fb_stability_check_lanczos = logical(check_h2o_fb_stability_check( &
+            "h2o_fb_stability_check_lanczos", "lanczos"), kind=c_bool)
+
+    end function test_h2o_fb_stability_check_lanczos
 
     logical(c_bool) function test_h2o_fb_stability_check_hess_symm() bind(C)
         !

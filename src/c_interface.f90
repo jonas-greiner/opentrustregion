@@ -10,8 +10,9 @@ module c_interface
         rp, ip, kw_len, standard_solver => solver, &
         standard_stability_check => stability_check, default_solver_settings, &
         default_stability_settings, update_orbs_type, hess_x_type, obj_func_type, &
-        precond_type, project_type, conv_check_type, get_extra_trial_vectors_type, &
-        logger_type, solver_state_type, stability_state_type
+        precond_type, precond_factor_type, project_type, conv_check_type, &
+        get_extra_trial_vectors_type, logger_type, solver_state_type, &
+        stability_state_type
     use, intrinsic :: iso_c_binding, only: &
         c_double, c_int64_t, c_int32_t, c_bool, c_ptr, c_funptr, c_f_pointer, &
         c_f_procpointer, c_associated, c_char, c_null_char, c_null_ptr, c_null_funptr, &
@@ -81,6 +82,19 @@ module c_interface
     end interface
 
     abstract interface
+        function precond_factor_c_type(vector_c, transpose_c, factor_vector_c, &
+                                       context_c) result(error) bind(C)
+            import :: c_rp, c_bool, c_ip, c_ptr
+
+            real(c_rp), intent(in) :: vector_c(*)
+            logical(c_bool), intent(in), value :: transpose_c
+            real(c_rp), intent(out) :: factor_vector_c(*)
+            type(c_ptr), intent(in), value :: context_c
+            integer(c_ip) :: error
+        end function precond_factor_c_type
+    end interface
+
+    abstract interface
         function project_c_type(vector_c, context_c) result(error) bind(C)
             import :: c_rp, c_ip, c_ptr
 
@@ -145,6 +159,7 @@ module c_interface
         procedure(hess_x_c_type), pointer, nopass :: hess_x => null()
         procedure(obj_func_c_type), pointer, nopass :: obj_func => null()
         procedure(precond_c_type), pointer, nopass :: precond => null()
+        procedure(precond_factor_c_type), pointer, nopass :: precond_factor => null()
         procedure(project_c_type), pointer, nopass :: project => null()
         procedure(get_extra_trial_vectors_c_type), pointer, nopass :: &
             get_extra_trial_vectors => null()
@@ -160,9 +175,10 @@ module c_interface
 
     ! derived type for stability check settings
     type, bind(C) :: stability_settings_type_c
-        type(c_funptr) :: precond, project, get_extra_trial_vectors, conv_check, logger
+        type(c_funptr) :: precond, precond_factor, project, get_extra_trial_vectors, &
+                          conv_check, logger
         logical(c_bool) :: hess_symm, stop_on_instability, initialized
-        real(c_rp) :: conv_tol, stability_thresh
+        real(c_rp) :: conv_tol, stability_thresh, failure_probability
         integer(c_ip) :: n_random_trial_vectors, n_extra_trial_vectors, n_iter, &
                          jacobi_davidson_start, seed, verbose
         character(kind=c_char) :: diag_solver(kw_len + 1)
@@ -191,6 +207,8 @@ module c_interface
     procedure(hess_x_type), pointer :: hess_x_f_wrapper_ptr => hess_x_f_wrapper
     procedure(obj_func_type), pointer :: obj_func_f_wrapper_ptr => obj_func_f_wrapper
     procedure(precond_type), pointer :: precond_f_wrapper_ptr => precond_f_wrapper
+    procedure(precond_factor_type), pointer :: precond_factor_f_wrapper_ptr => &
+        precond_factor_f_wrapper
     procedure(project_type), pointer :: project_f_wrapper_ptr => project_f_wrapper
     procedure(conv_check_type), pointer :: conv_check_f_wrapper_ptr => &
         conv_check_f_wrapper
@@ -248,9 +266,9 @@ contains
         call c_f_procpointer(cptr=obj_func_c_funptr, fptr=callbacks%obj_func)
         call store_optional_c_callbacks( &
             callbacks, local_settings_c%initialized, local_settings_c%precond, &
-            local_settings_c%project, local_settings_c%get_extra_trial_vectors, &
-            local_settings_c%conv_check, local_settings_c%logger, &
-            local_settings_c%context)
+            c_null_funptr, local_settings_c%project, &
+            local_settings_c%get_extra_trial_vectors, local_settings_c%conv_check, &
+            local_settings_c%logger, local_settings_c%context)
 
         ! let the bundle refer to the state and to the host's record, if one is given,
         ! so that the state is copied into it before every callback function
@@ -267,6 +285,7 @@ contains
             stability_callbacks, local_settings_c%initialized .and. &
             local_settings_c%stability_settings%initialized, &
             local_settings_c%stability_settings%precond, &
+            local_settings_c%stability_settings%precond_factor, &
             local_settings_c%stability_settings%project, &
             local_settings_c%stability_settings%get_extra_trial_vectors, &
             local_settings_c%stability_settings%conv_check, &
@@ -362,9 +381,9 @@ contains
         call c_f_procpointer(cptr=hess_x_c_funptr, fptr=callbacks%hess_x)
         call store_optional_c_callbacks( &
             callbacks, local_settings_c%initialized, local_settings_c%precond, &
-            local_settings_c%project, local_settings_c%get_extra_trial_vectors, &
-            local_settings_c%conv_check, local_settings_c%logger, &
-            local_settings_c%context)
+            local_settings_c%precond_factor, local_settings_c%project, &
+            local_settings_c%get_extra_trial_vectors, local_settings_c%conv_check, &
+            local_settings_c%logger, local_settings_c%context)
 
         ! let the bundle refer to the state and to the host's record, if one is given,
         ! so that the state is copied into it before every callback function
@@ -419,9 +438,9 @@ contains
     end function stability_check_c_wrapper
 
     subroutine store_optional_c_callbacks( &
-        callbacks, initialized, precond_c_funptr, project_c_funptr, &
-        get_extra_trial_vectors_c_funptr, conv_check_c_funptr, logger_c_funptr, &
-        context_c)
+        callbacks, initialized, precond_c_funptr, precond_factor_c_funptr, &
+        project_c_funptr, get_extra_trial_vectors_c_funptr, conv_check_c_funptr, &
+        logger_c_funptr, context_c)
         !
         ! this subroutine stores the optional C callback functions and the host context
         ! of C settings in a callback bundle, skipping the ones that were not provided
@@ -429,9 +448,9 @@ contains
         !
         type(c_callbacks_type), intent(inout) :: callbacks
         logical(c_bool), intent(in) :: initialized
-        type(c_funptr), intent(in) :: precond_c_funptr, project_c_funptr, &
-                                      get_extra_trial_vectors_c_funptr, &
-                                      conv_check_c_funptr, logger_c_funptr
+        type(c_funptr), intent(in) :: &
+            precond_c_funptr, precond_factor_c_funptr, project_c_funptr, &
+            get_extra_trial_vectors_c_funptr, conv_check_c_funptr, logger_c_funptr
         type(c_ptr), intent(in) :: context_c
 
         ! settings that were not initialized are replaced by the default settings and
@@ -444,6 +463,8 @@ contains
         ! associate the C pointers that were provided to Fortran procedure pointers
         if (c_associated(precond_c_funptr)) &
             call c_f_procpointer(cptr=precond_c_funptr, fptr=callbacks%precond)
+        if (c_associated(precond_factor_c_funptr)) call c_f_procpointer( &
+            cptr=precond_factor_c_funptr, fptr=callbacks%precond_factor)
         if (c_associated(project_c_funptr)) &
             call c_f_procpointer(cptr=project_c_funptr, fptr=callbacks%project)
         if (c_associated(get_extra_trial_vectors_c_funptr)) &
@@ -600,6 +621,35 @@ contains
         error = int(error_c, kind=ip)
 
     end subroutine precond_f_wrapper
+
+    subroutine precond_factor_f_wrapper(vector, transpose, factor_vector, error, &
+                                        context)
+        !
+        ! this subroutine exposes a C-implemented preconditioner factor function to
+        ! Fortran
+        !
+        real(rp), intent(in), target :: vector(:)
+        logical, intent(in) :: transpose
+        real(rp), intent(out), target :: factor_vector(:)
+        integer(ip), intent(out) :: error
+        class(*), intent(in), pointer :: context
+
+        integer(c_ip) :: error_c
+
+        ! call precond_factor C function
+        select type (callbacks => context)
+        type is (c_callbacks_type)
+            call copy_state_to_c(callbacks)
+            error_c = callbacks%precond_factor(vector, logical( &
+                transpose, kind=c_bool), factor_vector, callbacks%host_context)
+        class default
+            error_c = 1
+        end select
+
+        ! convert error code to Fortran kind
+        error = int(error_c, kind=ip)
+
+    end subroutine precond_factor_f_wrapper
 
     subroutine project_f_wrapper(vector, error, context)
         !
@@ -866,6 +916,11 @@ contains
             else
                 settings%precond => null()
             end if
+            if (c_associated(settings_c%precond_factor)) then
+                settings%precond_factor => precond_factor_f_wrapper
+            else
+                settings%precond_factor => null()
+            end if
             if (c_associated(settings_c%project)) then
                 settings%project => project_f_wrapper
             else
@@ -894,6 +949,7 @@ contains
             ! convert reals
             settings%conv_tol = real(settings_c%conv_tol, kind=rp)
             settings%stability_thresh = real(settings_c%stability_thresh, kind=rp)
+            settings%failure_probability = real(settings_c%failure_probability, kind=rp)
 
             ! convert integers
             settings%n_random_trial_vectors = &
@@ -981,6 +1037,7 @@ contains
 
         ! callback functions cannot be converted
         settings_c%precond = c_null_funptr
+        settings_c%precond_factor = c_null_funptr
         settings_c%project = c_null_funptr
         settings_c%get_extra_trial_vectors = c_null_funptr
         settings_c%conv_check = c_null_funptr
@@ -994,6 +1051,7 @@ contains
         ! convert reals
         settings_c%conv_tol = real(settings%conv_tol, kind=c_rp)
         settings_c%stability_thresh = real(settings%stability_thresh, kind=c_rp)
+        settings_c%failure_probability = real(settings%failure_probability, kind=c_rp)
 
         ! convert integers
         settings_c%n_random_trial_vectors = &

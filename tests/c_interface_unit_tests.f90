@@ -8,9 +8,9 @@ module c_interface_unit_tests
 
     use opentrustregion_core, only: rp, ip, stderr
     use c_interface, only: c_rp, c_ip, update_orbs_c_type, hess_x_c_type, &
-                           obj_func_c_type, precond_c_type, project_c_type, &
-                           get_extra_trial_vectors_c_type, conv_check_c_type, &
-                           logger_c_type
+                           obj_func_c_type, precond_c_type, precond_factor_c_type, &
+                           project_c_type, get_extra_trial_vectors_c_type, &
+                           conv_check_c_type, logger_c_type
     use test_reference, only: is_close, n_param, n_param_c
     use, intrinsic :: iso_c_binding, only: &
         c_bool, c_ptr, c_loc, c_funptr, c_funloc, c_char, c_associated, c_null_ptr, &
@@ -25,6 +25,8 @@ module c_interface_unit_tests
     procedure(hess_x_c_type), pointer :: mock_hess_x_ptr => mock_hess_x
     procedure(obj_func_c_type), pointer :: mock_obj_func_ptr => mock_obj_func
     procedure(precond_c_type), pointer :: mock_precond_ptr => mock_precond
+    procedure(precond_factor_c_type), pointer :: mock_precond_factor_ptr => &
+        mock_precond_factor
     procedure(project_c_type), pointer :: mock_project_ptr => mock_project
     procedure(conv_check_c_type), pointer :: mock_conv_check_ptr => mock_conv_check
     procedure(conv_check_c_type), pointer :: mock_conv_check_not_converged_ptr => &
@@ -162,6 +164,30 @@ contains
         error = host_context_error(context_c)
 
     end function mock_precond
+
+    function mock_precond_factor(vector, transpose, factor_vector, context_c) &
+        result(error) bind(C)
+        !
+        ! this function is a test function for the C preconditioner factor function,
+        ! which scales the vector by 2 and, for the transposed factor, by 3
+        !
+        use test_reference, only: check_host_context_c, host_context_error
+
+        real(c_rp), intent(in) :: vector(*)
+        logical(c_bool), intent(in), value :: transpose
+        real(c_rp), intent(out) :: factor_vector(*)
+        type(c_ptr), intent(in), value :: context_c
+        integer(c_ip) :: error
+
+        ! check host context
+        call check_host_context_c(context_c)
+
+        factor_vector(:n_param) = merge(3.0_c_rp, 2.0_c_rp, logical(transpose)) * &
+                                  vector(:n_param)
+
+        error = host_context_error(context_c)
+
+    end function mock_precond_factor
 
     function mock_project(vector, context_c) result(error) bind(C)
         !
@@ -403,6 +429,7 @@ contains
         type(solver_state_type_c), target :: state
         type(host_context_type), target :: nested_host_context
         procedure(precond_c_type), pointer :: expected_precond
+        procedure(precond_factor_c_type), pointer :: expected_precond_factor
         procedure(project_c_type), pointer :: expected_project
         procedure(get_extra_trial_vectors_c_type), pointer :: &
             expected_get_extra_trial_vectors
@@ -449,6 +476,8 @@ contains
                 settings%stability_settings%context = c_loc(nested_host_context)
             if (i_case >= 3) then
                 settings%stability_settings%precond = c_funloc(mock_stability_precond)
+                settings%stability_settings%precond_factor = &
+                    c_funloc(mock_precond_factor)
                 settings%stability_settings%project = c_funloc(mock_stability_project)
                 settings%stability_settings%get_extra_trial_vectors = &
                     c_funloc(mock_stability_get_extra_trial_vectors)
@@ -458,9 +487,11 @@ contains
             end if
             if (i_case == 4) settings%stability_settings%initialized = .false.
 
-            ! set expected nested callback functions and context
+            ! set expected nested callback functions and context, the preconditioner
+            ! factor function only exists in the nested settings
             if (i_case == 3) then
                 expected_precond => mock_stability_precond
+                expected_precond_factor => mock_precond_factor
                 expected_project => mock_stability_project
                 expected_get_extra_trial_vectors => &
                     mock_stability_get_extra_trial_vectors
@@ -468,6 +499,7 @@ contains
                 expected_logger => mock_stability_logger
             else
                 expected_precond => mock_precond
+                expected_precond_factor => null()
                 expected_project => mock_project
                 expected_get_extra_trial_vectors => mock_get_extra_trial_vectors
                 expected_conv_check => mock_conv_check
@@ -520,6 +552,21 @@ contains
                 write(stderr, *) "test_solver_c_wrapper failed: Preconditioner of "// &
                     "internal stability check wrong "//trim(case_names(i_case))//"."
                 test_solver_c_wrapper = .false.
+            end if
+            if (associated(received_stability_callbacks%precond_factor) .neqv. &
+                associated(expected_precond_factor)) then
+                write(stderr, *) "test_solver_c_wrapper failed: Preconditioner "// &
+                    "factor function of internal stability check wrong "// &
+                    trim(case_names(i_case))//"."
+                test_solver_c_wrapper = .false.
+            else if (associated(expected_precond_factor)) then
+                if (.not. associated(received_stability_callbacks%precond_factor, &
+                                     expected_precond_factor)) then
+                    write(stderr, *) "test_solver_c_wrapper failed: Preconditioner "// &
+                        "factor function of internal stability check wrong "// &
+                        trim(case_names(i_case))//"."
+                    test_solver_c_wrapper = .false.
+                end if
             end if
             if (.not. associated(received_stability_callbacks%project, &
                                  expected_project)) then
@@ -607,6 +654,7 @@ contains
         settings%logger = c_funloc(mock_logger)
         settings%context = c_loc(host_context)
         settings%stability_settings%precond = c_funloc(mock_stability_precond)
+        settings%stability_settings%precond_factor = c_funloc(mock_precond_factor)
         settings%stability_settings%project = c_funloc(mock_stability_project)
         settings%stability_settings%get_extra_trial_vectors = &
             c_funloc(mock_stability_get_extra_trial_vectors)
@@ -630,6 +678,7 @@ contains
             test_solver_c_wrapper = .false.
         end if
         if (associated(received_stability_callbacks%precond) .or. &
+            associated(received_stability_callbacks%precond_factor) .or. &
             associated(received_stability_callbacks%project) .or. &
             associated(received_stability_callbacks%get_extra_trial_vectors) .or. &
             associated(received_stability_callbacks%conv_check) .or. &
@@ -775,6 +824,7 @@ contains
             ! functions
             call get_reference_stability_values(settings)
             settings%precond = c_funloc(mock_precond)
+            settings%precond_factor = c_funloc(mock_precond_factor)
             settings%project = c_funloc(mock_project)
             settings%get_extra_trial_vectors = c_funloc(mock_get_extra_trial_vectors)
             settings%conv_check = c_funloc(mock_conv_check)
@@ -851,6 +901,15 @@ contains
             if (state /= mock_stability_state) then
                 write(stderr, *) "test_stability_check_c_wrapper failed: Returned "// &
                     "state wrong "//trim(case_names(i_case))//"."
+                test_stability_check_c_wrapper = .false.
+            end if
+
+            ! check that the callback bundle holds the preconditioner factor function
+            if (.not. associated(received_callbacks%precond_factor, &
+                                 mock_precond_factor)) then
+                write(stderr, *) "test_stability_check_c_wrapper failed: "// &
+                    "Preconditioner factor function not in the callback bundle "// &
+                    trim(case_names(i_case))//"."
                 test_stability_check_c_wrapper = .false.
             end if
 
@@ -989,7 +1048,8 @@ contains
 
         ! store the callback functions and host context of initialized settings
         call store_optional_c_callbacks( &
-            callbacks, .true._c_bool, c_funloc(mock_precond), c_funloc(mock_project), &
+            callbacks, .true._c_bool, c_funloc(mock_precond), &
+            c_funloc(mock_precond_factor), c_funloc(mock_project), &
             c_funloc(mock_get_extra_trial_vectors), c_funloc(mock_conv_check), &
             c_funloc(mock_logger), c_loc(host_context))
         if (.not. callbacks_stored(.true., "of initialized settings not stored")) &
@@ -1004,7 +1064,7 @@ contains
         ! host context already in the bundle have to be kept
         call store_optional_c_callbacks(callbacks, .true._c_bool, c_null_funptr, &
                                         c_null_funptr, c_null_funptr, c_null_funptr, &
-                                        c_null_funptr, c_null_ptr)
+                                        c_null_funptr, c_null_funptr, c_null_ptr)
         if (.not. callbacks_stored( &
             .true., "in the bundle replaced by one that was not provided")) &
             test_store_optional_c_callbacks = .false.
@@ -1018,7 +1078,8 @@ contains
         ! initialized in an empty bundle, nothing may be stored
         callbacks = c_callbacks_type()
         call store_optional_c_callbacks( &
-            callbacks, .false._c_bool, c_funloc(mock_precond), c_funloc(mock_project), &
+            callbacks, .false._c_bool, c_funloc(mock_precond), &
+            c_funloc(mock_precond_factor), c_funloc(mock_project), &
             c_funloc(mock_get_extra_trial_vectors), c_funloc(mock_conv_check), &
             c_funloc(mock_logger), c_loc(host_context))
         if (.not. callbacks_stored(.false., "of settings that were not initialized "// &
@@ -1041,17 +1102,20 @@ contains
             logical, intent(in) :: stored
             character(len=*), intent(in) :: failure
 
-            character(len=*), parameter :: names(5) = &
-                [character(len=29) :: "Preconditioner", "Projection function", &
-                 "Extra trial vector function", "Convergence check function", &
-                 "Logging function"]
-            logical :: correct(5)
+            character(len=*), parameter :: names(6) = &
+                [character(len=37) :: "Preconditioner", "Preconditioner factor "// &
+                 "function", "Projection function", "Extra trial vector function", &
+                 "Convergence check function", "Logging function"]
+            logical :: correct(6)
             integer(ip) :: i_callback
 
-            correct = [merge(associated( &
-                callbacks%precond, mock_precond), .not. associated(callbacks%precond), &
-                stored), merge(associated(callbacks%project, mock_project), &
-                               .not. associated(callbacks%project), stored), &
+            correct = [ &
+                merge(associated(callbacks%precond, mock_precond), &
+                      .not. associated(callbacks%precond), stored), &
+                merge(associated(callbacks%precond_factor, mock_precond_factor), &
+                      .not. associated(callbacks%precond_factor), stored), &
+                merge(associated(callbacks%project, mock_project), &
+                      .not. associated(callbacks%project), stored), &
                 merge(associated(callbacks%get_extra_trial_vectors, &
                                  mock_get_extra_trial_vectors), &
                       .not. associated(callbacks%get_extra_trial_vectors), stored), &
@@ -1412,6 +1476,66 @@ contains
         end if
 
     end function test_precond_f_wrapper
+
+    logical(c_bool) function test_precond_factor_f_wrapper() bind(C)
+        !
+        ! this function tests the Fortran wrapper for the preconditioner factor function
+        !
+        use opentrustregion_core, only: precond_factor_type
+        use c_interface, only: c_callbacks_type, precond_factor_f_wrapper
+        use test_reference, only: check_precond_factor_funptr, host_context, &
+                                  arm_host_context_c, arm_state_c, host_context_reached
+
+        procedure(precond_factor_type), pointer :: precond_factor_funptr
+        type(c_callbacks_type), target :: callbacks
+        class(*), pointer :: context, foreign_context
+        real(rp), target :: foreign_context_target
+        real(rp) :: vector(n_param), factor_vector(n_param)
+        integer(ip) :: error
+
+        ! assume tests pass
+        test_precond_factor_f_wrapper = .true.
+
+        ! inject mock C function and hand the bundle to the wrapper as its context
+        callbacks%precond_factor => mock_precond_factor
+        call arm_host_context_c(callbacks%host_context)
+        call arm_state_c(callbacks)
+        context => callbacks
+
+        ! get pointer to subroutine
+        precond_factor_funptr => precond_factor_f_wrapper
+
+        ! test preconditioner factor wrapper, which has to pass on whether to transpose
+        if (.not. check_precond_factor_funptr( &
+            precond_factor_funptr, "precond_factor_f_wrapper", "", context)) &
+            test_precond_factor_f_wrapper = .false.
+
+        ! check that the wrapper handed the host context to the C function
+        if (.not. host_context_reached("precond_factor_f_wrapper")) &
+            test_precond_factor_f_wrapper = .false.
+
+        ! check that an error of the C function is passed on
+        host_context%mock_error = 2
+        vector = 1.0_rp
+        call precond_factor_f_wrapper(vector, .false., factor_vector, error, context)
+        if (error /= 2) then
+            write(stderr, *) "test_precond_factor_f_wrapper failed: Did not pass "// &
+                "on the error of the C function."
+            test_precond_factor_f_wrapper = .false.
+        end if
+        host_context%mock_error = 0
+
+        ! a context this module did not create is reported rather than dereferenced
+        foreign_context => foreign_context_target
+        call precond_factor_f_wrapper(vector, .false., factor_vector, error, &
+                                      foreign_context)
+        if (error /= 1) then
+            write(stderr, *) "test_precond_factor_f_wrapper failed: Did not report "// &
+                "an invalid context."
+            test_precond_factor_f_wrapper = .false.
+        end if
+
+    end function test_precond_factor_f_wrapper
 
     logical(c_bool) function test_project_f_wrapper() bind(C)
         !

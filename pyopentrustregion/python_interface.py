@@ -139,6 +139,9 @@ obj_func_interface_type = callback_type(c_int, POINTER(c_real), POINTER(c_real))
 precond_interface_type = callback_type(
     c_int, POINTER(c_real), POINTER(c_real), POINTER(c_real)
 )
+precond_factor_interface_type = callback_type(
+    c_int, POINTER(c_real), c_bool, POINTER(c_real)
+)
 project_interface_type = callback_type(c_int, POINTER(c_real))
 get_extra_trial_vectors_interface_type = callback_type(c_int, POINTER(c_real), c_int)
 conv_check_interface_type = callback_type(c_int, POINTER(c_bool))
@@ -402,6 +405,27 @@ class PrecondInterface(CallbackInterface):
 
 
 @dataclass
+class PrecondFactorInterface(CallbackInterface):
+    """
+    this class provides the interface to the preconditioner factor function
+    """
+
+    precond_factor: Callable[[np.ndarray, bool, np.ndarray], None]
+    library_call: LibraryCall
+
+    def call(self, vector_ptr, transpose, factor_vector_ptr) -> int:
+        # convert pointers to numpy arrays and make the input read-only
+        vector = np.ctypeslib.as_array(vector_ptr, shape=(self.n_param,))
+        vector.flags.writeable = False
+        factor_vector = np.ctypeslib.as_array(factor_vector_ptr, shape=(self.n_param,))
+
+        # apply the factor or its transpose
+        self.precond_factor(vector, bool(transpose), factor_vector)
+
+        return 0
+
+
+@dataclass
 class ProjectInterface(CallbackInterface):
     """
     this class provides the interface to the projection function
@@ -487,6 +511,7 @@ class LoggerInterface(CallbackInterface):
 class StabilitySettingsC(Structure):
     _fields_ = [
         ("precond", c_void_p),
+        ("precond_factor", c_void_p),
         ("project", c_void_p),
         ("get_extra_trial_vectors", c_void_p),
         ("conv_check", c_void_p),
@@ -496,6 +521,7 @@ class StabilitySettingsC(Structure):
         ("initialized", c_bool),
         ("conv_tol", c_real),
         ("stability_thresh", c_real),
+        ("failure_probability", c_real),
         ("n_random_trial_vectors", c_int),
         ("n_extra_trial_vectors", c_int),
         ("n_iter", c_int),
@@ -769,6 +795,7 @@ class StabilitySettings(Settings):
     init_c_struct = lib.init_stability_settings
     callback_fields = {
         "precond": (PrecondInterface, precond_interface_type),
+        "precond_factor": (PrecondFactorInterface, precond_factor_interface_type),
         "project": (ProjectInterface, project_interface_type),
         "get_extra_trial_vectors": (
             GetExtraTrialVectorsInterface,
@@ -779,6 +806,7 @@ class StabilitySettings(Settings):
     }
 
     precond: Optional[Callable[[np.ndarray, float, np.ndarray], None]]
+    precond_factor: Optional[Callable[[np.ndarray, bool, np.ndarray], None]]
     project: Optional[Callable[[np.ndarray], None]]
     get_extra_trial_vectors: Optional[Callable[[np.ndarray], None]]
     conv_check: Optional[Callable[[], bool]]

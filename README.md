@@ -316,7 +316,7 @@ A separate `stability_check` subroutine is available to verify whether the curre
 - **`error`** (integer): An integer code indicating the success or failure of the stability check. The error code structure is explained below.
 - **`settings`** (stability_settings_type, optional): Settings object which controls optional arguments as described below. The stability check only reads it. Without it, the default settings are used.
 - **`state`** (stability_state_type, optional): Record that the stability check keeps up to date during its iterations and that holds its final state once it returns, as described below.
-- **`kappa`** (real array, optional): If provided, receives the normalized eigenvector of the lowest Hessian eigenvalue, written in-place, whether the current point is stable or not. At an unstable point (as can be checked from `stable`), this is the descent direction along the unstable mode.
+- **`kappa`** (real array, optional): If provided, receives the normalized eigenvector of the lowest Hessian eigenvalue, or the approximation to it that the `"lanczos"` diagonalization solver returns, written in-place, whether the current point is stable or not. At an unstable point (as can be checked from `stable`), this is the descent direction along the unstable mode.
 
 ---
 
@@ -453,20 +453,23 @@ print(f"Number of Hessian linear transformations: {state.n_hess_x}")
 ### Optional Settings
 The stability check can be fine-tuned using the following settings:
 
-- **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`, approximating `(H - mu * I)^-1`; the Davidson iterations of the stability check pass `stability_thresh` as `mu`, while its Jacobi-Davidson iterations do not call it. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context as its last argument.
-- **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x` and `precond`) must be self-projecting. Receives the host context as its last argument.
+- **`precond`** (subroutine): Applies a preconditioner to a residual vector, given a level shift `mu`, approximating `(H - mu * I)^-1`; the Davidson iterations of the stability check pass `stability_thresh` as `mu`, while its Jacobi-Davidson iterations and the Lanczos runs of the `"lanczos"` diagonalization solver do not call it. Writes the result in-place into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Receives the host context as its last argument.
+- **`precond_factor`** (subroutine): Applies the factor `F` of a positive-definite preconditioner `F F^T`, which approximates the inverse of the absolute value of `H - stability_thresh * I`, to a vector, or its transpose when the logical `transpose` is true, writes the result into a provided array and returns an integer error code (0 for success, positive integers < 100 for errors). Only the `"lanczos"` diagonalization solver calls it, which otherwise uses the inverse square root of the absolute value of the shifted Hessian diagonal. Receives the host context as its last argument.
+- **`project`** (subroutine): Applies a projection in-place to a provided vector and returns an integer error code (0 for success, positive integers < 100 for errors). Required for stability check using non-redundant parameters. When this is used, all other passed routines (`hess_x`, `precond` and `precond_factor`) must be self-projecting. Receives the host context as its last argument.
 - **`conv_check`** (function): Returns whether the stability check has converged due to some supplied convergence criterion, which replaces the criterion on the RMS residual (`conv_tol`) and `stop_on_instability`. It has the same arguments as the convergence check of the solver and can read the `state` passed to `stability_check`, or, for the internal stability check, from `stability_state` of the state passed to `solver`, so a host that supplies it has to pass a state. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions. Receives the host context as its last argument.
 - **`get_extra_trial_vectors`** (subroutine): Returns extra trial vectors that seed the leading part of the initial trial space, written in-place to the provided matrix, whose column count is at most `n_extra_trial_vectors`, which the C interface also passes, since it only receives a flat pointer. In Python, the matrix holds one trial vector per row instead. The vectors do not need to be orthonormalized or projected, and a vanishing column is dropped, which is how the callback signals that it has no vector to contribute for that slot. Additionally, outputs an integer code indicating the success or failure of the function, positive integers less than 100 represent error conditions. Receives the host context as its last argument.
-- **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians. A non-symmetric Hessian is supported neither by the `"jacobi-davidson"` diagonalization solver nor by `stop_on_instability`.
+- **`hess_symm`** (boolean): Determines whether the supplied Hessian is symmetric. This is sometimes not the case for approximate Hessians. A non-symmetric Hessian is supported neither by the `"jacobi-davidson"` and `"lanczos"` diagonalization solvers nor by `stop_on_instability`.
 - **`stop_on_instability`** (boolean): When no `conv_check` is supplied, lets the default convergence policy accept a Ritz pair as soon as its eigenvalue drops below `stability_thresh`, without waiting for the residual to converge, since for a symmetric Hessian a Ritz value is an upper bound on the true lowest eigenvalue and the sign is then already certain. Not supported for a non-symmetric Hessian (`hess_symm`). Off by default for a standalone stability check. The solver switches it on for its internal check, also when it is set to false, unless `stability_settings%conv_check` is supplied or the Hessian is non-symmetric.
 - **`diag_solver`** (string): Specifies which diagonalization solver to use. Options include:
   - `"davidson"`: standard Davidson method,
-  - `"jacobi-davidson"`: Davidson method that switches to Jacobi-Davidson after `jacobi_davidson_start` iterations.
+  - `"jacobi-davidson"`: Davidson method that switches to Jacobi-Davidson after `jacobi_davidson_start` iterations,
+  - `"lanczos"`: preconditioned Lanczos method from random vectors, which proves an instability with certainty and certifies stability with a probability of at least `1 - failure_probability`. At an unstable point, the Davidson method continues from the space it spanned only until the residual norm of the lowest eigenpair is at most 0.3 times its absolute value, which suffices for a step along it, unless `stop_on_instability` or `conv_check` accept it earlier. At a stable point, it returns instead of the converged eigenpair the lowest Rayleigh-Ritz pair in the space of its first run, whose eigenvalue bounds the lowest one from above.
 - **`conv_tol`** (real): Convergence criterion for the RMS residual.
 - **`stability_thresh`** (real): Threshold on the lowest Hessian eigenvalue, below which a point counts as unstable (see `stable`) and at which `stop_on_instability` accepts a Ritz pair. It must be negative, since a positive threshold would count a minimum as unstable and a vanishing one a point without negative curvature, which offers no direction to leave it.
+- **`failure_probability`** (real): Probability, between 0 and 1, with which the `"lanczos"` diagonalization solver may certify an unstable point as stable. The number of iterations it needs grows with the logarithm of its inverse.
 - **`n_random_trial_vectors`** (integer): Number of random trial vectors used to start the Davidson iterations. A negative value, the default, selects the number automatically: 20 for a standalone stability check and 1 for the solver's internal one. The default settings in C (`stability_settings_init()`) and Python (`StabilitySettings()`) therefore show -1, and unlike the solver's `n_random_trial_vectors`, which must not be negative, any negative value means automatic.
 - **`n_extra_trial_vectors`** (integer): Number of non-random trial vectors used to start the Davidson iterations, on top of the `n_random_trial_vectors` random ones. These non-random vectors are taken from `get_extra_trial_vectors` when that callback is provided, and otherwise are unit vectors along the lowest Hessian diagonal elements. Vectors that vanish or are linearly dependent are dropped, so the trial space holds the remaining ones plus the random ones, at most as many as there are parameters, and the stability check fails if nothing remains.
-- **`n_iter`** (integer): Maximum number of Davidson iterations.
+- **`n_iter`** (integer): Maximum number of Davidson iterations, or of the iterations of all Lanczos runs and the Davidson iterations after them together for the `"lanczos"` diagonalization solver.
 - **`jacobi_davidson_start`** (integer): Number of iterations after which the diagonalization solver switches to the Jacobi-Davidson method.
 - **`verbose`** (integer): Controls the verbosity of output during the stability check. Level 0 prints nothing, 1 prints errors, 2 also warnings, 3 also progress information and 4 also debugging information.
 - **`seed`** (integer): Seed value for generating random trial vectors.
@@ -476,8 +479,8 @@ The stability check can be fine-tuned using the following settings:
 ### Output
 The stability check keeps the state it is given up to date during its iterations, starting from the default values on every call, and leaves its final state in it when it returns, also after an error. As for the solver, a callback function can therefore read the current state. The state holds the following fields:
 
-- **`iteration`** (integer): Current iteration of the diagonalization.
-- **`min_eigval`** (real): Current estimate of the lowest Hessian eigenvalue, once the check has converged the lowest eigenvalue.
+- **`iteration`** (integer): Current iteration of the diagonalization, counted on across the Lanczos runs and the Davidson iterations after them.
+- **`min_eigval`** (real): Current estimate of the lowest Hessian eigenvalue, once the check has converged the lowest eigenvalue, or the upper bound on it that the `"lanczos"` diagonalization solver returns at a stable point.
 - **`residual_rms`** (real): RMS of the residual of this estimate.
 - **`n_hess_x`** (integer): Number of Hessian linear transformations (`hess_x`).
 
@@ -507,6 +510,7 @@ The library uses structured integer return codes to indicate whether a function 
 | `15`               | `conv_check`, of the solver and of the stability check                     |
 | `16`               | `project`                                                                  |
 | `17`               | `get_extra_trial_vectors`, of the solver and of the stability check        |
+| `18`               | `precond_factor`                                                           |
 
 ### Error Codes (`EE`)
 
@@ -517,7 +521,7 @@ The error field (`EE`) is `01` for a general, unspecified error and, for a callb
 | `0101`     | General error in `solver` |
 | `0102`     | Orbital optimization did not converge within the maximum number of macro iterations (`n_macro`) |
 | `0201`     | General error in `stability_check` |
-| `0202`     | Stability check did not converge, within the maximum number of iterations (`n_iter`) or because its trial space could not be expanded any further |
+| `0202`     | Stability check did not converge, within the maximum number of iterations (`n_iter`) or because its trial space could not be expanded any further, or its Lanczos method did not decide on the stability within the maximum number of iterations |
 
 Future versions may define more specific codes for other actionable failure modes.
 

@@ -69,6 +69,7 @@ typedef struct {
   c_int n_hess_x_seen;
   c_int nested_n_hess_x_seen;
   int precond_called;
+  int precond_factor_called;
   int project_called;
   int logger_called;
   int stability_precond_called;
@@ -220,6 +221,21 @@ static c_int stability_precond(const c_real *residual, const c_real *mu,
   ctx->stability_precond_called = 1;
   for (int i = 0; i < N_PARAM; i++)
     precond_residual[i] = residual[i];
+  return 0;
+}
+
+/* Identity preconditioner factor, which only the Lanczos method of the stability check
+ * calls. Only stability settings have its slot, so unlike the callbacks above it needs
+ * no stability variant. */
+static c_int precond_factor(const c_real *vector, c_bool transpose,
+                            c_real *factor_vector, void *context) {
+  (void)transpose;
+  hartmann_context *ctx = context;
+  if (!ctx)
+    return 1;
+  ctx->precond_factor_called = 1;
+  for (int i = 0; i < N_PARAM; i++)
+    factor_vector[i] = vector[i];
   return 0;
 }
 
@@ -605,6 +621,8 @@ bool test_settings_layout(void) {
      * of a standalone stability check */
     stability_settings_type ss = s.stability_settings;
     ok &= check_field((uintptr_t)ss.precond, "stability_settings.precond");
+    ok &=
+        check_field((uintptr_t)ss.precond_factor, "stability_settings.precond_factor");
     ok &= check_field((uintptr_t)ss.project, "stability_settings.project");
     ok &= check_field((uintptr_t)ss.get_extra_trial_vectors,
                       "stability_settings.get_extra_trial_vectors");
@@ -613,6 +631,7 @@ bool test_settings_layout(void) {
     ok &= check_field((uintptr_t)ss.context, "stability_settings.context");
     ok &= check_field(ss.conv_tol, "stability_settings.conv_tol");
     ok &= check_field(ss.stability_thresh, "stability_settings.stability_thresh");
+    ok &= check_field(ss.failure_probability, "stability_settings.failure_probability");
     ok &= check_field(ss.n_random_trial_vectors,
                       "stability_settings.n_random_trial_vectors");
     ok &= check_field(ss.n_extra_trial_vectors,
@@ -865,6 +884,23 @@ bool test_solver_c(void) {
     ok = false;
   }
 
+  /* solve once more with the Lanczos method for the internal stability check, which
+   * has to call the preconditioner factor function of the nested settings */
+  hartmann_context lanczos_ctx = {0};
+  memcpy(lanczos_ctx.curr_vars, hartmann6d_near_minimum, sizeof(lanczos_ctx.curr_vars));
+  solver_settings_type lanczos_settings = solver_settings_init();
+  lanczos_settings.context = &lanczos_ctx;
+  lanczos_settings.stability = true;
+  strcpy(lanczos_settings.stability_settings.diag_solver, "lanczos");
+  lanczos_settings.stability_settings.precond_factor = precond_factor;
+  error = solver(update_orbs, obj_func, N_PARAM, &lanczos_settings, NULL);
+  if (error != 0 || !lanczos_ctx.precond_factor_called) {
+    fprintf(stderr, "test_solver_c failed: Preconditioner factor function set on the "
+                    "nested stability settings was not called by the internal "
+                    "stability check or the solve produced an error.\n");
+    ok = false;
+  }
+
   /* settings or nested stability check settings that were not initialized are
    * replaced by the default settings with a warning on the standard error, since the
    * former provide no logger and the latter none here, while no settings stand for the
@@ -1049,6 +1085,20 @@ bool test_stability_check_c(void) {
   if (stable) {
     fprintf(stderr, "test_stability_check_c failed: Stability incorrectly classifies "
                     "stability of saddle point when not passing direction.\n");
+    ok = false;
+  }
+
+  /* the Lanczos method has to call the preconditioner factor function and find the
+   * saddle point unstable as well */
+  strcpy(settings.diag_solver, "lanczos");
+  settings.precond_factor = precond_factor;
+  settings.conv_check = NULL;
+  stable = true;
+  error = stability_check(h_diag, hess_x_fun, N_PARAM, &stable, &settings, NULL, NULL);
+  if (error != 0 || stable || !ctx.precond_factor_called) {
+    fprintf(stderr, "test_stability_check_c failed: Preconditioner factor function "
+                    "was not called or saddle point not found unstable with the "
+                    "Lanczos method.\n");
     ok = false;
   }
 

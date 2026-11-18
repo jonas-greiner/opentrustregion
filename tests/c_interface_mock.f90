@@ -42,11 +42,11 @@ contains
         !
         use c_interface, only: solver_settings_type_c, solver_state_type_c, &
                                logger_c_type, obj_func_c_type
-        use test_reference, only: check_update_orbs_c_funptr, check_obj_func_c_funptr, &
-                                  check_precond_c_funptr, check_project_c_funptr, &
-                                  check_get_extra_trial_vectors_c_funptr, &
-                                  check_conv_check_c_funptr, &
-                                  get_reference_solver_state_values, operator(/=)
+        use test_reference, only: &
+            check_update_orbs_c_funptr, check_obj_func_c_funptr, &
+            check_precond_c_funptr, check_precond_factor_c_funptr, &
+            check_project_c_funptr, check_get_extra_trial_vectors_c_funptr, &
+            check_conv_check_c_funptr, get_reference_solver_state_values, operator(/=)
 
         type(c_funptr), intent(in), value :: update_orbs_c_funptr, obj_func_c_funptr
         integer(c_ip), intent(in), value :: n_param_c
@@ -129,6 +129,10 @@ contains
                 settings_c%stability_settings%precond, "solver_py_interface", &
                 " by preconditioning function of nested settings", context)) &
                 test_solver_interface = .false.
+            if (.not. check_precond_factor_c_funptr( &
+                settings_c%stability_settings%precond_factor, "solver_py_interface", &
+                " by preconditioner factor function of nested settings", context)) &
+                test_solver_interface = .false.
             if (.not. check_project_c_funptr( &
                 settings_c%stability_settings%project, "solver_py_interface", &
                 " by projection function of nested settings", context)) &
@@ -173,11 +177,11 @@ contains
         !
         use c_interface, only: stability_settings_type_c, stability_state_type_c, &
                                logger_c_type, hess_x_c_type
-        use test_reference, only: is_close, check_hess_x_c_funptr, &
-                                  check_precond_c_funptr, check_project_c_funptr, &
-                                  check_get_extra_trial_vectors_c_funptr, &
-                                  check_conv_check_c_funptr, &
-                                  get_reference_stability_state_values, operator(/=)
+        use test_reference, only: &
+            is_close, check_hess_x_c_funptr, check_precond_c_funptr, &
+            check_precond_factor_c_funptr, check_project_c_funptr, &
+            check_get_extra_trial_vectors_c_funptr, check_conv_check_c_funptr, &
+            get_reference_stability_state_values, operator(/=)
 
         real(c_rp), intent(in), target :: h_diag_c(*)
         type(c_funptr), intent(in), value :: hess_x_c_funptr
@@ -242,6 +246,12 @@ contains
             if (.not. check_precond_c_funptr( &
                 settings_c%precond, "stability_check_py_interface", &
                 " by given preconditioning function", context)) &
+                test_stability_check_interface = .false.
+
+            ! test passed preconditioner factor function
+            if (.not. check_precond_factor_c_funptr( &
+                settings_c%precond_factor, "stability_check_py_interface", &
+                " by given preconditioner factor function", context)) &
                 test_stability_check_interface = .false.
 
             ! test passed projection function

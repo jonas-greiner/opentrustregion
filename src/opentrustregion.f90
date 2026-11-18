@@ -32,7 +32,7 @@ module opentrustregion_core
         error_gram_schmidt_lin_dep = 51, error_obj_func = 1100, &
         error_update_orbs = 1200, error_hess_x = 1300, error_precond = 1400, &
         error_conv_check = 1500, error_project = 1600, &
-        error_get_extra_trial_vectors = 1700
+        error_get_extra_trial_vectors = 1700, error_precond_factor = 1800
 
     ! define useful parameters
     real(rp), parameter :: numerical_zero = 1e-14_rp, precond_floor = 1e-10_rp, &
@@ -46,12 +46,23 @@ module opentrustregion_core
                               verbosity_warning = 2, verbosity_info = 3, &
                               verbosity_debug = 4
 
+    ! define the parameters of the Lanczos method of the stability check, the modes of
+    ! a run and its outcomes
+    real(rp), parameter :: lanczos_band_low = 0.5_rp, lanczos_band_high = 2.0_rp, &
+                           lanczos_explored_tol = 0.1_rp, unstable_res_factor = 0.3_rp
+    integer(ip), parameter :: &
+        lanczos_min_explore_steps = 5, lanczos_min_certify_steps = 10, &
+        lanczos_restart_steps = 30, lanczos_explore = 1, lanczos_certify = 2, &
+        lanczos_certify_final = 3, lanczos_undecided = 0, lanczos_unstable = 1, &
+        lanczos_certified = 2, lanczos_explored = 3
+
     ! define the options of the subsystem solver and of the diagonalization solver
     character(len=*), parameter :: &
         subsystem_solver_options(5) = [character(len=18) :: "davidson_ls", &
                                        "davidson_ah", "jacobi-davidson_ls", &
                                        "jacobi-davidson_ah", "tcg"], &
-        diag_solver_options(2) = [character(len=15) :: "davidson", "jacobi-davidson"]
+        diag_solver_options(3) = &
+            [character(len=15) :: "davidson", "jacobi-davidson", "lanczos"]
 
     ! define warning messages
     character(len=*), parameter :: &
@@ -101,10 +112,11 @@ module opentrustregion_core
                                           "parameters.", &
         project_warning_msg = &
             "Custom projection is provided. To optimize performance, OTR assumes "// &
-            "that all other provided routines (update_orbs, hess_x, precond) are "// &
-            "already projected onto the relevant orbital rotation subspace. If "// &
-            "these routines are not self-projecting, redundant rotations may "// &
-            "contaminate the trial space and cause convergence issues."
+            "that all other provided routines (update_orbs, hess_x, precond, "// &
+            "precond_factor) are already projected onto the relevant orbital "// &
+            "rotation subspace. If these routines are not self-projecting, "// &
+            "redundant rotations may contaminate the trial space and cause "// &
+            "convergence issues."
 
     ! state of the stability check, which the stability check keeps current in the
     ! record it is given
@@ -196,6 +208,18 @@ module opentrustregion_core
     end interface
 
     abstract interface
+        subroutine precond_factor_type(vector, transpose, factor_vector, error, context)
+            import :: rp, ip
+
+            real(rp), intent(in), target :: vector(:)
+            logical, intent(in) :: transpose
+            real(rp), intent(out), target :: factor_vector(:)
+            integer(ip), intent(out) :: error
+            class(*), intent(in), pointer :: context
+        end subroutine precond_factor_type
+    end interface
+
+    abstract interface
         subroutine project_type(vector, error, context)
             import :: rp, ip
 
@@ -249,10 +273,12 @@ module opentrustregion_core
 
     type, extends(settings_type) :: stability_settings_type
         logical :: stop_on_instability = .false.
-        real(rp) :: conv_tol = 1e-9_rp, stability_thresh = -1e-3_rp
-        integer(ip) :: n_random_trial_vectors = -1, n_iter = 100, &
+        real(rp) :: conv_tol = 1e-9_rp, stability_thresh = -1e-3_rp, &
+                    failure_probability = 1e-3_rp
+        integer(ip) :: n_random_trial_vectors = -1, n_iter = 200, &
                        jacobi_davidson_start = 50
         character(len=kw_len) :: diag_solver = "davidson"
+        procedure(precond_factor_type), pointer, nopass :: precond_factor => null()
     end type
 
     type, extends(settings_type) :: solver_settings_type
@@ -581,17 +607,25 @@ contains
         call add_error_origin(error, error_stability_check, local_settings)
         if (error /= 0) return
 
-        ! generate trial vectors
-        call get_stability_trial_space(h_diag, red_space_basis, local_settings, error)
-        call add_error_origin(error, error_stability_check, local_settings)
-        if (error /= 0) return
-
-        ! determine the lowest eigenpair of the Hessian
         allocate(eigvals(1), eigvecs(n_param, 1))
-        call block_davidson(hess_x_funptr, h_diag, red_space_basis, &
-                            local_settings%hess_symm, 1_ip, local_settings%n_iter, &
-                            eigvals, eigvecs, stability_converged, local_settings, &
-                            current_state, error)
+        if (local_settings%diag_solver == "lanczos") then
+            ! decide on the stability with a certificate
+            call certified_stability_check(hess_x_funptr, h_diag, eigvals(1), &
+                                           eigvecs(:, 1), stability_converged, &
+                                           local_settings, current_state, error)
+        else
+            ! generate trial vectors
+            call get_stability_trial_space(h_diag, red_space_basis, local_settings, &
+                                           error)
+            call add_error_origin(error, error_stability_check, local_settings)
+            if (error /= 0) return
+
+            ! determine the lowest eigenpair of the Hessian
+            call block_davidson(hess_x_funptr, h_diag, red_space_basis, &
+                                local_settings%hess_symm, 1_ip, local_settings%n_iter, &
+                                eigvals, eigvecs, stability_converged, local_settings, &
+                                current_state, error)
+        end if
         call add_error_origin(error, error_stability_check, local_settings)
         if (error /= 0) return
         eigval = eigvals(1)
@@ -623,8 +657,8 @@ contains
             call local_settings%log(msg, verbosity_warning)
         end if
 
-        ! deallocate quantities from Davidson iterations
-        deallocate(red_space_basis, eigvals, eigvecs)
+        ! deallocate quantities from the diagonalization
+        deallocate(eigvals, eigvecs)
 
         ! flush output
         flush(stdout)
@@ -1970,12 +2004,39 @@ contains
 
     end subroutine generate_random_trial_vectors
 
+    subroutine generate_gaussian_vector(vector)
+        !
+        ! this subroutine fills a vector with independent standard normal random
+        ! numbers by the Box-Muller transform of uniform random numbers, so that its
+        ! direction is uniformly distributed on the unit sphere, as the bound with
+        ! which the Lanczos method certifies stability requires of its start vector
+        !
+        real(rp), intent(out) :: vector(:)
+
+        real(rp), allocatable :: radius(:), angle(:)
+        real(rp), parameter :: pi = acos(-1.0_rp)
+
+        ! draw two uniform random numbers in [0, 1) per element
+        allocate(radius(size(vector)), angle(size(vector)))
+        call random_number(radius)
+        call random_number(angle)
+
+        ! transform them, with one minus the first in (0, 1], where its logarithm is
+        ! finite
+        vector = sqrt(-2.0_rp * log(1.0_rp - radius)) * cos(2.0_rp * pi * angle)
+        deallocate(radius, angle)
+
+    end subroutine generate_gaussian_vector
+
     subroutine block_davidson(hess_x_funptr, h_diag, red_space_basis, symm, n_block, &
                               max_iter, eigvals, eigvecs, converged, settings, state, &
-                              error, res_tol)
+                              error, res_tol, start_h_basis, unstable_factor)
         !
         ! this subroutine determines the lowest eigenpairs of a linear transformation
-        ! with a block Davidson procedure
+        ! with a block Davidson procedure, starting from the given space, whose linear
+        ! transformations can be given if they are already known, and accepts, if a
+        ! factor is given, a Ritz pair below the stability threshold whose residual is
+        ! at most this factor times its absolute value
         !
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
         real(rp), intent(in) :: h_diag(:)
@@ -1987,16 +2048,14 @@ contains
         type(stability_settings_type), intent(in) :: settings
         type(stability_state_type), intent(inout), target :: state
         integer(ip), intent(out) :: error
-        real(rp), intent(in), optional :: res_tol
+        real(rp), intent(in), optional :: res_tol, start_h_basis(:, :), unstable_factor
 
         integer(ip) :: n_param, n_trial, n_target, n_added, n_unconverged, iter, i, &
                        jacobi_davidson_iter
-        real(rp), allocatable :: h_basis(:, :), red_space_hess(:, :), red_eigvals(:), &
-                                 red_eigvecs(:, :), solution(:, :), h_solution(:, :), &
+        real(rp), allocatable :: h_basis(:, :), red_eigvals(:), solution(:, :), &
                                  residual(:, :)
         logical :: pair_converged
         real(rp), external :: dnrm2
-        external :: dgemm
 
         ! initialize error flag
         error = 0
@@ -2005,44 +2064,32 @@ contains
         n_param = size(h_diag)
         n_trial = size(red_space_basis, 2)
 
-        ! calculate linear transformations of basis vectors
-        allocate(h_basis(n_param, n_trial))
-        do i = 1, n_trial
-            call invoke_hess_x(hess_x_funptr, red_space_basis(:, i), h_basis(:, i), &
-                               settings, state%n_hess_x, error)
-            if (error /= 0) return
-        end do
+        ! calculate linear transformations of basis vectors unless they are given
+        if (present(start_h_basis)) then
+            h_basis = start_h_basis
+        else
+            allocate(h_basis(n_param, n_trial))
+            do i = 1, n_trial
+                call invoke_hess_x(hess_x_funptr, red_space_basis(:, i), &
+                                   h_basis(:, i), settings, state%n_hess_x, error)
+                if (error /= 0) return
+            end do
+        end if
 
         ! loop over iterations
         converged = .false.
         do iter = 1, max_iter
-            ! count the iteration
-            state%iteration = iter
+            ! count the iteration on from those the state holds
+            state%iteration = state%iteration + 1
 
-            ! construct reduced space Hessian
-            allocate(red_space_hess(n_trial, n_trial))
-            call dgemm("T", "N", n_trial, n_trial, n_param, 1.0_rp, red_space_basis, &
-                       n_param, h_basis, n_param, 0.0_rp, red_space_hess, n_trial)
-
-            ! solve reduced space problem for the lowest (real) eigenpairs
+            ! lowest (real) Ritz pairs and their residuals
             n_target = min(n_block, n_trial)
-            allocate(red_eigvals(n_target), red_eigvecs(n_trial, n_target))
-            call mat_lowest_eigpairs(red_space_hess, symm, red_eigvals, red_eigvecs, &
-                                     settings, error)
+            allocate(red_eigvals(n_target), solution(n_param, n_target), &
+                     residual(n_param, n_target))
+            call lowest_ritz_pairs(red_space_basis, h_basis, symm, red_eigvals, &
+                                   solution, residual, settings, error)
             call add_error_origin(error, error_stability_check, settings)
             if (error /= 0) return
-            deallocate(red_space_hess)
-
-            ! get full space solutions, their linear transformations and residuals
-            allocate(solution(n_param, n_target), h_solution(n_param, n_target), &
-                     residual(n_param, n_target))
-            call dgemm("N", "N", n_param, n_target, n_trial, 1.0_rp, red_space_basis, &
-                       n_param, red_eigvecs, n_trial, 0.0_rp, solution, n_param)
-            call dgemm("N", "N", n_param, n_target, n_trial, 1.0_rp, h_basis, n_param, &
-                       red_eigvecs, n_trial, 0.0_rp, h_solution, n_param)
-            do i = 1, n_target
-                residual(:, i) = h_solution(:, i) - red_eigvals(i) * solution(:, i)
-            end do
 
             ! the lowest Ritz value estimates the lowest eigenvalue
             state%min_eigval = red_eigvals(1)
@@ -2077,13 +2124,18 @@ contains
                              red_eigvals(i) < settings%stability_thresh) .or. &
                             dnrm2(n_param, residual(:, i), 1_ip) / &
                             sqrt(real(n_param, kind=rp)) < settings%conv_tol
+                        if (present(unstable_factor)) &
+                            pair_converged = pair_converged .or. ( &
+                                red_eigvals(i) < settings%stability_thresh .and. &
+                                dnrm2(n_param, residual(:, i), 1_ip) <= &
+                                unstable_factor * abs(red_eigvals(i)))
                     end if
                     if (.not. pair_converged) n_unconverged = n_unconverged + 1
                 end do
                 converged = n_unconverged == 0
             end if
             if (converged) then
-                deallocate(red_eigvals, red_eigvecs, solution, h_solution, residual)
+                deallocate(red_eigvals, solution, residual)
                 exit
             end if
 
@@ -2131,7 +2183,7 @@ contains
                 n_trial = n_trial + 1
                 n_added = n_added + 1
             end do
-            deallocate(red_eigvals, red_eigvecs, solution, h_solution, residual)
+            deallocate(red_eigvals, solution, residual)
 
             ! the space can not be expanded any further, which leaves the Ritz pairs
             ! unconverged unless it spans the full space, where they are exact
@@ -2144,6 +2196,489 @@ contains
         deallocate(h_basis)
 
     end subroutine block_davidson
+
+    subroutine lowest_ritz_pairs(red_space_basis, h_basis, symm, eigvals, eigvecs, &
+                                 residuals, settings, error)
+        !
+        ! this subroutine returns the size(eigvals) lowest (real) Rayleigh-Ritz pairs
+        ! of the Hessian in the space of an orthonormal basis, given its Hessian linear
+        ! transformations, and their residuals
+        !
+        real(rp), intent(in) :: red_space_basis(:, :), h_basis(:, :)
+        logical, intent(in) :: symm
+        real(rp), intent(out) :: eigvals(:), eigvecs(:, :), residuals(:, :)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_param, n_red, n_target, i
+        real(rp), allocatable :: red_matrix(:, :), red_eigvecs(:, :)
+        external :: dgemm
+
+        ! initialize error flag
+        error = 0
+
+        ! number of parameters, of basis vectors and of pairs
+        n_param = size(red_space_basis, 1)
+        n_red = size(red_space_basis, 2)
+        n_target = size(eigvals)
+
+        ! lowest eigenpairs of the Hessian projected onto the space
+        allocate(red_matrix(n_red, n_red), red_eigvecs(n_red, n_target))
+        call dgemm("T", "N", n_red, n_red, n_param, 1.0_rp, red_space_basis, n_param, &
+                   h_basis, n_param, 0.0_rp, red_matrix, n_red)
+        call mat_lowest_eigpairs(red_matrix, symm, eigvals, red_eigvecs, settings, &
+                                 error)
+        if (error /= 0) return
+
+        ! Ritz vectors and their residuals
+        call dgemm("N", "N", n_param, n_target, n_red, 1.0_rp, red_space_basis, &
+                   n_param, red_eigvecs, n_red, 0.0_rp, eigvecs, n_param)
+        call dgemm("N", "N", n_param, n_target, n_red, 1.0_rp, h_basis, n_param, &
+                   red_eigvecs, n_red, 0.0_rp, residuals, n_param)
+        do i = 1, n_target
+            residuals(:, i) = residuals(:, i) - eigvals(i) * eigvecs(:, i)
+        end do
+
+    end subroutine lowest_ritz_pairs
+
+    subroutine certified_stability_check(hess_x_funptr, h_diag, eigval, eigvec, &
+                                         converged, settings, state, error)
+        !
+        ! this subroutine decides on the stability with Lanczos runs for the
+        ! preconditioned shifted Hessian: an exploration proves an instability or finds
+        ! the Ritz pairs outside [lanczos_band_low, lanczos_band_high], which a
+        ! rescaling maps to one, so that passes from fresh random vectors certify
+        ! stability with a probability of at least 1 - failure_probability, restarting
+        ! with an extended rescaling when they find further such pairs; the Davidson
+        ! method converges a found instability, while a stable point returns the lowest
+        ! Ritz pair of the exploration space
+        !
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
+        real(rp), intent(in) :: h_diag(:)
+        real(rp), intent(out) :: eigval, eigvec(:)
+        logical, intent(out) :: converged
+        type(stability_settings_type), intent(in) :: settings
+        type(stability_state_type), intent(inout), target :: state
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_param, outcome, i_pass, mode, i
+        integer(ip), parameter :: max_passes = 6
+        real(rp), allocatable :: &
+            start(:), lanczos_basis(:, :), b0_basis(:, :), red_space_basis(:, :), &
+            h_basis(:, :), explore_basis(:, :), explore_h_basis(:, :), space(:, :), &
+            b0_space(:, :), rescale_vecs(:, :), rescale_scale(:), eigvals(:), &
+            eigvecs(:, :), residuals(:, :)
+        real(rp), external :: dnrm2
+
+        ! initialize error flag
+        error = 0
+
+        ! initialize convergence
+        converged = .false.
+
+        ! number of parameters
+        n_param = size(h_diag)
+
+        ! explore without rescaling, with half of the failure probability, while the
+        ! certifying passes share the other half
+        allocate(start(n_param), rescale_vecs(n_param, 0), rescale_scale(0))
+        call lanczos_random_start(start, settings, error)
+        if (error /= 0) return
+        call lanczos(hess_x_funptr, h_diag, start, rescale_vecs, rescale_scale, &
+                     lanczos_explore, 0.5_rp * settings%failure_probability, &
+                     lanczos_basis, b0_basis, red_space_basis, h_basis, outcome, &
+                     settings, state, error)
+        if (error /= 0) return
+        explore_basis = red_space_basis
+        explore_h_basis = h_basis
+
+        ! the rescaling is built from the vectors that the runs spanned in the
+        ! coordinates of the matrix without rescaling, starting with the exploration's
+        ! Lanczos basis, which are kept as they are with their products, since these
+        ! would accumulate the rounding errors of an orthogonalization of vectors that
+        ! lie mostly within the space already
+        space = lanczos_basis
+        b0_space = b0_basis
+        i_pass = 0
+        do while (outcome == lanczos_explored)
+            ! certify with the rescaling from a fresh random vector, which only the
+            ! final pass does not stop to restart
+            i_pass = i_pass + 1
+            call build_rescaling(space, b0_space, rescale_vecs, rescale_scale, &
+                                 settings, error)
+            if (error /= 0) return
+            call lanczos_random_start(start, settings, error)
+            if (error /= 0) return
+            mode = merge(lanczos_certify_final, lanczos_certify, i_pass == max_passes)
+            call lanczos(hess_x_funptr, h_diag, start, rescale_vecs, rescale_scale, &
+                         mode, settings%failure_probability / 2.0_rp**(i_pass + 1), &
+                         lanczos_basis, b0_basis, red_space_basis, h_basis, outcome, &
+                         settings, state, error)
+            if (error /= 0) return
+            if (outcome /= lanczos_explored) exit
+
+            ! extend the space by the pass's Lanczos basis in the coordinates of the
+            ! matrix without rescaling, with the products of that matrix
+            do i = 1, size(lanczos_basis, 2)
+                call add_column(space, apply_rescaling(lanczos_basis(:, i), &
+                                                       rescale_vecs, rescale_scale))
+                call add_column(b0_space, b0_basis(:, i))
+            end do
+        end do
+
+        ! a run that did not decide leaves the stability open
+        if (outcome /= lanczos_unstable .and. outcome /= lanczos_certified) then
+            call settings%log("Stability check has not decided on the stability in "// &
+                              "the given number of iterations.", verbosity_error, &
+                              .true.)
+            error = error_stability_check_max_iter
+            return
+        end if
+
+        ! the lowest eigenpair, at an unstable point converged by the Davidson method
+        ! from the space of the run that proved the instability far enough for a step
+        ! along it within the iterations left, and otherwise the lowest Ritz pair of
+        ! that space or, at a stable point, of the space of the exploration; a proven
+        ! instability counts as converged also when the iterations run out
+        allocate(eigvals(1), eigvecs(n_param, 1), residuals(n_param, 1))
+        if (outcome == lanczos_unstable .and. state%iteration < settings%n_iter) then
+            call block_davidson( &
+                hess_x_funptr, h_diag, red_space_basis, settings%hess_symm, 1_ip, &
+                settings%n_iter - state%iteration, eigvals, eigvecs, converged, &
+                settings, state, error, start_h_basis=h_basis, &
+                unstable_factor=unstable_res_factor)
+            if (error /= 0) return
+        else
+            if (outcome == lanczos_certified) then
+                red_space_basis = explore_basis
+                h_basis = explore_h_basis
+            end if
+            call lowest_ritz_pairs(red_space_basis, h_basis, settings%hess_symm, &
+                                   eigvals, eigvecs, residuals, settings, error)
+            if (error /= 0) return
+            state%min_eigval = eigvals(1)
+            state%residual_rms = dnrm2(n_param, residuals(:, 1), 1_ip) / &
+                                 sqrt(real(n_param, kind=rp))
+        end if
+        eigval = eigvals(1)
+        eigvec = eigvecs(:, 1)
+        converged = .true.
+
+    end subroutine certified_stability_check
+
+    subroutine lanczos_random_start(start, settings, error)
+        !
+        ! this subroutine draws the standard normal start vector of a Lanczos run,
+        ! which the projection keeps standard normal on the subspace onto which it
+        ! projects
+        !
+        real(rp), intent(out) :: start(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! draw the vector and project it
+        call generate_gaussian_vector(start)
+        if (associated(settings%project)) call invoke_project(start, settings, error)
+
+    end subroutine lanczos_random_start
+
+    subroutine lanczos(hess_x_funptr, h_diag, start, rescale_vecs, rescale_scale, &
+                       mode, failure_probability, lanczos_basis, b0_basis, &
+                       red_space_basis, h_basis, outcome, settings, state, error)
+        !
+        ! this subroutine runs a Lanczos method with full reorthogonalization for
+        ! B = W F^T (H - t) F W, with the Hessian H, the stability threshold t, a
+        ! positive-definite preconditioner P = F F^T and rescaling W, so that B has as
+        ! many negative eigenvalues as H - t: a Ritz value that is not positive proves
+        ! instability, while an exhausted Krylov space or the bound of
+        ! certificate_steps certifies stability; an exploration ends explored once
+        ! the Ritz pairs outside the band have converged, and a certifying pass that is
+        ! not the final one restarts once the bound predicts many further steps; the
+        ! Lanczos basis, the products of F^T (H - t) F with the rescaled Lanczos
+        ! vectors and the space in Hessian coordinates with its Hessian linear
+        ! transformations are returned
+        !
+        procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
+        real(rp), intent(in) :: h_diag(:), start(:), rescale_vecs(:, :), &
+                                rescale_scale(:), failure_probability
+        integer(ip), intent(in) :: mode
+        real(rp), allocatable, intent(out) :: lanczos_basis(:, :), b0_basis(:, :), &
+                                              red_space_basis(:, :), h_basis(:, :)
+        integer(ip), intent(out) :: outcome
+        type(stability_settings_type), intent(in) :: settings
+        type(stability_state_type), intent(inout), target :: state
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_param, iter, i
+        real(rp) :: start_norm, b_norm, n_certify_steps
+        real(rp), allocatable :: &
+            alphas(:), betas(:), vector(:), x(:), hx(:), b0_vector(:), b_vector(:), &
+            next_vector(:), tridiag(:, :), ritz_vals(:), ritz_vecs(:, :), residuals(:)
+        logical :: exhausted, explored
+        real(rp), external :: ddot, dnrm2
+
+        ! initialize error flag
+        error = 0
+
+        ! initialize outcome
+        outcome = lanczos_undecided
+
+        ! number of parameters
+        n_param = size(h_diag)
+
+        ! allocate the bases, which start empty, the coefficients of the tridiagonal
+        ! matrix and the vectors
+        allocate(lanczos_basis(n_param, 0), b0_basis(n_param, 0), &
+                 red_space_basis(n_param, 0), h_basis(n_param, 0), &
+                 alphas(settings%n_iter), betas(settings%n_iter), vector(n_param), &
+                 x(n_param), hx(n_param), b0_vector(n_param), b_vector(n_param), &
+                 next_vector(n_param))
+
+        ! the normalized start vector is the first Lanczos vector
+        start_norm = dnrm2(n_param, start, 1_ip)
+        if (start_norm < tiny(1.0_rp)) then
+            call settings%log("Start vector of the Lanczos method is numerically "// &
+                              "zero.", verbosity_error, .true.)
+            error = 1
+            return
+        end if
+        vector = start / start_norm
+
+        ! iterate within the iterations of the stability check that are left
+        do iter = 1, settings%n_iter - state%iteration
+            ! count the iteration
+            state%iteration = state%iteration + 1
+
+            ! map the Lanczos vector to the coordinates of the Hessian with the
+            ! rescaling and the factor, apply the shifted Hessian and map the result
+            ! back with the transposed factor and the rescaling
+            call add_column(lanczos_basis, vector)
+            call apply_precond_factor( &
+                apply_rescaling(vector, rescale_vecs, rescale_scale), .false., h_diag, &
+                x, settings, error)
+            if (error /= 0) return
+            call invoke_hess_x(hess_x_funptr, x, hx, settings, state%n_hess_x, error)
+            if (error /= 0) return
+            call apply_precond_factor(hx - settings%stability_thresh * x, .true., &
+                                      h_diag, b0_vector, settings, error)
+            if (error /= 0) return
+            call add_column(b0_basis, b0_vector)
+            b_vector = apply_rescaling(b0_vector, rescale_vecs, rescale_scale)
+
+            ! extend the orthonormal basis of the space in the coordinates of the
+            ! Hessian and its Hessian linear transformations, unless the vector is
+            ! linearly dependent on it
+            call gram_schmidt(x, red_space_basis, settings, error, &
+                              lin_trans_vector=hx, lin_trans_space=h_basis)
+            if (error == 0) then
+                call add_column(red_space_basis, x)
+                call add_column(h_basis, hx)
+            else if (error == error_gram_schmidt_lin_dep) then
+                error = 0
+            else
+                return
+            end if
+
+            ! the next Lanczos vector is the product orthonormalized against the whole
+            ! Lanczos basis, which makes the subtraction of the three-term recurrence
+            ! redundant, with the overlaps of the product with the current and the
+            ! next Lanczos vector as the elements of the tridiagonal matrix, and the
+            ! Krylov space is exhausted once the normalized product is linearly
+            ! dependent on the basis
+            alphas(iter) = ddot(n_param, vector, 1_ip, b_vector, 1_ip)
+            b_norm = dnrm2(n_param, b_vector, 1_ip)
+            exhausted = iter == n_param .or. b_norm < tiny(1.0_rp)
+            if (.not. exhausted) then
+                next_vector = b_vector / b_norm
+                call gram_schmidt(next_vector, lanczos_basis, settings, error)
+                if (error == error_gram_schmidt_lin_dep) then
+                    error = 0
+                    exhausted = .true.
+                else if (error /= 0) then
+                    return
+                end if
+            end if
+            if (exhausted) then
+                betas(iter) = 0.0_rp
+            else
+                betas(iter) = ddot(n_param, next_vector, 1_ip, b_vector, 1_ip)
+            end if
+
+            ! Ritz pairs of the tridiagonal matrix and their residuals
+            allocate(tridiag(iter, iter), ritz_vals(iter), ritz_vecs(iter, iter), &
+                     residuals(iter))
+            tridiag = 0.0_rp
+            do i = 1, iter
+                tridiag(i, i) = alphas(i)
+                if (i < iter) then
+                    tridiag(i, i + 1) = betas(i)
+                    tridiag(i + 1, i) = betas(i)
+                end if
+            end do
+            call symm_mat_diag(tridiag, ritz_vals, ritz_vecs, settings, error)
+            if (error /= 0) return
+            residuals = abs(betas(iter) * ritz_vecs(iter, :))
+
+            ! decide on the outcome
+            if (ritz_vals(1) <= 0.0_rp) then
+                outcome = lanczos_unstable
+            else
+                n_certify_steps = certificate_steps(ritz_vals(1), ritz_vals(iter), &
+                                                    n_param, failure_probability, &
+                                                    settings)
+                explored = all( &
+                    residuals <= lanczos_explored_tol * sqrt(ritz_vals) .or. &
+                    (ritz_vals >= lanczos_band_low .and. &
+                     ritz_vals <= lanczos_band_high))
+                if (exhausted .or. real(iter, kind=rp) > n_certify_steps) then
+                    outcome = lanczos_certified
+                else if (mode == lanczos_explore .and. explored .and. &
+                         iter >= lanczos_min_explore_steps) then
+                    outcome = lanczos_explored
+                else if (mode == lanczos_certify .and. explored .and. &
+                         iter >= lanczos_min_certify_steps .and. n_certify_steps - &
+                         real(iter, kind=rp) > real(lanczos_restart_steps, kind=rp)) &
+                    then
+                    outcome = lanczos_explored
+                end if
+            end if
+            deallocate(tridiag, ritz_vals, ritz_vecs, residuals)
+            if (outcome /= lanczos_undecided) return
+
+            ! the next Lanczos vector
+            vector = next_vector
+        end do
+
+    end subroutine lanczos
+
+    real(rp) function certificate_steps(lowest_eigval, highest_eigval, n_param, &
+                                        failure_probability, settings) result(n_steps)
+        !
+        ! this function returns the number of steps beyond which the given positive
+        ! lowest and highest Ritz values certify stability: by the bound of Kuczynski
+        ! and Wozniakowski in the form of Tropp (arXiv:2110.00649, Theorem 1.6 with
+        ! q1 = 0), with a failure probability of failure_probability / (2 n_iter) for
+        ! each extreme Ritz value in each iteration, the lowest eigenvalue is positive
+        ! once log(8 sqrt(n) n_iter / failure_probability) / (2 n_steps - 1) falls
+        ! below the square root of the lowest Ritz value over the sum of both
+        !
+        real(rp), intent(in) :: lowest_eigval, highest_eigval, failure_probability
+        integer(ip), intent(in) :: n_param
+        type(stability_settings_type), intent(in) :: settings
+
+        ! solve for the number of steps
+        n_steps = 0.5_rp * &
+                  (log(8.0_rp * sqrt(real(n_param, kind=rp)) * &
+                       real(settings%n_iter, kind=rp) / failure_probability) * &
+                   sqrt((highest_eigval + lowest_eigval) / lowest_eigval) + 1.0_rp)
+
+    end function certificate_steps
+
+    subroutine build_rescaling(space, b_space, rescale_vecs, rescale_scale, settings, &
+                               error)
+        !
+        ! this subroutine builds the rescaling W = 1 + Y diag(s) Y^T from the Ritz
+        ! pairs of a symmetric matrix in the space spanned by a set of vectors, given
+        ! the products of the matrix with them, which scales the positive Ritz values
+        ! outside the band [lanczos_band_low, lanczos_band_high] to one with
+        ! s = theta^-1/2 - 1; the vectors need not be orthonormal or linearly
+        ! independent, since the space is orthonormalized through the eigenvectors of
+        ! their overlap matrix, without the directions whose overlap eigenvalue is
+        ! negligible against the largest, which bounds the amplification of rounding
+        ! errors
+        !
+        real(rp), intent(in) :: space(:, :), b_space(:, :)
+        real(rp), allocatable, intent(out) :: rescale_vecs(:, :), rescale_scale(:)
+        class(settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        integer(ip) :: n_param, n_vecs, n_red, n_rescaled, i
+        real(rp), allocatable :: &
+            overlap(:, :), overlap_eigvals(:), overlap_eigvecs(:, :), transform(:, :), &
+            projected(:, :), half_projected(:, :), red_matrix(:, :), red_eigvals(:), &
+            red_eigvecs(:, :), coeffs(:, :)
+        logical, allocatable :: kept(:), rescaled(:)
+        external :: dgemm
+
+        ! initialize error flag
+        error = 0
+
+        ! eigenpairs of the overlap matrix of the vectors
+        n_param = size(space, 1)
+        n_vecs = size(space, 2)
+        allocate(overlap(n_vecs, n_vecs), overlap_eigvals(n_vecs), &
+                 overlap_eigvecs(n_vecs, n_vecs))
+        call dgemm("T", "N", n_vecs, n_vecs, n_param, 1.0_rp, space, n_param, space, &
+                   n_param, 0.0_rp, overlap, n_vecs)
+        call symm_mat_diag(overlap, overlap_eigvals, overlap_eigvecs, settings, error)
+        if (error /= 0) return
+
+        ! transformation of the vectors to an orthonormal basis of the space without
+        ! the negligible directions
+        kept = overlap_eigvals > sqrt(epsilon(1.0_rp)) * maxval(overlap_eigvals)
+        n_red = count(kept)
+        transform = overlap_eigvecs(:, pack([(i, i=1, n_vecs)], kept)) / &
+                    spread(sqrt(pack(overlap_eigvals, kept)), 1, n_vecs)
+
+        ! Ritz pairs in the space from the products projected onto the vectors and
+        ! transformed to the orthonormal basis
+        allocate(projected(n_vecs, n_vecs), half_projected(n_vecs, n_red), &
+                 red_matrix(n_red, n_red), red_eigvals(n_red), &
+                 red_eigvecs(n_red, n_red))
+        call dgemm("T", "N", n_vecs, n_vecs, n_param, 1.0_rp, space, n_param, b_space, &
+                   n_param, 0.0_rp, projected, n_vecs)
+        call dgemm("N", "N", n_vecs, n_red, n_vecs, 1.0_rp, projected, n_vecs, &
+                   transform, n_vecs, 0.0_rp, half_projected, n_vecs)
+        call dgemm("T", "N", n_red, n_red, n_vecs, 1.0_rp, transform, n_vecs, &
+                   half_projected, n_vecs, 0.0_rp, red_matrix, n_red)
+        red_matrix = 0.5_rp * (red_matrix + transpose(red_matrix))
+        call symm_mat_diag(red_matrix, red_eigvals, red_eigvecs, settings, error)
+        if (error /= 0) return
+
+        ! rescale the positive Ritz pairs outside the band
+        rescaled = red_eigvals > 0.0_rp .and. &
+                   (red_eigvals < lanczos_band_low .or. red_eigvals > lanczos_band_high)
+        rescale_scale = 1.0_rp / sqrt(pack(red_eigvals, rescaled)) - 1.0_rp
+        n_rescaled = size(rescale_scale)
+        red_eigvecs = red_eigvecs(:, pack([(i, i=1, n_red)], rescaled))
+        allocate(coeffs(n_vecs, n_rescaled), rescale_vecs(n_param, n_rescaled))
+        call dgemm("N", "N", n_vecs, n_rescaled, n_red, 1.0_rp, transform, n_vecs, &
+                   red_eigvecs, n_red, 0.0_rp, coeffs, n_vecs)
+        call dgemm("N", "N", n_param, n_rescaled, n_vecs, 1.0_rp, space, n_param, &
+                   coeffs, n_vecs, 0.0_rp, rescale_vecs, n_param)
+
+    end subroutine build_rescaling
+
+    function apply_rescaling(vector, rescale_vecs, rescale_scale) result(rescaled)
+        !
+        ! this function applies the rescaling W = 1 + Y diag(s) Y^T to a vector
+        !
+        real(rp), intent(in) :: vector(:), rescale_vecs(:, :), rescale_scale(:)
+        real(rp) :: rescaled(size(vector))
+
+        real(rp) :: coeffs(size(rescale_scale))
+        external :: dgemv
+
+        ! no rescaling leaves the vector as it is
+        rescaled = vector
+        if (size(rescale_scale) == 0) return
+
+        ! coefficients of the vector along the rescaled directions, scaled by the
+        ! rescaling
+        call dgemv("T", size(vector, kind=ip), size(rescale_scale, kind=ip), 1.0_rp, &
+                   rescale_vecs, size(vector, kind=ip), vector, 1_ip, 0.0_rp, coeffs, &
+                   1_ip)
+        coeffs = rescale_scale * coeffs
+
+        ! add the rescaled components to the vector
+        call dgemv("N", size(vector, kind=ip), size(rescale_scale, kind=ip), 1.0_rp, &
+                   rescale_vecs, size(vector, kind=ip), coeffs, 1_ip, 1.0_rp, &
+                   rescaled, 1_ip)
+
+    end function apply_rescaling
 
     subroutine get_stability_trial_space(h_diag, red_space_basis, settings, error)
         !
@@ -2425,6 +2960,41 @@ contains
         end if
 
     end subroutine abs_diag_precond
+
+    subroutine apply_precond_factor(vector, transpose, h_diag, factor_vector, &
+                                    settings, error)
+        !
+        ! this subroutine applies the factor F, or its transpose, of the
+        ! positive-definite preconditioner P = F F^T of the Lanczos method, which is
+        ! the factor function if one is given and otherwise the inverse square root of
+        ! the absolute value of the diagonal of the shifted Hessian, which is
+        ! symmetric, followed by the projection, which keeps it symmetric and positive
+        ! definite on the subspace onto which it projects
+        !
+        real(rp), intent(in) :: vector(:), h_diag(:)
+        logical, intent(in) :: transpose
+        real(rp), intent(out) :: factor_vector(:)
+        type(stability_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        ! initialize error flag
+        error = 0
+
+        ! check for user-defined factor
+        if (associated(settings%precond_factor)) then
+            call invoke_precond_factor(vector, transpose, factor_vector, settings, &
+                                       error)
+        ! construct the diagonal factor
+        else
+            factor_vector = vector / sqrt(max(abs(h_diag - settings%stability_thresh), &
+                                              precond_floor))
+
+            ! ensure vector stays in subspace
+            if (associated(settings%project)) &
+                call invoke_project(factor_vector, settings, error)
+        end if
+
+    end subroutine apply_precond_factor
 
     function orthogonal_projection(vector, direction) result(complement)
         !
@@ -3735,39 +4305,6 @@ contains
         ! convert strings to lowercase
         settings%diag_solver = string_to_lowercase(settings%diag_solver)
 
-        ! check whether the extra trial vector function has anything to fill
-        if (associated(settings%get_extra_trial_vectors) .and. &
-            settings%n_extra_trial_vectors <= 0) then
-            call settings%log("Number of extra trial vectors should be larger than "// &
-                              "zero when extra trial vector function is passed.", &
-                              verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
-        ! resolve the automatic number of random trial vectors
-        if (settings%n_random_trial_vectors < 0) &
-            settings%n_random_trial_vectors = standalone_n_random_trial_vectors
-
-        ! check that number of random trial vectors is below number of parameters
-        if (settings%n_random_trial_vectors > n_param / 2) then
-            settings%n_random_trial_vectors = n_param / 2
-            write(msg, '(A, I0, A)') random_trial_vector_warning_msg//" Setting to ", &
-                settings%n_random_trial_vectors, "."
-            call settings%log(msg, verbosity_warning)
-        end if
-
-        ! check that the trial space is not empty, also for a negative number of extra
-        ! trial vectors, which requests none, and once the number of random trial
-        ! vectors is reduced
-        if (settings%n_extra_trial_vectors <= 0 .and. &
-            settings%n_random_trial_vectors == 0) then
-            call settings%log("Vanishing number of trial vectors for stability "// &
-                              "check.", verbosity_error, .true.)
-            error = 1
-            return
-        end if
-
         ! check for character options
         if (.not. any(settings%diag_solver == diag_solver_options)) then
             call settings%log( &
@@ -3777,12 +4314,57 @@ contains
             return
         end if
 
+        if (settings%diag_solver == "lanczos") then
+            ! check that the failure probability of the certificate of stability lies
+            ! between zero and one
+            if (.not. (settings%failure_probability > 0.0_rp .and. &
+                       settings%failure_probability < 1.0_rp)) then
+                call settings%log("Failure probability should lie between 0 and 1.", &
+                                  verbosity_error, .true.)
+                error = 1
+                return
+            end if
+        else
+            ! check whether the extra trial vector function has anything to fill
+            if (associated(settings%get_extra_trial_vectors) .and. &
+                settings%n_extra_trial_vectors <= 0) then
+                call settings%log("Number of extra trial vectors should be larger "// &
+                                  "than zero when extra trial vector function is "// &
+                                  "passed.", verbosity_error, .true.)
+                error = 1
+                return
+            end if
+
+            ! resolve the automatic number of random trial vectors
+            if (settings%n_random_trial_vectors < 0) &
+                settings%n_random_trial_vectors = standalone_n_random_trial_vectors
+
+            ! check that number of random trial vectors is below number of parameters
+            if (settings%n_random_trial_vectors > n_param / 2) then
+                settings%n_random_trial_vectors = n_param / 2
+                write(msg, '(A, I0, A)') random_trial_vector_warning_msg// &
+                    " Setting to ", settings%n_random_trial_vectors, "."
+                call settings%log(msg, verbosity_warning)
+            end if
+
+            ! check that the trial space is not empty, also for a negative number of
+            ! extra trial vectors, which requests none, and once the number of random
+            ! trial vectors is reduced
+            if (settings%n_extra_trial_vectors <= 0 .and. &
+                settings%n_random_trial_vectors == 0) then
+                call settings%log("Vanishing number of trial vectors for stability "// &
+                                  "check.", verbosity_error, .true.)
+                error = 1
+                return
+            end if
+        end if
+
         ! check whether non-symmetric Hessian is requested with a solver that cannot
         ! handle it
-        if (.not. settings%hess_symm .and. settings%diag_solver == "jacobi-davidson") &
-            then
+        if (.not. settings%hess_symm .and. settings%diag_solver /= "davidson") then
             call settings%log("Non-symmetric Hessian not supported with "// &
-                              "Jacobi-Davidson solver.", verbosity_error, .true.)
+                              "Jacobi-Davidson or Lanczos solvers.", verbosity_error, &
+                              .true.)
             error = 1
             return
         end if
@@ -3961,6 +4543,35 @@ contains
         end if
 
     end subroutine invoke_precond
+
+    subroutine invoke_precond_factor(vector, transpose, factor_vector, settings, error)
+        !
+        ! this subroutine calls the preconditioner factor function and tags its error
+        ! with its origin, and returns an error of its own if the factor function
+        ! returns values that are not finite
+        !
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+
+        real(rp), intent(in) :: vector(:)
+        logical, intent(in) :: transpose
+        real(rp), intent(out) :: factor_vector(:)
+        type(stability_settings_type), intent(in) :: settings
+        integer(ip), intent(out) :: error
+
+        ! call the preconditioner factor function
+        call settings%precond_factor(vector, transpose, factor_vector, error, &
+                                     settings%context)
+        call add_error_origin(error, error_precond_factor, settings)
+        if (error /= 0) return
+
+        ! check the result
+        if (.not. all(ieee_is_finite(factor_vector))) then
+            call settings%log("Preconditioner factor function returned values that "// &
+                              "are not finite.", verbosity_error, .true.)
+            error = 1
+        end if
+
+    end subroutine invoke_precond_factor
 
     subroutine invoke_project(vector, settings, error)
         !
@@ -4165,13 +4776,14 @@ module opentrustregion
     use opentrustregion_core, only: &
         rp, ip, solver, stability_check, solver_settings_type, &
         stability_settings_type, solver_state_type, stability_state_type, &
-        update_orbs_type, obj_func_type, hess_x_type, precond_type, project_type, &
-        conv_check_type, get_extra_trial_vectors_type, logger_type, error_solver, &
+        update_orbs_type, obj_func_type, hess_x_type, precond_type, &
+        precond_factor_type, project_type, conv_check_type, &
+        get_extra_trial_vectors_type, logger_type, error_solver, &
         error_solver_max_iter, error_stability_check, error_stability_check_max_iter, &
         error_obj_func, error_update_orbs, error_hess_x, error_precond, &
         error_conv_check, error_project, error_get_extra_trial_vectors, &
-        verbosity_silent, verbosity_error, verbosity_warning, verbosity_info, &
-        verbosity_debug
+        error_precond_factor, verbosity_silent, verbosity_error, verbosity_warning, &
+        verbosity_info, verbosity_debug
 
     implicit none
 

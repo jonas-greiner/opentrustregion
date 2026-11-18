@@ -54,6 +54,11 @@ typedef c_int precond_fn(const c_real *residual, const c_real *mu,
                          c_real *precond_residual, void *context);
 typedef precond_fn *precond_fp;
 
+/* Preconditioner factor callback */
+typedef c_int precond_factor_fn(const c_real *vector, c_bool transpose,
+                                c_real *factor_vector, void *context);
+typedef precond_factor_fn *precond_factor_fp;
+
 /* Projection callback */
 typedef c_int project_fn(c_real *vector, void *context);
 typedef project_fn *project_fp;
@@ -78,6 +83,7 @@ typedef logger_fn *logger_fp;
 // Struct corresponding to Fortran type(stability_settings_type_c)
 typedef struct {
   precond_fp precond;
+  precond_factor_fp precond_factor;
   project_fp project;
   get_extra_trial_vectors_fp get_extra_trial_vectors;
   conv_check_fp conv_check;
@@ -89,6 +95,7 @@ typedef struct {
 
   c_real conv_tol;
   c_real stability_thresh;
+  c_real failure_probability;
 
   c_int n_random_trial_vectors;
   c_int n_extra_trial_vectors;

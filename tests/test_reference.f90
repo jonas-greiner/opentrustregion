@@ -56,9 +56,10 @@ module test_reference
     ! stability check settings
     type(stability_settings_type), parameter :: ref_stability_settings = &
         stability_settings_type( &
-            precond=null(), project=null(), get_extra_trial_vectors=null(), &
-            conv_check=null(), logger=null(), hess_symm=.false., &
-            stop_on_instability=.true., conv_tol=5e-6_rp, stability_thresh=-6e-3_rp, &
+            precond=null(), precond_factor=null(), project=null(), &
+            get_extra_trial_vectors=null(), conv_check=null(), logger=null(), &
+            hess_symm=.false., stop_on_instability=.true., conv_tol=5e-6_rp, &
+            stability_thresh=-6e-3_rp, failure_probability=7e-4_rp, &
             n_random_trial_vectors=6, n_extra_trial_vectors=14, n_iter=60, &
             jacobi_davidson_start=13, seed=34, verbose=2, diag_solver="jacobi-davidson")
     type(solver_settings_type), parameter :: ref_solver_settings = &
@@ -518,6 +519,7 @@ contains
 
         ! set callback function pointers and host context to distinct addresses
         values_out%precond = transfer(7_c_intptr_t, c_null_funptr)
+        values_out%precond_factor = transfer(13_c_intptr_t, c_null_funptr)
         values_out%project = transfer(8_c_intptr_t, c_null_funptr)
         values_out%get_extra_trial_vectors = transfer(9_c_intptr_t, c_null_funptr)
         values_out%conv_check = transfer(10_c_intptr_t, c_null_funptr)
@@ -530,6 +532,7 @@ contains
         values_out%initialized = .true.
         values_out%conv_tol = ref_stability_settings%conv_tol
         values_out%stability_thresh = ref_stability_settings%stability_thresh
+        values_out%failure_probability = ref_stability_settings%failure_probability
         values_out%n_random_trial_vectors = &
             ref_stability_settings%n_random_trial_vectors
         values_out%n_extra_trial_vectors = ref_stability_settings%n_extra_trial_vectors
@@ -682,6 +685,8 @@ contains
             keyword_c = values%subsystem_solver
         case ("stability_settings.precond")
             field_value = address(values%stability_settings%precond)
+        case ("stability_settings.precond_factor")
+            field_value = address(values%stability_settings%precond_factor)
         case ("stability_settings.project")
             field_value = address(values%stability_settings%project)
         case ("stability_settings.get_extra_trial_vectors")
@@ -705,6 +710,8 @@ contains
             field_value = values%stability_settings%conv_tol
         case ("stability_settings.stability_thresh")
             field_value = values%stability_settings%stability_thresh
+        case ("stability_settings.failure_probability")
+            field_value = values%stability_settings%failure_probability
         case ("stability_settings.n_random_trial_vectors")
             field_value = values%stability_settings%n_random_trial_vectors
         case ("stability_settings.n_extra_trial_vectors")
@@ -830,6 +837,7 @@ contains
         type(stability_settings_type_c), intent(inout) :: settings_c
 
         settings_c%precond = c_null_funptr
+        settings_c%precond_factor = c_null_funptr
         settings_c%project = c_null_funptr
         settings_c%get_extra_trial_vectors = c_null_funptr
         settings_c%conv_check = c_null_funptr
@@ -930,6 +938,7 @@ contains
             (lhs%stop_on_instability .eqv. rhs%stop_on_instability) .and. &
             is_close(lhs%conv_tol, rhs%conv_tol) .and. &
             is_close(lhs%stability_thresh, rhs%stability_thresh) .and. &
+            is_close(lhs%failure_probability, rhs%failure_probability) .and. &
             lhs%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs%n_iter == rhs%n_iter .and. &
@@ -1012,6 +1021,7 @@ contains
              logical(rhs%stop_on_instability, kind=c_bool)) .and. &
             lhs_c%initialized .and. is_close(lhs_c%conv_tol, rhs%conv_tol) .and. &
             is_close(lhs_c%stability_thresh, rhs%stability_thresh) .and. &
+            is_close(lhs_c%failure_probability, rhs%failure_probability) .and. &
             lhs_c%n_random_trial_vectors == rhs%n_random_trial_vectors .and. &
             lhs_c%n_extra_trial_vectors == rhs%n_extra_trial_vectors .and. &
             lhs_c%n_iter == rhs%n_iter .and. &
@@ -1130,7 +1140,8 @@ contains
         type(stability_settings_type), intent(in) :: settings
 
         stability_callbacks_unset = .not. ( &
-            associated(settings%precond) .or. associated(settings%project) .or. &
+            associated(settings%precond) .or. associated(settings%precond_factor) .or. &
+            associated(settings%project) .or. &
             associated(settings%get_extra_trial_vectors) .or. &
             associated(settings%conv_check) .or. associated(settings%logger))
 
@@ -1166,6 +1177,7 @@ contains
 
         stability_callbacks_unset_c = .not. ( &
             c_associated(settings_c%precond) .or. &
+            c_associated(settings_c%precond_factor) .or. &
             c_associated(settings_c%project) .or. &
             c_associated(settings_c%get_extra_trial_vectors) .or. &
             c_associated(settings_c%conv_check) .or. c_associated(settings_c%logger))
@@ -1200,14 +1212,15 @@ contains
         ! this function checks that every callback function of stability check
         ! settings converted from C is associated with its wrapper
         !
-        use c_interface, only: precond_f_wrapper, project_f_wrapper, &
-                               get_extra_trial_vectors_f_wrapper, &
+        use c_interface, only: precond_f_wrapper, precond_factor_f_wrapper, &
+                               project_f_wrapper, get_extra_trial_vectors_f_wrapper, &
                                conv_check_f_wrapper, logger_f_wrapper
 
         type(stability_settings_type), intent(in) :: settings
 
         stability_callbacks_wrapped = &
             associated(settings%precond, precond_f_wrapper) .and. &
+            associated(settings%precond_factor, precond_factor_f_wrapper) .and. &
             associated(settings%project, project_f_wrapper) .and. &
             associated(settings%get_extra_trial_vectors, &
                        get_extra_trial_vectors_f_wrapper) .and. &
@@ -1746,6 +1759,119 @@ contains
         deallocate(residual, precond_residual)
 
     end function check_precond_c_funptr
+
+    function check_precond_factor_funptr(precond_factor_funptr, test_name, message, &
+                                         context) result(test_passed)
+        !
+        ! this function tests a provided preconditioner factor function pointer, whose
+        ! mock scales the vector by 2 and its transpose by 3
+        !
+        use opentrustregion_core, only: precond_factor_type
+
+        procedure(precond_factor_type), intent(in), pointer :: precond_factor_funptr
+        character(len=*), intent(in) :: test_name, message
+        class(*), intent(in), pointer :: context
+        logical :: test_passed
+
+        real(rp), allocatable :: vector(:), factor_vector(:)
+        integer(ip) :: error, i_case
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. associated(precond_factor_funptr)) then
+            write(stderr, *) "test_"//test_name//" failed: Preconditioner factor "// &
+                "function provided"//message//" not associated with value."
+            test_passed = .false.
+            return
+        end if
+
+        ! allocate arrays
+        allocate(vector(n_param), factor_vector(n_param))
+
+        ! initialize vector
+        vector = 1.0_rp
+
+        ! call factor function without and with transposition and check the result
+        do i_case = 1, 2
+            call precond_factor_funptr(vector, i_case == 2, factor_vector, error, &
+                                       context)
+            if (error /= 0) then
+                write(stderr, *) "test_"//test_name//" failed: Error produced"// &
+                    message//"."
+                test_passed = .false.
+            end if
+            if (.not. all(is_close(factor_vector, real(i_case + 1, kind=rp)))) then
+                write(stderr, *) "test_"//test_name// &
+                    " failed: Factor applied to vector returned"//message//" wrong."
+                test_passed = .false.
+            end if
+        end do
+
+        ! deallocate arrays
+        deallocate(vector, factor_vector)
+
+    end function check_precond_factor_funptr
+
+    function check_precond_factor_c_funptr(precond_factor_c_funptr, test_name, &
+                                           message, context_c) result(test_passed)
+        !
+        ! this function tests a provided preconditioner factor C function pointer,
+        ! whose mock scales the vector by 2 and its transpose by 3
+        !
+        use c_interface, only: precond_factor_c_type
+
+        type(c_funptr), intent(in) :: precond_factor_c_funptr
+        character(len=*), intent(in) :: test_name, message
+        type(c_ptr), intent(in) :: context_c
+        logical :: test_passed
+
+        procedure(precond_factor_c_type), pointer :: precond_factor_funptr
+        real(c_rp), allocatable :: vector(:), factor_vector(:)
+        integer(c_ip) :: error
+        integer(ip) :: i_case
+
+        ! assume tests pass
+        test_passed = .true.
+
+        ! check if function pointer is associated
+        if (.not. c_associated(precond_factor_c_funptr)) then
+            write(stderr, *) "test_"//test_name//" failed: Preconditioner factor "// &
+                "function provided"//message//" not associated with value."
+            test_passed = .false.
+            return
+        end if
+
+        ! convert to Fortran function pointer
+        call c_f_procpointer(cptr=precond_factor_c_funptr, fptr=precond_factor_funptr)
+
+        ! allocate arrays
+        allocate(vector(n_param), factor_vector(n_param))
+
+        ! initialize vector
+        vector = 1.0_c_rp
+
+        ! call factor function without and with transposition and check the result
+        do i_case = 1, 2
+            error = precond_factor_funptr(vector, logical(i_case == 2, kind=c_bool), &
+                                          factor_vector, context_c)
+            if (error /= 0) then
+                write(stderr, *) "test_"//test_name//" failed: Error produced"// &
+                    message//"."
+                test_passed = .false.
+            end if
+            if (.not. all(is_close(factor_vector, real(i_case + 1, kind=c_rp)))) then
+                write(stderr, *) "test_"//test_name// &
+                    " failed: Factor applied to vector returned"//message//" wrong."
+                test_passed = .false.
+            end if
+        end do
+
+        ! deallocate arrays
+        deallocate(vector, factor_vector)
+
+    end function check_precond_factor_c_funptr
 
     function check_project_funptr(project_funptr, test_name, message, context) &
         result(test_passed)

@@ -173,9 +173,10 @@ contains
         ! interface
         !
         use opentrustregion_core, only: hess_x_type
-        use test_reference, only: &
-            check_hess_x_funptr, check_precond_funptr, check_project_funptr, &
-            check_get_extra_trial_vectors_funptr, check_conv_check_funptr, n_param
+        use test_reference, only: check_hess_x_funptr, check_precond_funptr, &
+                                  check_precond_factor_funptr, check_project_funptr, &
+                                  check_get_extra_trial_vectors_funptr, &
+                                  check_conv_check_funptr, n_param
 
         real(rp), intent(in) :: h_diag(:)
         procedure(hess_x_type), intent(in), pointer :: hess_x_funptr
@@ -221,6 +222,12 @@ contains
             if (.not. check_precond_funptr( &
                 settings%precond, "stability_check_c_wrapper", " by given "// &
                 "preconditioner subroutine", settings%context)) test_passed = .false.
+        end if
+        if (associated(settings%precond_factor)) then
+            if (.not. check_precond_factor_funptr( &
+                settings%precond_factor, "stability_check_c_wrapper", &
+                " by given preconditioner factor subroutine", settings%context)) &
+                test_passed = .false.
         end if
         if (associated(settings%project)) then
             if (.not. check_project_funptr( &
