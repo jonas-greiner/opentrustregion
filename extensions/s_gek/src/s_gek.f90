@@ -285,9 +285,11 @@ contains
             current_state%func = func
             current_state%grad_rms = grad_rms
 
-            ! maximum precision as for the OpenTrustRegion solver: neither the energy
-            ! change of the last step nor its prediction can be resolved, or the step
-            ! was rejected while its prediction could not be resolved
+            ! maximum precision: neither the energy change of the last step nor its
+            ! prediction can be resolved, or the step was rejected while its prediction
+            ! could not be resolved; unlike the solver, which takes such a step and
+            ! judges it by the gradient, S-GEK stops, since its surrogate is fitted to
+            ! the energies, so that its steps below their resolution are noise
             max_precision_reached = have_last_step .and. last_pred_small .and. &
                                     last_unresolved
 
